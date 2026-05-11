@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from dictatem.exceptions import GPUOutOfMemoryError
+from dictatem.types import EmptyResult
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -43,19 +46,11 @@ class FasterWhisperBackend:
         )
 
     def unload_model(self) -> None:
-        del self._model
         self._model = None
-        try:
-            import torch  # type: ignore[import-not-found]
-
-            torch.cuda.empty_cache()
-        except ImportError:
-            pass
+        self.empty_cache()
 
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
         if self._model is None:
-            from dictatem.types import EmptyResult
-
             return EmptyResult()
 
         try:
@@ -67,8 +62,6 @@ class FasterWhisperBackend:
             return "".join(seg.text for seg in segments)
         except Exception as exc:
             if "out of memory" in str(exc).lower():
-                from dictatem.exceptions import GPUOutOfMemoryError
-
                 raise GPUOutOfMemoryError(str(exc)) from exc
             raise
 
