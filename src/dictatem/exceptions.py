@@ -7,3 +7,7 @@ class PlatformNotSupportedError(Exception):
 
 class ClipboardContentionError(Exception):
     """Raised when the clipboard cannot be opened after all retry attempts."""
+
+
+class AudioCaptureError(Exception):
+    """Raised when audio capture fails (mic disconnected, permission denied, etc.)."""

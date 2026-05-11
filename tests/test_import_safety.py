@@ -29,6 +29,8 @@ DICTATEM_MODULES = [
     "dictatem.paste.pipeline",
     "dictatem.state",
     "dictatem.hotkey.classifier",
+    "dictatem.audio",
+    "dictatem.audio.buffer",
 ]
 
 
