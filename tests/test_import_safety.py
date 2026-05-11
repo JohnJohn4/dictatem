@@ -34,6 +34,8 @@ DICTATEM_MODULES = [
     "dictatem.transcribe",
     "dictatem.transcribe.lifecycle",
     "dictatem.overlay.state",
+    "dictatem.tray",
+    "dictatem.tray.state",
 ]
 
 

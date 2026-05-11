@@ -49,5 +49,5 @@ pythonPlatform = "All"
 venvPath = "."
 venv = ".venv"
 include = ["src"]
-exclude = ["src/dictatem/audio/sounddevice_capture.py", "src/dictatem/overlay/qt_widget.py"]
+exclude = ["src/dictatem/audio/sounddevice_capture.py", "src/dictatem/overlay/qt_widget.py", "src/dictatem/tray/qt_tray.py"]
 typeCheckingMode = "standard"
