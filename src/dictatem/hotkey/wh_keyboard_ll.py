@@ -54,7 +54,7 @@ class WHKeyboardLLHook:
         self._classifier = classifier
         self._hook_handle: int | None = None
         self._hook_thread: threading.Thread | None = None
-        self._proc: HOOKPROC | None = None
+        self._proc: ctypes.CFUNCTYPE | None = None  # type: ignore[type-arg]
 
     def install(self) -> None:
         self._hook_thread = threading.Thread(target=self._run_hook, daemon=True)
