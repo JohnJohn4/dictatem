@@ -49,4 +49,5 @@ pythonPlatform = "All"
 venvPath = "."
 venv = ".venv"
 include = ["src"]
+exclude = ["src/dictatem/tray/qt_tray.py"]
 typeCheckingMode = "standard"
