@@ -66,6 +66,8 @@ class WHKeyboardLLHook:
             self._hook_handle = None
 
     def _run_hook(self) -> None:
+        from dictatem.hotkey.classifier import HookDecision, KeyAction
+
         def _ll_callback(
             n_code: int, w_param: int, l_param: int
         ) -> int:
@@ -73,13 +75,9 @@ class WHKeyboardLLHook:
                 kb = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
                 vk = kb.vkCode
                 is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
-                from dictatem.hotkey.classifier import KeyAction
-
                 action = KeyAction.KEY_DOWN if is_down else KeyAction.KEY_UP
                 timestamp_ms = kb.time
                 decision, _event = self._classifier.process_event(vk, action, timestamp_ms)
-
-                from dictatem.hotkey.classifier import HookDecision
 
                 if decision is HookDecision.SUPPRESS:
                     return 1
