@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# uv / venv
+.venv/
+venv/
+.python-version
+
+# uv.lock is committed intentionally — do not add it here
+
+# pytest
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# mypy / type checkers
+.mypy_cache/
+.dmypy.json
+
+# Whisper model weights cache (large, not source)
+# HuggingFace caches to %USERPROFILE%\.cache by default; guard against accidental local copies
+*.bin
+*.safetensors
+*.gguf
+models/
+
+# Logs (runtime artefacts, not source)
+*.log
+logs/
+
+# Local config overrides
+*.local.toml
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Claude Code local settings (machine-specific permission allowlists)
+.claude/settings.local.json
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# PyInstaller (out of scope for v1 but guard early)
+*.spec
+dist/
