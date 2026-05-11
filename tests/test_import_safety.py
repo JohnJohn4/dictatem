@@ -31,6 +31,8 @@ DICTATEM_MODULES = [
     "dictatem.hotkey.classifier",
     "dictatem.audio",
     "dictatem.audio.buffer",
+    "dictatem.transcribe",
+    "dictatem.transcribe.lifecycle",
 ]
 
 

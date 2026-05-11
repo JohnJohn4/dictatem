@@ -11,3 +11,11 @@ class ClipboardContentionError(Exception):
 
 class AudioCaptureError(Exception):
     """Raised when audio capture fails (mic disconnected, permission denied, etc.)."""
+
+
+class GPUOutOfMemoryError(Exception):
+    """Raised when the GPU runs out of memory during transcription."""
+
+
+class TranscriptionFailedError(Exception):
+    """Raised when transcription fails after retries."""

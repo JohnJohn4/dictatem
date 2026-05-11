@@ -104,6 +104,16 @@ class TranscriberBackend(Protocol):
         """Transcribe an audio chunk and return the result."""
         ...
 
+    def empty_cache(self) -> None:
+        """Free GPU memory cache."""
+        ...
+
+    def set_progress_callback(
+        self, callback: Callable[[int, int], None] | None
+    ) -> None:
+        """Register a callback for model download progress updates."""
+        ...
+
     @property
     def is_loaded(self) -> bool:
         """Whether the model is currently loaded."""
