@@ -22,9 +22,6 @@ class MenuItem(enum.Enum):
     QUIT = "quit"
 
 
-MENU_ORDER: tuple[MenuItem, ...] = tuple(MenuItem)
-
-
 @dataclass
 class TrayState:
     is_recording: bool
