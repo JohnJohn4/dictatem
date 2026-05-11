@@ -16,7 +16,10 @@ from dictatem.state import Command, Event, State
 from dictatem.types import EmptyResult, RecordingMode
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from dictatem.audio.buffer import AudioBuffer
+    from dictatem.hotkey.classifier import HotkeyClassifier, HotkeyEvent, KeyAction
     from dictatem.interfaces import (
         AudioCapture,
         ClipboardIO,
@@ -62,25 +65,20 @@ class _HotkeyBridge:
     def __init__(
         self,
         *,
-        classifier: object,
-        callback: object,
+        classifier: HotkeyClassifier,
+        callback: Callable[..., None],
     ) -> None:
-        from dictatem.hotkey.classifier import HotkeyClassifier
-
-        self._classifier: HotkeyClassifier = classifier  # type: ignore[assignment]
+        self._classifier = classifier
         self._callback = callback
         self._combo_active = False
 
-    def on_key_event(self, vk: int, action: object, timestamp_ms: int) -> object:
-        from dictatem.hotkey.classifier import HotkeyEvent
-
-        was_combo = self._classifier.combo_held
-        decision, event = self._classifier.process_event(vk, action, timestamp_ms)  # type: ignore[arg-type]
+    def on_key_event(self, vk: int, action: KeyAction, timestamp_ms: int) -> object:
+        decision, event = self._classifier.process_event(vk, action, timestamp_ms)
         is_combo = self._classifier.combo_held
 
         if not self._combo_active and is_combo:
             self._combo_active = True
-            self._callback(Event.KEY_DOWN, now_ms=timestamp_ms)  # type: ignore[operator]
+            self._callback(Event.KEY_DOWN, now_ms=timestamp_ms)
 
         if event is not None:
             self._dispatch_event(event, timestamp_ms)
@@ -91,25 +89,23 @@ class _HotkeyBridge:
         return decision
 
     def tick(self, timestamp_ms: int) -> None:
-        from dictatem.hotkey.classifier import HotkeyEvent
-
         event = self._classifier.tick(timestamp_ms)
         if event is not None:
             self._dispatch_event(event, timestamp_ms)
 
-    def _dispatch_event(self, event: object, timestamp_ms: int) -> None:
+    def _dispatch_event(self, event: HotkeyEvent, timestamp_ms: int) -> None:
         from dictatem.hotkey.classifier import HotkeyEvent
 
         if event == HotkeyEvent.TAP:
-            self._callback(Event.KEY_UP, now_ms=timestamp_ms)  # type: ignore[operator]
+            self._callback(Event.KEY_UP, now_ms=timestamp_ms)
             self._combo_active = False
         elif event == HotkeyEvent.HOLD_START:
-            self._callback(Event.TIMER_EXPIRED, now_ms=timestamp_ms)  # type: ignore[operator]
+            self._callback(Event.TIMER_EXPIRED, now_ms=timestamp_ms)
         elif event == HotkeyEvent.HOLD_END:
-            self._callback(Event.KEY_UP, now_ms=timestamp_ms)  # type: ignore[operator]
+            self._callback(Event.KEY_UP, now_ms=timestamp_ms)
             self._combo_active = False
         elif event == HotkeyEvent.ESC:
-            self._callback(Event.ESC, now_ms=timestamp_ms)  # type: ignore[operator]
+            self._callback(Event.ESC, now_ms=timestamp_ms)
             self._combo_active = False
 
 
