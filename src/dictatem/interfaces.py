@@ -19,6 +19,14 @@ if TYPE_CHECKING:
 class ClipboardIO(Protocol):
     """Read/write the system clipboard with save/restore support."""
 
+    def open(self) -> None:
+        """Acquire exclusive clipboard access. Raises on contention."""
+        ...
+
+    def close(self) -> None:
+        """Release exclusive clipboard access."""
+        ...
+
     def save(self) -> str | None:
         """Save the current clipboard text content. Returns None if empty."""
         ...
