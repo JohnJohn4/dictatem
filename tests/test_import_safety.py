@@ -27,6 +27,7 @@ DICTATEM_MODULES = [
     "dictatem.daemon",
     "dictatem.paste",
     "dictatem.paste.pipeline",
+    "dictatem.state",
 ]
 
 
