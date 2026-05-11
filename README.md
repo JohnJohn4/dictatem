@@ -2,6 +2,8 @@
 
 Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, and your words are transcribed and pasted into whatever window has focus — instantly, offline, with no cloud dependency.
 
+> **Status:** Core pipeline (audio capture, GPU transcription, paste) is implemented and tested. The full daemon wiring (`_start_windows_daemon`) is not yet complete — `python -m dictatem` exits immediately. Use the [bootstrap script](#verify-the-setup) to confirm your environment works end-to-end.
+
 ## Features
 
 - **Global hotkey** — Ctrl+Win activates recording from any window
@@ -23,21 +25,66 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 ## Installation
 
 ```powershell
-# Clone the repo
 git clone https://github.com/JohnJohn4/dictatem
 cd dictatem
-
-# Install core + GPU runtime dependencies
 uv sync --extra runtime
 ```
 
-## Usage
+## Verify the setup
+
+Before running, confirm all dependencies are wired up correctly:
 
 ```powershell
-python -m dictatem
+uv run python -c "
+import numpy; print('numpy:', numpy.__version__)
+
+import faster_whisper; print('faster-whisper:', faster_whisper.__version__)
+
+import sounddevice as sd
+devices = sd.query_devices()
+print('sounddevice:', len(devices), 'audio devices found')
+
+from PySide6.QtWidgets import QApplication; print('PySide6: ok')
+
+import win32clipboard; print('pywin32: ok')
+
+import ctranslate2
+print('CUDA devices:', ctranslate2.get_cuda_device_count())
+"
 ```
 
-On first launch, a default config is written to `~/.dictatem/config.toml`. The daemon runs in the system tray.
+All lines should print without errors, and CUDA devices should be `>= 1`.
+
+### End-to-end test (GPU + mic + transcription)
+
+This records 5 seconds of audio and transcribes it:
+
+```powershell
+uv run python scripts/bootstrap.py
+```
+
+Speak clearly while it records. Expected output:
+
+```
+Loading large-v3-turbo on GPU...
+Model loaded.
+Recording 5s of audio — speak now...
+Recording complete.
+Transcribing...
+Transcription: <your words here>
+```
+
+If you see `(No speech detected)`, check your default microphone in Windows sound settings.
+
+## Running
+
+> The full daemon (`python -m dictatem`) is not yet implemented — see status note above. Once complete, run:
+
+```powershell
+uv run python -m dictatem
+```
+
+The daemon starts in the system tray. Look for the dictatem icon in the bottom-right of the taskbar.
 
 | Action | Hotkey |
 |---|---|
@@ -45,21 +92,11 @@ On first launch, a default config is written to `~/.dictatem/config.toml`. The d
 | Toggle record | Tap Ctrl+Win |
 | Stop toggle recording | Tap Ctrl+Win again |
 
-Transcribed text is automatically pasted into the focused window.
-
-### Sanity check
-
-Run the bootstrap script to verify your GPU, microphone, and Whisper model are all working:
-
-```powershell
-python scripts/bootstrap.py
-```
-
-This loads the model, records 5 seconds, transcribes, and prints the result.
+Transcribed text is pasted automatically into the focused window.
 
 ## Configuration
 
-Edit `~/.dictatem/config.toml` to customise behaviour. Key options:
+On first launch, a default config is written to `~/.dictatem/config.toml`. Edit it to customise behaviour:
 
 ```toml
 [hotkey]
@@ -94,11 +131,11 @@ position = "bottom-right"
 uv sync --group dev
 
 # Run tests
-pytest tests/
+uv run pytest tests/
 
 # Lint and type-check
-ruff check src/
-pyright src/
+uv run ruff check src/
+uv run pyright src/
 ```
 
 ## Architecture
