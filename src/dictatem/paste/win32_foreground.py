@@ -1,4 +1,4 @@
-"""Win32 foreground window tracker — requires pywin32."""
+"""Win32 foreground window tracker — uses ctypes."""
 
 from __future__ import annotations
 

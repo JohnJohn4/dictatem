@@ -1,4 +1,4 @@
-"""Win32 keystroke sender — requires pywin32."""
+"""Win32 keystroke sender — uses ctypes."""
 
 from __future__ import annotations
 

@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 _MAX_RETRIES = 5
 _RETRY_DELAY_S = 0.010
+_POST_PASTE_SETTLE_S = 0.005
 
 
 def _normalize(text: str) -> str:
@@ -47,6 +48,6 @@ def paste(
 
         foreground.restore(hwnd)
         keystroke.send_paste()
-        time.sleep(0.005)
+        time.sleep(_POST_PASTE_SETTLE_S)
     finally:
         clipboard.restore(saved)
