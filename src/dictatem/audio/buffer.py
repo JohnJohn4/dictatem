@@ -49,8 +49,7 @@ class AudioBuffer:
         if self._total_samples < required_samples:
             return False
         tail = self._get_tail(required_samples)
-        rms = float(np.sqrt(np.mean(tail ** 2)))
-        return rms < self._silence_floor
+        return self._rms_normalized(tail) < self._silence_floor
 
     def _get_tail(self, n_samples: int) -> AudioChunk:
         if self._total_samples == 0:
