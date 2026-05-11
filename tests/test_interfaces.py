@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import inspect  # noqa: TC003
+import inspect
 
 from dictatem import interfaces
 

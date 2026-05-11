@@ -1,8 +1,4 @@
-"""Configuration defaults for Dictatem.
-
-Full TOML loading lands in Slice 8; this module ships hardcoded defaults
-that match the PRD configuration sketch.
-"""
+"""Configuration defaults for Dictatem."""
 
 from __future__ import annotations
 
