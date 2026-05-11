@@ -19,3 +19,7 @@ class GPUOutOfMemoryError(Exception):
 
 class TranscriptionFailedError(Exception):
     """Raised when transcription fails after retries."""
+
+
+class ModelLoadError(Exception):
+    """Raised when the transcription model fails to load (corrupt download, missing CUDA libs, etc.)."""

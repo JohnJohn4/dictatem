@@ -19,11 +19,14 @@ class FakeTranscriberBackend:
         self.empty_cache_count: int = 0
         self.transcribe_calls: list[AudioChunk] = []
         self._errors_to_raise: list[Exception] = []
+        self._load_errors: list[Exception] = []
         self._progress_callback: Callable[[int, int], None] | None = None
 
     def load_model(self) -> None:
-        self._loaded = True
         self.load_count += 1
+        if self._load_errors:
+            raise self._load_errors.pop(0)
+        self._loaded = True
 
     def unload_model(self) -> None:
         self._loaded = False
@@ -54,6 +57,10 @@ class FakeTranscriberBackend:
     def queue_error(self, error: Exception) -> None:
         """Queue an exception to be raised on the next transcribe() call."""
         self._errors_to_raise.append(error)
+
+    def queue_load_error(self, error: Exception) -> None:
+        """Queue an exception to be raised on the next load_model() call."""
+        self._load_errors.append(error)
 
     def simulate_progress(self, downloaded: int, total: int) -> None:
         """Invoke the registered progress callback."""

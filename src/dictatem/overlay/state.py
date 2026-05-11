@@ -17,6 +17,7 @@ class OverlayPhase(enum.Enum):
     FADING_IN = "fading_in"
     RECORDING = "recording"
     TRANSCRIBING = "transcribing"
+    ERROR_FLASH = "error_flash"
     FADING_OUT = "fading_out"
 
 
@@ -72,6 +73,7 @@ class OverlayState:
         self._fade_in_s = fade_in_ms / 1000.0
         self._fade_out_s = fade_out_ms / 1000.0
         self._bar_weights = _BAR_WEIGHTS[:bar_count]
+        self._flash_duration_s = 0.300
         self._phase = OverlayPhase.HIDDEN
         self._mode: RecordingMode | None = None
         self._transition_start: float = 0.0
@@ -88,6 +90,10 @@ class OverlayState:
     def show_transcribing(self) -> None:
         self._phase = OverlayPhase.TRANSCRIBING
 
+    def flash_error(self) -> None:
+        self._phase = OverlayPhase.ERROR_FLASH
+        self._transition_start = self._clock()
+
     def hide(self) -> None:
         self._phase = OverlayPhase.FADING_OUT
         self._transition_start = self._clock()
@@ -97,6 +103,10 @@ class OverlayState:
         if self._phase == OverlayPhase.FADING_IN:
             if now - self._transition_start >= self._fade_in_s:
                 self._phase = OverlayPhase.RECORDING
+        elif self._phase == OverlayPhase.ERROR_FLASH:
+            if now - self._transition_start >= self._flash_duration_s:
+                self._phase = OverlayPhase.FADING_OUT
+                self._transition_start = now
         elif (
             self._phase == OverlayPhase.FADING_OUT
             and now - self._transition_start >= self._fade_out_s
@@ -109,7 +119,7 @@ class OverlayState:
         if self._phase == OverlayPhase.FADING_IN:
             elapsed = self._clock() - self._transition_start
             return min(elapsed / self._fade_in_s, 1.0)
-        if self._phase in (OverlayPhase.RECORDING, OverlayPhase.TRANSCRIBING):
+        if self._phase in (OverlayPhase.RECORDING, OverlayPhase.TRANSCRIBING, OverlayPhase.ERROR_FLASH):
             return 1.0
         if self._phase == OverlayPhase.FADING_OUT:
             elapsed = self._clock() - self._transition_start
@@ -120,7 +130,7 @@ class OverlayState:
     def current_dot_color(self) -> Color:
         if self._phase == OverlayPhase.TRANSCRIBING:
             return Color.AMBER
-        return Color.RED
+        return Color.RED  # RED for recording, error_flash, and other states
 
     def current_dot_style(self) -> DotStyle:
         if self._mode == RecordingMode.PTT:

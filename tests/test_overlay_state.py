@@ -265,6 +265,83 @@ class TestTranscribing:
         assert state.current_opacity() == 1.0
 
 
+class TestFlashError:
+    """flash_error() → ERROR_FLASH for ~300ms → FADING_OUT → HIDDEN."""
+
+    def test_flash_error_transitions_to_error_flash(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.flash_error()
+        assert state.phase == OverlayPhase.ERROR_FLASH
+
+    def test_dot_color_red_during_error_flash(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.flash_error()
+        assert state.current_dot_color() == Color.RED
+
+    def test_opacity_one_during_error_flash(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.flash_error()
+        assert state.current_opacity() == 1.0
+
+    def test_still_error_flash_before_300ms(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.flash_error()
+        clock.advance_ms(299)
+        state.tick()
+        assert state.phase == OverlayPhase.ERROR_FLASH
+
+    def test_fading_out_after_300ms(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.flash_error()
+        clock.advance_ms(300)
+        state.tick()
+        assert state.phase == OverlayPhase.FADING_OUT
+
+    def test_hidden_after_full_flash_and_fade(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.flash_error()
+        clock.advance_ms(300)
+        state.tick()
+        assert state.phase == OverlayPhase.FADING_OUT
+        clock.advance_ms(400)
+        state.tick()
+        assert state.phase == OverlayPhase.HIDDEN
+        assert state.current_opacity() == 0.0
+
+    def test_flash_error_from_hidden_still_works(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.flash_error()
+        assert state.phase == OverlayPhase.ERROR_FLASH
+        clock.advance_ms(300)
+        state.tick()
+        assert state.phase == OverlayPhase.FADING_OUT
+
+
 class TestImportSafety:
     def test_overlay_state_has_no_pyside6_imports(self) -> None:
         before = set(sys.modules.keys())
