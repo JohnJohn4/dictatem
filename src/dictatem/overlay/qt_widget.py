@@ -9,6 +9,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from dictatem.overlay.state import (
+    Color,
+    DotStyle,
+    OverlayPhase,
+    PILL_HEIGHT,
+    PILL_WIDTH,
+    Point,
+)
+
 if TYPE_CHECKING:
     from dictatem.overlay.state import OverlayState
 
@@ -34,15 +43,13 @@ class QtOverlayWidget(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        self.setFixedSize(200, 40)
+        self.setFixedSize(PILL_WIDTH, PILL_HEIGHT)
 
         self._timer = QTimer(self)
         self._timer.setInterval(1000 // self._FPS)
         self._timer.timeout.connect(self._on_tick)
 
     def show_pill(self) -> None:
-        from dictatem.overlay.state import Point
-
         pos = self._state.compute_position(
             cursor_position=Point(0, 0),
             monitors=[],
@@ -56,8 +63,6 @@ class QtOverlayWidget(QWidget):
         self.hide()
 
     def _on_tick(self) -> None:
-        from dictatem.overlay.state import OverlayPhase
-
         self._state.tick()
         if self._state.phase == OverlayPhase.HIDDEN:
             self.hide_pill()
@@ -73,10 +78,8 @@ class QtOverlayWidget(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(self.rect(), 8, 8)
 
-        dot_color_name = self._state.current_dot_color().value
-        dot_qcolor = QColor("red") if dot_color_name == "red" else QColor(255, 191, 0)
-
-        from dictatem.overlay.state import DotStyle
+        dot_color = self._state.current_dot_color()
+        dot_qcolor = QColor("red") if dot_color == Color.RED else QColor(255, 191, 0)
 
         if self._state.current_dot_style() == DotStyle.OUTLINE:
             painter.setPen(QPen(dot_qcolor, 2))

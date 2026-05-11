@@ -101,7 +101,7 @@ class OverlayState:
             self._phase == OverlayPhase.FADING_OUT
             and now - self._transition_start >= self._fade_out_s
         ):
-                self._phase = OverlayPhase.HIDDEN
+            self._phase = OverlayPhase.HIDDEN
 
     def current_opacity(self) -> float:
         if self._phase == OverlayPhase.HIDDEN:
