@@ -59,3 +59,11 @@ $RECYCLE.BIN/
 # PyInstaller (out of scope for v1 but guard early)
 *.spec
 dist/
+
+# SANDCASTLE AND SKILLS
+.sandcastle/
+.agents/
+node_modules/
+package.json
+package-lock.json
+
