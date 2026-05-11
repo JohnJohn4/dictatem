@@ -25,10 +25,128 @@ if TYPE_CHECKING:
         OverlayRenderer,
         TrayRenderer,
     )
+    from dictatem.overlay.state import OverlayState
     from dictatem.state import StateMachine
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
 
 logger = logging.getLogger(__name__)
+
+
+class _OverlayAdapter:
+    """Bridges OverlayState + QtOverlayWidget to the OverlayRenderer protocol."""
+
+    def __init__(self, *, state: OverlayState, widget: object) -> None:
+        self._state = state
+        self._widget = widget
+
+    def show(self, mode: RecordingMode) -> None:
+        self._state.show_recording(mode)
+        self._widget.show_pill()  # type: ignore[attr-defined]
+
+    def update_level(self, level: float) -> None:
+        pass
+
+    def show_transcribing(self) -> None:
+        self._state.show_transcribing()
+
+    def show_error(self) -> None:
+        self._state.flash_error()
+
+    def hide(self) -> None:
+        self._state.hide()
+
+
+class _HotkeyBridge:
+    """Maps HotkeyClassifier events to StateMachine events and forwards them."""
+
+    def __init__(
+        self,
+        *,
+        classifier: object,
+        callback: object,
+    ) -> None:
+        from dictatem.hotkey.classifier import HotkeyClassifier
+
+        self._classifier: HotkeyClassifier = classifier  # type: ignore[assignment]
+        self._callback = callback
+        self._combo_active = False
+
+    def on_key_event(self, vk: int, action: object, timestamp_ms: int) -> object:
+        from dictatem.hotkey.classifier import HotkeyEvent
+
+        was_combo = self._classifier.combo_held
+        decision, event = self._classifier.process_event(vk, action, timestamp_ms)  # type: ignore[arg-type]
+        is_combo = self._classifier.combo_held
+
+        if not self._combo_active and is_combo:
+            self._combo_active = True
+            self._callback(Event.KEY_DOWN, now_ms=timestamp_ms)  # type: ignore[operator]
+
+        if event is not None:
+            self._dispatch_event(event, timestamp_ms)
+
+        if self._combo_active and not is_combo and event is None:
+            self._combo_active = False
+
+        return decision
+
+    def tick(self, timestamp_ms: int) -> None:
+        from dictatem.hotkey.classifier import HotkeyEvent
+
+        event = self._classifier.tick(timestamp_ms)
+        if event is not None:
+            self._dispatch_event(event, timestamp_ms)
+
+    def _dispatch_event(self, event: object, timestamp_ms: int) -> None:
+        from dictatem.hotkey.classifier import HotkeyEvent
+
+        if event == HotkeyEvent.TAP:
+            self._callback(Event.KEY_UP, now_ms=timestamp_ms)  # type: ignore[operator]
+            self._combo_active = False
+        elif event == HotkeyEvent.HOLD_START:
+            self._callback(Event.TIMER_EXPIRED, now_ms=timestamp_ms)  # type: ignore[operator]
+        elif event == HotkeyEvent.HOLD_END:
+            self._callback(Event.KEY_UP, now_ms=timestamp_ms)  # type: ignore[operator]
+            self._combo_active = False
+        elif event == HotkeyEvent.ESC:
+            self._callback(Event.ESC, now_ms=timestamp_ms)  # type: ignore[operator]
+            self._combo_active = False
+
+
+class _TrayAdapter:
+    """Bridges a QtTrayIcon to the TrayRenderer protocol."""
+
+    def __init__(self, *, icon: object) -> None:
+        self._icon = icon
+        self._recording = False
+        self._error = False
+
+    def set_idle(self) -> None:
+        self._recording = False
+        self._error = False
+        self._sync()
+
+    def set_recording(self) -> None:
+        self._recording = True
+        self._sync()
+
+    def set_error(self) -> None:
+        self._error = True
+        self._sync()
+
+    def show_notification(self, title: str, message: str) -> None:
+        self._icon.show_notification(title, message)  # type: ignore[attr-defined]
+
+    def _sync(self) -> None:
+        from dictatem.tray.state import TrayState
+
+        self._icon.update_state(  # type: ignore[attr-defined]
+            TrayState(
+                is_recording=self._recording,
+                is_model_loaded=False,
+                has_error=self._error,
+            )
+        )
 
 
 class DaemonCore:
@@ -257,3 +375,104 @@ def main() -> None:
 
 def _start_windows_daemon() -> None:
     """Wire Windows adapters and start the Qt event loop."""
+    import time
+    from pathlib import Path
+
+    from PySide6.QtCore import QTimer  # type: ignore[import-not-found]
+    from PySide6.QtWidgets import QApplication  # type: ignore[import-not-found]
+
+    from dictatem.audio.sounddevice_capture import SoundDeviceCapture
+    from dictatem.config import load_config
+    from dictatem.hotkey.classifier import HotkeyClassifier
+    from dictatem.hotkey.wh_keyboard_ll import WHKeyboardLLHook
+    from dictatem.overlay.qt_widget import QtOverlayWidget
+    from dictatem.overlay.state import OverlayState
+    from dictatem.paste.win32_clipboard import Win32ClipboardIO
+    from dictatem.paste.win32_foreground import Win32ForegroundTracker
+    from dictatem.paste.win32_keystroke import Win32KeystrokeSender
+    from dictatem.state import StateMachine
+    from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
+    from dictatem.transcribe.lifecycle import TranscribeLifecycle
+    from dictatem.tray.qt_tray import QtTrayIcon
+
+    config_path = Path.home() / ".dictatem" / "config.toml"
+    config = load_config(config_path)
+
+    logging.basicConfig(
+        level=getattr(logging, config.logging.level.upper(), logging.INFO),
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+
+    app = QApplication(sys.argv)
+
+    audio_capture = SoundDeviceCapture(config)
+
+    backend = FasterWhisperBackend(
+        model_name=config.model.name,
+        compute_type=config.model.compute_type,
+        language=config.model.language,
+        vad_filter=config.model.vad_filter,
+    )
+    lifecycle = TranscribeLifecycle(
+        backend=backend,
+        idle_timeout_s=config.model.idle_unload_minutes * 60,
+        min_transcription_chars=config.model.min_transcription_chars,
+    )
+
+    clipboard = Win32ClipboardIO()
+    keystroke = Win32KeystrokeSender()
+    foreground = Win32ForegroundTracker()
+
+    overlay_state = OverlayState(
+        clock=time.monotonic,
+        fade_in_ms=config.overlay.fade_in_ms,
+        fade_out_ms=config.overlay.fade_out_ms,
+    )
+    overlay_widget = QtOverlayWidget(overlay_state)
+    overlay = _OverlayAdapter(state=overlay_state, widget=overlay_widget)
+
+    tray_icon = QtTrayIcon(app)
+    tray = _TrayAdapter(icon=tray_icon)
+
+    sm = StateMachine(tap_threshold_ms=config.hotkey.tap_threshold_ms)
+
+    daemon = DaemonCore(
+        state_machine=sm,
+        audio_capture=audio_capture,
+        audio_buffer=audio_capture._buffer,
+        lifecycle=lifecycle,
+        overlay=overlay,
+        tray=tray,
+        clipboard=clipboard,
+        keystroke=keystroke,
+        foreground=foreground,
+        silence_timeout_s=float(config.behaviour.silence_timeout_s),
+    )
+
+    tray_icon.on_start = daemon.on_tray_start_recording
+    tray_icon.on_stop = daemon.on_tray_stop_recording
+    tray_icon.on_preload = daemon.on_tray_preload
+    tray_icon.on_unload = daemon.on_tray_unload
+    tray_icon.on_quit = app.quit
+
+    classifier = HotkeyClassifier(tap_threshold_ms=config.hotkey.tap_threshold_ms)
+    bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
+    hook = WHKeyboardLLHook(classifier)
+    hook.install()
+
+    silence_timer = QTimer()
+    silence_timer.setInterval(5000)
+    silence_timer.timeout.connect(
+        lambda: daemon.check_silence(now_ms=int(time.monotonic() * 1000))
+    )
+    silence_timer.start()
+
+    tick_timer = QTimer()
+    tick_timer.setInterval(50)
+    tick_timer.timeout.connect(
+        lambda: bridge.tick(int(time.monotonic() * 1000))
+    )
+    tick_timer.start()
+
+    logger.info("Dictatem daemon started")
+    app.exec()

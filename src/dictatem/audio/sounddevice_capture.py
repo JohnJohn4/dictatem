@@ -43,8 +43,8 @@ def _resolve_device(device_spec: str | None) -> int | None:
 
 class SoundDeviceCapture:
     def __init__(self, config: Config) -> None:
-        self._sample_rate = config.sample_rate
-        self._device_spec = config.audio_device
+        self._sample_rate = config.audio.sample_rate
+        self._device_spec = config.audio.device
         self._buffer = AudioBuffer(sample_rate=self._sample_rate)
         self._stream: object | None = None
 
