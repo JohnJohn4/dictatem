@@ -25,6 +25,7 @@ DICTATEM_MODULES = [
     "dictatem.interfaces",
     "dictatem.exceptions",
     "dictatem.daemon",
+    "dictatem.hotkey.classifier",
 ]
 
 
