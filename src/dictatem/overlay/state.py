@@ -130,7 +130,7 @@ class OverlayState:
     def current_dot_color(self) -> Color:
         if self._phase == OverlayPhase.TRANSCRIBING:
             return Color.AMBER
-        return Color.RED  # RED for recording, error_flash, and other states
+        return Color.RED
 
     def current_dot_style(self) -> DotStyle:
         if self._mode == RecordingMode.PTT:

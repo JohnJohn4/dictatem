@@ -16,10 +16,10 @@ from dictatem.audio.buffer import AudioBuffer
 from dictatem.daemon import DaemonCore
 from dictatem.exceptions import (
     AudioCaptureError,
+    GPUOutOfMemoryError,
     ModelLoadError,
-    TranscriptionFailedError,
 )
-from dictatem.state import Command, Event, State, StateMachine
+from dictatem.state import Event, State, StateMachine
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
 from dictatem.types import EmptyResult
 from tests.fakes import (
@@ -138,8 +138,6 @@ class TestGPUOOMDoubleFail:
         sm: StateMachine,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        from dictatem.exceptions import GPUOutOfMemoryError
-
         backend.queue_error(GPUOutOfMemoryError("first"))
         backend.queue_error(GPUOutOfMemoryError("second"))
 
@@ -160,8 +158,6 @@ class TestGPUOOMDoubleFail:
         keystroke: FakeKeystrokeSender,
         sm: StateMachine,
     ) -> None:
-        from dictatem.exceptions import GPUOutOfMemoryError
-
         backend.queue_error(GPUOutOfMemoryError("first"))
         backend.queue_error(GPUOutOfMemoryError("second"))
         _do_ptt_cycle(core)

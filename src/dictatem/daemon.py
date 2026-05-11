@@ -27,7 +27,6 @@ if TYPE_CHECKING:
     )
     from dictatem.state import StateMachine
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
-    from dictatem.types import AudioChunk
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +62,6 @@ class DaemonCore:
         self._keystroke = keystroke
         self._foreground = foreground
         self._silence_timeout_s = silence_timeout_s
-        self._last_audio: AudioChunk | None = None
         self._last_text: str | None = None
 
     def on_hotkey_event(self, event: Event, *, now_ms: int = 0) -> None:
