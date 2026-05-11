@@ -1,16 +1,15 @@
 """Hybrid hotkey state machine — pure logic, no I/O dependencies.
 
 Receives events (KeyDown, KeyUp, Esc, timer/silence signals, transcription
-results) and emits high-level commands.  Depends only on stdlib; the 200 ms
-tap-vs-hold threshold and 60 s silence timeout are driven by an injected
-clock so tests run in milliseconds.
+results) and emits high-level commands.  Depends only on stdlib; the
+tap-vs-hold threshold is configurable and time is caller-supplied so tests
+run in milliseconds.
 """
 
 from __future__ import annotations
 
 import enum
 from collections.abc import Callable
-from typing import Protocol
 
 
 class State(enum.Enum):
@@ -44,15 +43,10 @@ class Command(enum.Enum):
     NOTIFY_ERROR = "notify_error"
 
 
-class Clock(Protocol):
-    def now_ms(self) -> int: ...
-
-
 class StateMachine:
-    def __init__(self, *, tap_threshold_ms: int = 200, silence_timeout_ms: int = 60_000) -> None:
+    def __init__(self, *, tap_threshold_ms: int = 200) -> None:
         self._state = State.IDLE
         self._tap_threshold_ms = tap_threshold_ms
-        self._silence_timeout_ms = silence_timeout_ms
         self._key_down_at: int | None = None
         self._oom_retried: bool = False
 
@@ -93,20 +87,18 @@ class StateMachine:
         self._key_down_at = None
         return [Command.CANCEL_TAP_TIMER, Command.CANCEL]
 
+    # -- shared cancel handler (used by TOGGLE_REC, PTT_REC, TRANSCRIBING) --
+
+    def _cancel_to_idle(self, _now_ms: int) -> list[Command]:
+        self._state = State.IDLE
+        return [Command.CANCEL]
+
     # -- TOGGLE_REC handlers --
 
     def _toggle_key_down(self, _now_ms: int) -> list[Command]:
         self._state = State.TRANSCRIBING
         self._oom_retried = False
         return [Command.RECORD_STOP_AND_TRANSCRIBE]
-
-    def _toggle_esc(self, _now_ms: int) -> list[Command]:
-        self._state = State.IDLE
-        return [Command.CANCEL]
-
-    def _toggle_silence(self, _now_ms: int) -> list[Command]:
-        self._state = State.IDLE
-        return [Command.CANCEL]
 
     # -- PTT_REC handlers --
 
@@ -115,23 +107,11 @@ class StateMachine:
         self._oom_retried = False
         return [Command.RECORD_STOP_AND_TRANSCRIBE]
 
-    def _ptt_esc(self, _now_ms: int) -> list[Command]:
-        self._state = State.IDLE
-        return [Command.CANCEL]
-
-    def _ptt_silence(self, _now_ms: int) -> list[Command]:
-        self._state = State.IDLE
-        return [Command.CANCEL]
-
     # -- TRANSCRIBING handlers --
 
     def _transcribing_done(self, _now_ms: int) -> list[Command]:
         self._state = State.IDLE
         return [Command.PASTE]
-
-    def _transcribing_esc(self, _now_ms: int) -> list[Command]:
-        self._state = State.IDLE
-        return [Command.CANCEL]
 
     def _transcribing_empty(self, _now_ms: int) -> list[Command]:
         self._state = State.IDLE
@@ -154,13 +134,13 @@ _HANDLERS: dict[tuple[State, Event], _Handler] = {
     (State.PRESSED, Event.TIMER_EXPIRED): StateMachine._pressed_timer_expired,
     (State.PRESSED, Event.ESC): StateMachine._pressed_esc,
     (State.TOGGLE_REC, Event.KEY_DOWN): StateMachine._toggle_key_down,
-    (State.TOGGLE_REC, Event.ESC): StateMachine._toggle_esc,
-    (State.TOGGLE_REC, Event.SILENCE_TIMEOUT): StateMachine._toggle_silence,
+    (State.TOGGLE_REC, Event.ESC): StateMachine._cancel_to_idle,
+    (State.TOGGLE_REC, Event.SILENCE_TIMEOUT): StateMachine._cancel_to_idle,
     (State.PTT_REC, Event.KEY_UP): StateMachine._ptt_key_up,
-    (State.PTT_REC, Event.ESC): StateMachine._ptt_esc,
-    (State.PTT_REC, Event.SILENCE_TIMEOUT): StateMachine._ptt_silence,
+    (State.PTT_REC, Event.ESC): StateMachine._cancel_to_idle,
+    (State.PTT_REC, Event.SILENCE_TIMEOUT): StateMachine._cancel_to_idle,
     (State.TRANSCRIBING, Event.TRANSCRIPTION_DONE): StateMachine._transcribing_done,
-    (State.TRANSCRIBING, Event.ESC): StateMachine._transcribing_esc,
+    (State.TRANSCRIBING, Event.ESC): StateMachine._cancel_to_idle,
     (State.TRANSCRIBING, Event.EMPTY_RESULT): StateMachine._transcribing_empty,
     (State.TRANSCRIBING, Event.OOM): StateMachine._transcribing_oom,
 }
