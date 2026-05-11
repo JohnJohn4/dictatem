@@ -60,8 +60,9 @@ $RECYCLE.BIN/
 *.spec
 dist/
 
-# SANDCASTLE
+# SANDCASTLE AND SKILLS
 .sandcastle/
+.agents/
 node_modules/
 package.json
 package-lock.json
