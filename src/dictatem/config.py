@@ -142,15 +142,10 @@ def _build_config(raw: dict[str, Any]) -> Config:
     """Construct a Config from a parsed TOML dict, validating as we go."""
     kwargs: dict[str, Any] = {}
 
-    for section_name in list(raw):
+    for section_name, section_data in raw.items():
         if section_name not in _SECTION_CLASSES:
             logger.info("Ignoring unknown config section: [%s]", section_name)
             continue
-
-        cls = _SECTION_CLASSES[section_name]
-        default_instance = cls()
-        known_fields = {f.name for f in fields(cls)}
-        section_data = raw[section_name]
 
         if not isinstance(section_data, dict):
             logger.warning(
@@ -158,12 +153,13 @@ def _build_config(raw: dict[str, Any]) -> Config:
             )
             continue
 
-        for key in list(section_data):
+        cls = _SECTION_CLASSES[section_name]
+        default_instance = cls()
+        known_fields = {f.name for f in fields(cls)}
+
+        for key in section_data:
             if key not in known_fields:
-                logger.info(
-                    "Ignoring unknown key [%s].%s", section_name, key
-                )
-                del section_data[key]
+                logger.info("Ignoring unknown key [%s].%s", section_name, key)
 
         section_kwargs: dict[str, Any] = {}
         for f in fields(cls):
@@ -173,18 +169,13 @@ def _build_config(raw: dict[str, Any]) -> Config:
             if f.name == "modifiers" and isinstance(value, list):
                 value = tuple(value)
             default_val = getattr(default_instance, f.name)
-            validated = _validate_field(section_name, f.name, value, default_val)
-            section_kwargs[f.name] = validated
+            section_kwargs[f.name] = _validate_field(
+                section_name, f.name, value, default_val
+            )
 
-        kwargs[section_name] = cls(**{
-            f.name: section_kwargs.get(f.name, getattr(default_instance, f.name))
-            for f in fields(cls)
-        })
+        kwargs[section_name] = cls(**section_kwargs)
 
-    return Config(**{
-        section: kwargs.get(section, _SECTION_CLASSES[section]())
-        for section in _SECTION_CLASSES
-    })
+    return Config(**kwargs)
 
 
 def _validate_field(
@@ -192,25 +183,15 @@ def _validate_field(
 ) -> Any:
     """Return *value* if valid, otherwise log a warning and return *default*."""
     positive_fields = _POSITIVE_INT_FIELDS.get(section, set())
-    if key in positive_fields and isinstance(value, int) and value <= 0:
-        logger.warning(
-            "Invalid value for [%s].%s: %r — using default %r",
-            section, key, value, default,
-        )
-        return default
+    invalid = (
+        (key in positive_fields and isinstance(value, int) and value <= 0)
+        or (section == "overlay" and key == "position"
+            and value not in VALID_OVERLAY_POSITIONS)
+        or (section == "logging" and key == "level"
+            and (not isinstance(value, str) or value.lower() not in VALID_LOG_LEVELS))
+    )
 
-    if section == "overlay" and key == "position" and value not in VALID_OVERLAY_POSITIONS:
-        logger.warning(
-            "Invalid value for [%s].%s: %r — using default %r",
-            section, key, value, default,
-        )
-        return default
-
-    if (
-        section == "logging"
-        and key == "level"
-        and (not isinstance(value, str) or value.lower() not in VALID_LOG_LEVELS)
-    ):
+    if invalid:
         logger.warning(
             "Invalid value for [%s].%s: %r — using default %r",
             section, key, value, default,
