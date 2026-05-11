@@ -13,7 +13,7 @@ from dictatem.exceptions import (
     TranscriptionFailedError,
 )
 from dictatem.state import Command, Event, State
-from dictatem.types import EmptyResult
+from dictatem.types import EmptyResult, RecordingMode
 
 if TYPE_CHECKING:
     from dictatem.audio.buffer import AudioBuffer
@@ -112,6 +112,7 @@ class DaemonCore:
             self._do_paste()
         elif cmd is Command.FLASH_ERROR:
             self._overlay.show_error()
+            self._tray.set_idle()
         elif cmd is Command.NOTIFY_ERROR:
             self._tray.show_notification(
                 "Transcription Failed",
@@ -122,7 +123,7 @@ class DaemonCore:
         elif cmd is Command.START_TAP_TIMER:
             pass
         elif cmd is Command.CANCEL_TAP_TIMER:
-            pass
+            self._overlay.show(RecordingMode.TOGGLE)
 
     def _do_record_start(self) -> None:
         try:
@@ -139,6 +140,8 @@ class DaemonCore:
             )
             self._recover_to_idle()
             raise _AbortCommandChain
+        self._overlay.show(RecordingMode.PTT)
+        self._tray.set_recording()
 
     def _do_transcribe(self, *, now_ms: int = 0) -> None:
         try:
@@ -198,15 +201,46 @@ class DaemonCore:
                 foreground=self._foreground,
             )
         self._overlay.hide()
+        self._tray.set_idle()
         self._last_text = None
 
     def _do_cancel(self) -> None:
         self._overlay.hide()
+        self._tray.set_idle()
         self._last_text = None
+
+    def on_tray_preload(self) -> None:
+        """Handle Preload Model tray menu action."""
+        try:
+            self._lifecycle.preload()
+        except Exception:
+            logger.error("Error preloading model", exc_info=True)
+
+    def on_tray_unload(self) -> None:
+        """Handle Unload Model tray menu action."""
+        try:
+            self._lifecycle.unload()
+        except Exception:
+            logger.error("Error unloading model", exc_info=True)
+
+    def on_tray_start_recording(self) -> None:
+        """Handle Start Recording tray menu action."""
+        if self._sm.state is not State.IDLE:
+            return
+        self.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        self.on_hotkey_event(Event.KEY_UP, now_ms=0)
+
+    def on_tray_stop_recording(self) -> None:
+        """Handle Stop Recording tray menu action."""
+        if self._sm.state is State.TOGGLE_REC:
+            self.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        elif self._sm.state in (State.PTT_REC, State.PRESSED):
+            self.on_hotkey_event(Event.KEY_UP, now_ms=1000)
 
     def _recover_to_idle(self) -> None:
         self._sm._state = State.IDLE
         self._overlay.hide()
+        self._tray.set_idle()
         self._last_text = None
 
 

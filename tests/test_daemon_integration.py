@@ -1,0 +1,244 @@
+"""Integration tests for DaemonCore wiring — overlay, tray state, and menu actions.
+
+These tests verify that DaemonCore properly wires the state machine to
+overlay display, tray icon state updates, and tray menu action handling.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from dictatem.daemon import DaemonCore
+from dictatem.state import Event, State, StateMachine
+from dictatem.transcribe.lifecycle import TranscribeLifecycle
+from dictatem.types import EmptyResult, RecordingMode
+from tests.fakes import (
+    FakeAudioCapture,
+    FakeClipboardIO,
+    FakeForegroundTracker,
+    FakeKeystrokeSender,
+    FakeOverlayRenderer,
+    FakeTranscriberBackend,
+    FakeTrayRenderer,
+)
+
+
+@pytest.fixture
+def sm() -> StateMachine:
+    return StateMachine(tap_threshold_ms=200)
+
+
+@pytest.fixture
+def backend() -> FakeTranscriberBackend:
+    return FakeTranscriberBackend(result="hello world")
+
+
+@pytest.fixture
+def audio() -> FakeAudioCapture:
+    return FakeAudioCapture(duration_s=1.0)
+
+
+@pytest.fixture
+def overlay() -> FakeOverlayRenderer:
+    return FakeOverlayRenderer()
+
+
+@pytest.fixture
+def tray() -> FakeTrayRenderer:
+    return FakeTrayRenderer()
+
+
+@pytest.fixture
+def clipboard() -> FakeClipboardIO:
+    return FakeClipboardIO()
+
+
+@pytest.fixture
+def keystroke() -> FakeKeystrokeSender:
+    return FakeKeystrokeSender()
+
+
+@pytest.fixture
+def foreground() -> FakeForegroundTracker:
+    return FakeForegroundTracker()
+
+
+@pytest.fixture
+def lifecycle(backend: FakeTranscriberBackend) -> TranscribeLifecycle:
+    return TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+
+
+@pytest.fixture
+def core(
+    sm: StateMachine,
+    audio: FakeAudioCapture,
+    lifecycle: TranscribeLifecycle,
+    overlay: FakeOverlayRenderer,
+    tray: FakeTrayRenderer,
+    clipboard: FakeClipboardIO,
+    keystroke: FakeKeystrokeSender,
+    foreground: FakeForegroundTracker,
+) -> DaemonCore:
+    return DaemonCore(
+        state_machine=sm,
+        audio_capture=audio,
+        lifecycle=lifecycle,
+        overlay=overlay,
+        tray=tray,
+        clipboard=clipboard,
+        keystroke=keystroke,
+        foreground=foreground,
+    )
+
+
+def _do_ptt_cycle(core: DaemonCore) -> None:
+    """Drive a full PTT cycle: key down → timer → key up."""
+    core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+    core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
+    core.on_hotkey_event(Event.KEY_UP, now_ms=1500)
+
+
+def _do_toggle_cycle(core: DaemonCore) -> None:
+    """Drive a full toggle cycle: tap down → quick up → tap down again."""
+    core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+    core.on_hotkey_event(Event.KEY_UP, now_ms=100)
+    core.on_hotkey_event(Event.KEY_DOWN, now_ms=500)
+
+
+# ── Overlay recording display ────────────────────────────────────────
+
+
+class TestOverlayRecordingDisplay:
+    """Overlay must be shown during recording with correct mode."""
+
+    def test_record_start_shows_overlay(
+        self, core: DaemonCore, overlay: FakeOverlayRenderer
+    ) -> None:
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        assert overlay.visible
+        assert any(c[0] == "show" for c in overlay.calls)
+
+    def test_ptt_recording_shows_ptt_mode(
+        self, core: DaemonCore, overlay: FakeOverlayRenderer
+    ) -> None:
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
+        assert overlay.mode is RecordingMode.PTT
+
+    def test_toggle_recording_updates_to_toggle_mode(
+        self, core: DaemonCore, overlay: FakeOverlayRenderer
+    ) -> None:
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=100)
+        assert overlay.mode is RecordingMode.TOGGLE
+
+    def test_transcribing_shows_transcribing_overlay(
+        self, core: DaemonCore, overlay: FakeOverlayRenderer
+    ) -> None:
+        _do_ptt_cycle(core)
+        assert any(c[0] == "show_transcribing" for c in overlay.calls)
+
+    def test_paste_hides_overlay(
+        self, core: DaemonCore, overlay: FakeOverlayRenderer
+    ) -> None:
+        _do_ptt_cycle(core)
+        assert overlay.state == "hidden"
+
+    def test_cancel_hides_overlay(
+        self, core: DaemonCore, overlay: FakeOverlayRenderer
+    ) -> None:
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        core.on_hotkey_event(Event.ESC, now_ms=100)
+        assert overlay.state == "hidden"
+
+
+# ── Tray icon state updates ──────────────────────────────────────────
+
+
+class TestTrayIconStateUpdates:
+    """Tray icon must reflect daemon state: idle, recording, error."""
+
+    def test_record_start_sets_tray_recording(
+        self, core: DaemonCore, tray: FakeTrayRenderer
+    ) -> None:
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        assert tray.state == "recording"
+
+    def test_idle_after_paste_sets_tray_idle(
+        self, core: DaemonCore, tray: FakeTrayRenderer
+    ) -> None:
+        _do_ptt_cycle(core)
+        assert tray.state == "idle"
+
+    def test_idle_after_cancel_sets_tray_idle(
+        self, core: DaemonCore, tray: FakeTrayRenderer
+    ) -> None:
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        core.on_hotkey_event(Event.ESC, now_ms=100)
+        assert tray.state == "idle"
+
+    def test_idle_after_empty_result_sets_tray_idle(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        tray: FakeTrayRenderer,
+    ) -> None:
+        backend._result = EmptyResult()
+        _do_ptt_cycle(core)
+        assert tray.state == "idle"
+
+
+# ── Tray menu action handling ────────────────────────────────────────
+
+
+class TestTrayMenuActions:
+    """Tray menu items must trigger the correct daemon behaviour."""
+
+    def test_preload_model_loads_backend(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+    ) -> None:
+        core.on_tray_preload()
+        assert backend.load_count >= 1
+
+    def test_unload_model_unloads_backend(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+    ) -> None:
+        backend._loaded = True
+        core.on_tray_unload()
+        assert not backend.is_loaded
+
+    def test_start_recording_begins_capture(
+        self,
+        core: DaemonCore,
+        audio: FakeAudioCapture,
+        sm: StateMachine,
+        overlay: FakeOverlayRenderer,
+    ) -> None:
+        core.on_tray_start_recording()
+        assert audio.started
+        assert overlay.visible
+        assert sm.state in (State.PRESSED, State.TOGGLE_REC)
+
+    def test_stop_recording_transcribes(
+        self,
+        core: DaemonCore,
+        audio: FakeAudioCapture,
+        keystroke: FakeKeystrokeSender,
+        sm: StateMachine,
+    ) -> None:
+        core.on_tray_start_recording()
+        core.on_tray_stop_recording()
+        assert sm.state is State.IDLE
+        assert keystroke.paste_count == 1
+
+    def test_stop_recording_is_noop_when_idle(
+        self,
+        core: DaemonCore,
+        sm: StateMachine,
+    ) -> None:
+        core.on_tray_stop_recording()
+        assert sm.state is State.IDLE
