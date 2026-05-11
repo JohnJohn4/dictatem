@@ -2,8 +2,6 @@
 
 Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, and your words are transcribed and pasted into whatever window has focus — instantly, offline, with no cloud dependency.
 
-> **Status:** Core pipeline (audio capture, GPU transcription, paste) is implemented and tested. The full daemon wiring (`_start_windows_daemon`) is not yet complete — `python -m dictatem` exits immediately. Use the [bootstrap script](#verify-the-setup) to confirm your environment works end-to-end.
-
 ## Features
 
 - **Global hotkey** — Ctrl+Win activates recording from any window
@@ -78,13 +76,11 @@ If you see `(No speech detected)`, check your default microphone in Windows soun
 
 ## Running
 
-> The full daemon (`python -m dictatem`) is not yet implemented — see status note above. Once complete, run:
-
 ```powershell
 uv run python -m dictatem
 ```
 
-The daemon starts in the system tray. Look for the dictatem icon in the bottom-right of the taskbar.
+The daemon starts in the system tray — look for the dictatem icon in the bottom-right of the taskbar. If the icon appears, it's running.
 
 | Action | Hotkey |
 |---|---|
