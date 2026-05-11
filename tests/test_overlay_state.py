@@ -1,0 +1,282 @@
+"""Tests for the pure overlay state machine (no Qt, no PySide6)."""
+
+from __future__ import annotations
+
+import importlib
+import sys
+
+import pytest
+
+from dictatem.overlay.state import (
+    Color,
+    DotStyle,
+    MonitorRect,
+    OverlayPhase,
+    OverlayState,
+    Point,
+    WaveformFrame,
+)
+from dictatem.types import RecordingMode
+
+
+class FakeClock:
+    """Deterministic clock for testing time-dependent transitions."""
+
+    def __init__(self, start: float = 0.0) -> None:
+        self._now = start
+
+    def __call__(self) -> float:
+        return self._now
+
+    def advance_ms(self, ms: float) -> None:
+        self._now += ms / 1000.0
+
+
+@pytest.fixture
+def clock() -> FakeClock:
+    return FakeClock()
+
+
+@pytest.fixture
+def state(clock: FakeClock) -> OverlayState:
+    return OverlayState(clock=clock)
+
+
+class TestInitialState:
+    def test_starts_hidden(self, state: OverlayState) -> None:
+        assert state.phase == OverlayPhase.HIDDEN
+
+    def test_initial_opacity_is_zero(self, state: OverlayState) -> None:
+        assert state.current_opacity() == 0.0
+
+
+class TestFadeIn:
+    def test_show_recording_transitions_to_fading_in(
+        self, state: OverlayState
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        assert state.phase == OverlayPhase.FADING_IN
+
+    def test_opacity_at_halfway_through_fade_in(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(50)
+        assert state.current_opacity() == pytest.approx(0.5, abs=0.05)
+
+    def test_opacity_one_after_full_fade_in(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        assert state.current_opacity() == 1.0
+
+    def test_phase_is_recording_after_full_fade_in(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        assert state.phase == OverlayPhase.RECORDING
+
+
+class TestDotColor:
+    def test_red_during_recording(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        assert state.current_dot_color() == Color.RED
+
+    def test_amber_during_transcribing(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.show_transcribing()
+        assert state.current_dot_color() == Color.AMBER
+
+    def test_red_during_fade_in(self, state: OverlayState) -> None:
+        state.show_recording(RecordingMode.PTT)
+        assert state.current_dot_color() == Color.RED
+
+
+class TestDotStyle:
+    def test_outline_for_ptt(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        assert state.current_dot_style() == DotStyle.OUTLINE
+
+    def test_filled_for_toggle(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.TOGGLE)
+        clock.advance_ms(100)
+        state.tick()
+        assert state.current_dot_style() == DotStyle.FILLED
+
+    def test_style_during_fade_in_reflects_mode(
+        self, state: OverlayState
+    ) -> None:
+        state.show_recording(RecordingMode.TOGGLE)
+        assert state.current_dot_style() == DotStyle.FILLED
+
+
+class TestWaveformFrame:
+    def test_half_level_produces_half_height_bars(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        frame = state.current_waveform_frame(lambda: 0.5)
+        assert isinstance(frame, WaveformFrame)
+        assert len(frame.bars) > 0
+        avg_height = sum(frame.bars) / len(frame.bars)
+        assert 0.2 < avg_height < 0.8
+
+    def test_energy_proportional_to_level(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        frame_low = state.current_waveform_frame(lambda: 0.25)
+        frame_high = state.current_waveform_frame(lambda: 0.75)
+        energy_low = sum(frame_low.bars)
+        energy_high = sum(frame_high.bars)
+        assert energy_high / energy_low == pytest.approx(3.0, rel=0.1)
+
+    def test_zero_level_produces_zero_bars(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        frame = state.current_waveform_frame(lambda: 0.0)
+        assert all(b == 0.0 for b in frame.bars)
+
+    def test_full_level_produces_max_bars(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        frame = state.current_waveform_frame(lambda: 1.0)
+        assert all(b > 0.0 for b in frame.bars)
+        assert max(frame.bars) == pytest.approx(1.0, abs=0.01)
+
+
+class TestComputePosition:
+    def test_cursor_on_second_monitor(self) -> None:
+        monitors = [
+            MonitorRect(0, 0, 1920, 1080),
+            MonitorRect(1920, 0, 1920, 1080),
+        ]
+        pos = OverlayState.compute_position(
+            cursor_position=Point(2500, 800), monitors=monitors
+        )
+        # Should be in the second monitor's bottom-right region
+        assert 1920 < pos.x < 1920 + 1920
+        assert 0 < pos.y < 1080
+        # Specifically in the right half and bottom half of the second monitor
+        assert pos.x > 1920 + 960
+        assert pos.y > 540
+
+    def test_cursor_on_first_monitor(self) -> None:
+        monitors = [
+            MonitorRect(0, 0, 1920, 1080),
+            MonitorRect(1920, 0, 1920, 1080),
+        ]
+        pos = OverlayState.compute_position(
+            cursor_position=Point(500, 500), monitors=monitors
+        )
+        assert 0 < pos.x < 1920
+        assert 0 < pos.y < 1080
+        assert pos.x > 960
+        assert pos.y > 540
+
+    def test_fallback_to_first_monitor(self) -> None:
+        monitors = [MonitorRect(0, 0, 1920, 1080)]
+        pos = OverlayState.compute_position(
+            cursor_position=Point(5000, 5000), monitors=monitors
+        )
+        assert 0 < pos.x < 1920
+        assert 0 < pos.y < 1080
+
+
+class TestFadeOut:
+    def test_hide_transitions_to_fading_out(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.hide()
+        assert state.phase == OverlayPhase.FADING_OUT
+
+    def test_opacity_decreases_during_fade_out(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.hide()
+        clock.advance_ms(200)
+        opacity = state.current_opacity()
+        assert 0.0 < opacity < 1.0
+
+    def test_hidden_after_full_fade_out(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.hide()
+        clock.advance_ms(400)
+        state.tick()
+        assert state.phase == OverlayPhase.HIDDEN
+        assert state.current_opacity() == 0.0
+
+
+class TestTranscribing:
+    def test_show_transcribing_transitions_from_recording(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.show_transcribing()
+        assert state.phase == OverlayPhase.TRANSCRIBING
+
+    def test_opacity_stays_one_during_transcribing(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.show_transcribing()
+        assert state.current_opacity() == 1.0
+
+
+class TestImportSafety:
+    def test_overlay_state_has_no_pyside6_imports(self) -> None:
+        before = set(sys.modules.keys())
+        importlib.import_module("dictatem.overlay.state")
+        after = set(sys.modules.keys())
+        new_modules = after - before
+        for forbidden in ("PySide6", "shiboken6"):
+            violations = [
+                m
+                for m in new_modules
+                if m == forbidden or m.startswith(forbidden + ".")
+            ]
+            assert violations == [], (
+                f"overlay.state pulled in forbidden module(s): {violations}"
+            )

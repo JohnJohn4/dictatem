@@ -33,6 +33,7 @@ DICTATEM_MODULES = [
     "dictatem.audio.buffer",
     "dictatem.transcribe",
     "dictatem.transcribe.lifecycle",
+    "dictatem.overlay.state",
 ]
 
 
