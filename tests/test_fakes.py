@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from dictatem.interfaces import (
     AudioCapture,
@@ -121,6 +122,29 @@ class TestFakeTranscriberBackend:
         tb = FakeTranscriberBackend()
         audio = np.zeros(16000, dtype=np.float32)
         assert tb.transcribe(audio) == EmptyResult()
+
+    def test_empty_cache_tracks_calls(self) -> None:
+        tb = FakeTranscriberBackend()
+        tb.empty_cache()
+        tb.empty_cache()
+        assert tb.empty_cache_count == 2
+
+    def test_progress_callback(self) -> None:
+        tb = FakeTranscriberBackend()
+        events: list[tuple[int, int]] = []
+        tb.set_progress_callback(lambda d, t: events.append((d, t)))
+        tb.simulate_progress(50, 100)
+        assert events == [(50, 100)]
+
+    def test_queued_error_raised_on_transcribe(self) -> None:
+        from dictatem.exceptions import GPUOutOfMemoryError
+
+        tb = FakeTranscriberBackend()
+        tb.load_model()
+        audio = np.zeros(16000, dtype=np.float32)
+        tb.queue_error(GPUOutOfMemoryError("test"))
+        with pytest.raises(GPUOutOfMemoryError):
+            tb.transcribe(audio)
 
 
 class TestFakeOverlayRenderer:

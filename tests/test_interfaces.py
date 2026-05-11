@@ -50,6 +50,8 @@ class TestProtocolSignatures:
         assert callable(getattr(interfaces.TranscriberBackend, "load_model", None))
         assert callable(getattr(interfaces.TranscriberBackend, "unload_model", None))
         assert callable(getattr(interfaces.TranscriberBackend, "transcribe", None))
+        assert callable(getattr(interfaces.TranscriberBackend, "empty_cache", None))
+        assert callable(getattr(interfaces.TranscriberBackend, "set_progress_callback", None))
 
     def test_overlay_renderer_methods(self) -> None:
         assert callable(getattr(interfaces.OverlayRenderer, "show", None))
