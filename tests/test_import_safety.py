@@ -25,6 +25,8 @@ DICTATEM_MODULES = [
     "dictatem.interfaces",
     "dictatem.exceptions",
     "dictatem.daemon",
+    "dictatem.audio",
+    "dictatem.audio.buffer",
 ]
 
 

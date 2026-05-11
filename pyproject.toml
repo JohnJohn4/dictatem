@@ -49,4 +49,5 @@ pythonPlatform = "All"
 venvPath = "."
 venv = ".venv"
 include = ["src"]
+exclude = ["src/dictatem/audio/sounddevice_capture.py"]
 typeCheckingMode = "standard"
