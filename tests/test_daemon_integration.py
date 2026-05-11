@@ -98,13 +98,6 @@ def _do_ptt_cycle(core: DaemonCore) -> None:
     core.on_hotkey_event(Event.KEY_UP, now_ms=1500)
 
 
-def _do_toggle_cycle(core: DaemonCore) -> None:
-    """Drive a full toggle cycle: tap down → quick up → tap down again."""
-    core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
-    core.on_hotkey_event(Event.KEY_UP, now_ms=100)
-    core.on_hotkey_event(Event.KEY_DOWN, now_ms=500)
-
-
 # ── Overlay recording display ────────────────────────────────────────
 
 

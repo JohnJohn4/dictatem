@@ -210,28 +210,24 @@ class DaemonCore:
         self._last_text = None
 
     def on_tray_preload(self) -> None:
-        """Handle Preload Model tray menu action."""
         try:
             self._lifecycle.preload()
         except Exception:
             logger.error("Error preloading model", exc_info=True)
 
     def on_tray_unload(self) -> None:
-        """Handle Unload Model tray menu action."""
         try:
             self._lifecycle.unload()
         except Exception:
             logger.error("Error unloading model", exc_info=True)
 
     def on_tray_start_recording(self) -> None:
-        """Handle Start Recording tray menu action."""
         if self._sm.state is not State.IDLE:
             return
         self.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
         self.on_hotkey_event(Event.KEY_UP, now_ms=0)
 
     def on_tray_stop_recording(self) -> None:
-        """Handle Stop Recording tray menu action."""
         if self._sm.state is State.TOGGLE_REC:
             self.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
         elif self._sm.state in (State.PTT_REC, State.PRESSED):
