@@ -28,13 +28,13 @@ _POSITIVE_INT_FIELDS: dict[str, set[str]] = {
     "overlay": {"fade_in_ms", "fade_out_ms", "waveform_fps"},
     "audio": {"sample_rate"},
     "logging": {"rotation_days"},
-    "behaviour": {"silence_timeout_s"},
+    "behaviour": {"silence_timeout_s", "max_recording_seconds"},
 }
 
 
 @dataclass
 class HotkeyConfig:
-    modifiers: tuple[str, ...] = ("ctrl", "win")
+    modifiers: tuple[str, ...] = ("win", "alt")
     tap_threshold_ms: int = 200
 
 
@@ -86,6 +86,7 @@ class LoggingConfig:
 @dataclass
 class BehaviourConfig:
     silence_timeout_s: int = 60
+    max_recording_seconds: int = 300
 
 
 _SECTION_CLASSES: dict[str, type[Any]] = {

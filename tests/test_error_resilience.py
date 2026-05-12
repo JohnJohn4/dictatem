@@ -102,10 +102,11 @@ def core(
 
 
 def _do_ptt_cycle(core: DaemonCore) -> None:
-    """Drive a PTT cycle: key down → timer → key up (triggers transcription)."""
+    """Drive a PTT cycle: key down → timer → key up → drain transcription."""
     core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
     core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
     core.on_hotkey_event(Event.KEY_UP, now_ms=1500)
+    core.drain_transcription_for_test(now_ms=1500)
 
 
 class TestEmptyResultSuppression:
@@ -209,6 +210,86 @@ class TestSilenceTimeout:
         assert sm.state is State.IDLE
         assert any(r.levelno == logging.INFO for r in caplog.records)
         assert any("timeout" in r.message.lower() or "idle" in r.message.lower() for r in caplog.records)
+
+
+class TestMaxRecordingDuration:
+    """AC: duration >= max_recording_seconds → IDLE + tray notify, INFO log."""
+
+    def test_max_duration_cancels_recording(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        lifecycle: TranscribeLifecycle,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        buf = AudioBuffer(sample_rate=16_000)
+        # 10 seconds of audio; cap set to 5 seconds
+        buf.append(np.zeros(16_000 * 10, dtype=np.float32))
+
+        core = DaemonCore(
+            state_machine=sm,
+            audio_capture=audio,
+            audio_buffer=buf,
+            lifecycle=lifecycle,
+            overlay=overlay,
+            tray=tray,
+            clipboard=clipboard,
+            keystroke=keystroke,
+            foreground=foreground,
+            max_recording_s=5.0,
+        )
+
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
+        assert sm.state is State.PTT_REC
+
+        with caplog.at_level(logging.INFO, logger="dictatem.daemon"):
+            core.check_silence(now_ms=10_200)
+
+        assert sm.state is State.IDLE
+        assert any("max" in r.message.lower() or "duration" in r.message.lower() for r in caplog.records)
+        assert any("max duration" in msg.lower() for _, msg in tray.notifications)
+
+    def test_max_duration_not_triggered_below_cap(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        lifecycle: TranscribeLifecycle,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+    ) -> None:
+        buf = AudioBuffer(sample_rate=16_000)
+        # 3 seconds of audio; cap is 5 seconds — should not trigger
+        buf.append(np.ones(16_000 * 3, dtype=np.float32))
+
+        core = DaemonCore(
+            state_machine=sm,
+            audio_capture=audio,
+            audio_buffer=buf,
+            lifecycle=lifecycle,
+            overlay=overlay,
+            tray=tray,
+            clipboard=clipboard,
+            keystroke=keystroke,
+            foreground=foreground,
+            max_recording_s=5.0,
+        )
+
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
+        assert sm.state is State.PTT_REC
+
+        core.check_silence(now_ms=3_200)
+
+        assert sm.state is State.PTT_REC  # still recording
 
 
 class TestAudioCaptureError:

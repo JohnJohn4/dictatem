@@ -5,18 +5,18 @@ from __future__ import annotations
 import enum
 
 # Windows virtual-key codes (subset needed by the classifier)
-VK_LCONTROL = 0xA2
-VK_RCONTROL = 0xA3
 VK_LWIN = 0x5B
 VK_RWIN = 0x5C
+VK_LMENU = 0xA4
+VK_RMENU = 0xA5
 VK_ESCAPE = 0x1B
 VK_LEFT = 0x25
 VK_UP = 0x26
 VK_RIGHT = 0x27
 VK_DOWN = 0x28
 
-CTRL_VKS = frozenset({VK_LCONTROL, VK_RCONTROL})
 WIN_VKS = frozenset({VK_LWIN, VK_RWIN})
+ALT_VKS = frozenset({VK_LMENU, VK_RMENU})
 ARROW_VKS = frozenset({VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN})
 
 
@@ -50,7 +50,7 @@ class HotkeyClassifier:
 
     @property
     def combo_held(self) -> bool:
-        return bool(self._keys_down & CTRL_VKS) and bool(self._keys_down & WIN_VKS)
+        return bool(self._keys_down & WIN_VKS) and bool(self._keys_down & ALT_VKS)
 
     def process_event(
         self, vk: int, action: KeyAction, timestamp_ms: int

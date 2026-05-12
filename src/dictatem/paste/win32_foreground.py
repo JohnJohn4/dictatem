@@ -10,5 +10,4 @@ class Win32ForegroundTracker:
         return ctypes.windll.user32.GetForegroundWindow()
 
     def restore(self, hwnd: int) -> None:
-        ctypes.windll.user32.AllowSetForegroundWindow(ctypes.windll.kernel32.GetCurrentProcessId())
         ctypes.windll.user32.SetForegroundWindow(hwnd)

@@ -14,7 +14,7 @@ class TestConfigDefaults:
 
     # [hotkey]
     def test_hotkey_modifiers(self) -> None:
-        assert Config().hotkey.modifiers == ("ctrl", "win")
+        assert Config().hotkey.modifiers == ("win", "alt")
 
     def test_tap_threshold_ms(self) -> None:
         assert Config().hotkey.tap_threshold_ms == 200

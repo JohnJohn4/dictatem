@@ -38,6 +38,10 @@ class AudioBuffer:
         self._total_samples = 0
         return result
 
+    @property
+    def duration_seconds(self) -> float:
+        return self._total_samples / self._sample_rate
+
     def current_level(self) -> float:
         if self._total_samples == 0:
             return 0.0

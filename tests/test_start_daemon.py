@@ -186,13 +186,13 @@ class _EventCollector:
 
 
 def _combo_down(bridge: _HotkeyBridge, ts: int = 0) -> None:
-    bridge.on_key_event(_clf.VK_LCONTROL, _clf.KeyAction.KEY_DOWN, ts)
+    bridge.on_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_DOWN, ts)
     bridge.on_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_DOWN, ts)
 
 
 def _combo_up(bridge: _HotkeyBridge, ts: int = 0) -> None:
     bridge.on_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_UP, ts)
-    bridge.on_key_event(_clf.VK_LCONTROL, _clf.KeyAction.KEY_UP, ts)
+    bridge.on_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_UP, ts)
 
 
 class TestHotkeyBridge:
@@ -308,7 +308,7 @@ class TestHotkeyBridge:
         )
         bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
 
-        bridge.enqueue_key_event(_clf.VK_LCONTROL, _clf.KeyAction.KEY_DOWN, 0)
+        bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_DOWN, 0)
         bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_DOWN, 0)
         bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_UP, 100)
 
@@ -338,6 +338,7 @@ class TestHotkeyBridge:
         _combo_down(bridge, ts=0)
         bridge.tick(200)
         _combo_up(bridge, ts=1500)
+        daemon.drain_transcription_for_test(now_ms=1500)
 
         assert sm.state == State.IDLE
         assert keystroke.paste_count == 1
@@ -425,6 +426,7 @@ class TestAdapterIntegration:
         _combo_up(bridge, ts=100)
 
         _combo_down(bridge, ts=500)
+        daemon.drain_transcription_for_test(now_ms=500)
 
         assert sm.state == State.IDLE
         assert keystroke.paste_count == 1

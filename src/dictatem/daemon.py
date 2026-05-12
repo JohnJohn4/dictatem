@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import queue
 import sys
+import threading
 from typing import TYPE_CHECKING
 
 from dictatem.exceptions import (
@@ -48,7 +49,7 @@ class _OverlayAdapter:
         self._widget.show_pill()  # type: ignore[attr-defined]
 
     def update_level(self, level: float) -> None:
-        pass
+        self._widget.update_level(level)  # type: ignore[attr-defined]
 
     def show_transcribing(self) -> None:
         self._state.show_transcribing()
@@ -202,6 +203,7 @@ class DaemonCore:
         keystroke: KeystrokeSender | None = None,
         foreground: ForegroundTracker | None = None,
         silence_timeout_s: float = 60.0,
+        max_recording_s: float = 300.0,
     ) -> None:
         self._sm = state_machine
         self._audio_capture = audio_capture
@@ -213,7 +215,11 @@ class DaemonCore:
         self._keystroke = keystroke
         self._foreground = foreground
         self._silence_timeout_s = silence_timeout_s
+        self._max_recording_s = max_recording_s
         self._last_text: str | None = None
+        self._transcription_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        self._transcription_active: bool = False
+        self._transcription_thread: threading.Thread | None = None
 
     def on_hotkey_event(self, event: Event, *, now_ms: int = 0) -> None:
         """Feed an event to the state machine and execute resulting commands."""
@@ -234,6 +240,18 @@ class DaemonCore:
             if self._sm.state not in (State.PTT_REC, State.TOGGLE_REC):
                 return
             if self._audio_buffer is None:
+                return
+            if self._audio_buffer.duration_seconds >= self._max_recording_s:
+                logger.info(
+                    "Max recording duration reached (%.0f s), auto-aborting",
+                    self._max_recording_s,
+                )
+                self._tray.show_notification(
+                    "Dictatem",
+                    "Recording stopped — max duration reached.",
+                )
+                commands = self._sm.handle(Event.SILENCE_TIMEOUT, now_ms=now_ms)
+                self._execute_commands(commands, now_ms=now_ms)
                 return
             if self._audio_buffer.is_idle_for_seconds(self._silence_timeout_s):
                 logger.info(
@@ -306,46 +324,90 @@ class DaemonCore:
             self._recover_to_idle()
             return
 
+        self._transcription_active = True
+
+        def _worker(captured_audio: object) -> None:
+            try:
+                result = self._lifecycle.transcribe(captured_audio)  # type: ignore[arg-type]
+            except TranscriptionFailedError:
+                self._transcription_queue.put(("transcription_failed", None))
+            except ModelLoadError as exc:
+                self._transcription_queue.put(("model_error", exc))
+            except Exception as exc:
+                self._transcription_queue.put(("unexpected_error", exc))
+            else:
+                self._transcription_queue.put(("ok", result))
+
+        t = threading.Thread(
+            target=_worker, args=(audio,), daemon=True, name="transcribe-worker"
+        )
+        self._transcription_thread = t
+        t.start()
+
+    def check_transcription_result(self, *, now_ms: int = 0) -> None:
+        """Drain the transcription result queue and process any completed result.
+
+        Called on every 50 ms tick so the Qt event loop stays responsive
+        while faster-whisper runs on the worker thread.
+        """
         try:
-            result = self._lifecycle.transcribe(audio)
-        except TranscriptionFailedError:
-            logger.error("GPU memory exhausted; transcription failed")
-            self._tray.show_notification(
-                "Transcription Failed",
-                "GPU memory exhausted; transcription failed.",
-            )
-            self._recover_to_idle()
+            kind, data = self._transcription_queue.get_nowait()
+        except queue.Empty:
             return
-        except ModelLoadError:
-            logger.error("Model unavailable; check log", exc_info=True)
-            self._tray.show_notification(
-                "Model Unavailable",
-                "Model unavailable; check log",
-            )
-            self._recover_to_idle()
-            return
+
+        if not self._transcription_active:
+            return  # ESC was pressed before result arrived — discard
+
+        self._transcription_active = False
+
+        try:
+            if kind == "transcription_failed":
+                logger.error("GPU memory exhausted; transcription failed")
+                self._tray.show_notification(
+                    "Transcription Failed",
+                    "GPU memory exhausted; transcription failed.",
+                )
+                self._recover_to_idle()
+            elif kind == "model_error":
+                logger.error("Model unavailable; check log", exc_info=data)  # type: ignore[arg-type]
+                self._tray.show_notification(
+                    "Model Unavailable",
+                    "Model unavailable; check log",
+                )
+                self._recover_to_idle()
+            elif kind == "unexpected_error":
+                logger.error("Unexpected transcription error: %s", data)
+                self._tray.show_notification(
+                    "Transcription Error",
+                    "An unexpected error occurred during transcription; check log",
+                )
+                self._recover_to_idle()
+            else:
+                result = data
+                if isinstance(result, EmptyResult):
+                    logger.info("Transcription produced empty result")
+                    commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
+                else:
+                    logger.info(
+                        "Transcription complete (%d chars): %r",
+                        len(result),  # type: ignore[arg-type]
+                        result[:80] + ("..." if len(result) > 80 else ""),  # type: ignore[index,operator]
+                    )
+                    self._last_text = result  # type: ignore[assignment]
+                    commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
+                self._execute_commands(commands, now_ms=now_ms)
         except Exception:
-            logger.error("Unexpected transcription error", exc_info=True)
-            self._tray.show_notification(
-                "Transcription Error",
-                "An unexpected error occurred during transcription; check log",
-            )
+            logger.error("Unhandled error processing transcription result", exc_info=True)
             self._recover_to_idle()
-            return
 
-        if isinstance(result, EmptyResult):
-            logger.info("Transcription produced empty result")
-            commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
-        else:
-            logger.info(
-                "Transcription complete (%d chars): %r",
-                len(result),
-                result[:80] + ("..." if len(result) > 80 else ""),
-            )
-            self._last_text = result
-            commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
+    def drain_transcription_for_test(self, *, now_ms: int = 0) -> None:
+        """Block until in-flight transcription completes, then process the result.
 
-        self._execute_commands(commands, now_ms=now_ms)
+        Only for use in tests — production code uses the 50 ms tick timer.
+        """
+        if self._transcription_thread is not None:
+            self._transcription_thread.join(timeout=5.0)
+        self.check_transcription_result(now_ms=now_ms)
 
     def _do_paste(self) -> None:
         if self._last_text and self._clipboard and self._keystroke and self._foreground:
@@ -370,6 +432,7 @@ class DaemonCore:
         self._last_text = None
 
     def _do_cancel(self) -> None:
+        self._transcription_active = False
         try:
             self._audio_capture.stop()
         except Exception:
@@ -424,6 +487,7 @@ class DaemonCore:
             self.on_hotkey_event(Event.KEY_UP, now_ms=1000)
 
     def _recover_to_idle(self) -> None:
+        self._transcription_active = False
         self._sm._state = State.IDLE
         try:
             self._audio_capture.stop()
@@ -527,6 +591,7 @@ def _start_windows_daemon() -> None:
         keystroke=keystroke,
         foreground=foreground,
         silence_timeout_s=float(config.behaviour.silence_timeout_s),
+        max_recording_s=float(config.behaviour.max_recording_seconds),
     )
 
     tray_icon.on_start = daemon.on_tray_start_recording
@@ -556,11 +621,15 @@ def _start_windows_daemon() -> None:
         logger.info("Startup preload enabled — loading model in background")
         daemon.on_tray_preload()
 
+    def _on_tick() -> None:
+        now = int(time.monotonic() * 1000)
+        bridge.tick(now)
+        overlay.update_level(audio_capture._buffer.current_level())
+        daemon.check_transcription_result(now_ms=now)
+
     tick_timer = QTimer()
     tick_timer.setInterval(50)
-    tick_timer.timeout.connect(
-        lambda: bridge.tick(int(time.monotonic() * 1000))
-    )
+    tick_timer.timeout.connect(_on_tick)
     tick_timer.start()
 
     logger.info("Dictatem daemon started")

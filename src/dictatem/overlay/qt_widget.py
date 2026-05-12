@@ -7,6 +7,7 @@ or in the test suite.  It is the thin rendering adapter that subscribes to
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 from dictatem.overlay.state import (
@@ -36,6 +37,7 @@ class QtOverlayWidget(QWidget):
     def __init__(self, overlay_state: OverlayState) -> None:
         super().__init__(None)
         self._state = overlay_state
+        self._last_level: float = 0.0
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -50,6 +52,11 @@ class QtOverlayWidget(QWidget):
         self._timer = QTimer(self)
         self._timer.setInterval(1000 // self._FPS)
         self._timer.timeout.connect(self._on_tick)
+
+    def update_level(self, level: float) -> None:
+        # Scale raw RMS (typically 0.01–0.1 for speech) into a visible display range.
+        # sqrt gives a perceptually natural response; *5 lifts quiet speech to ~50%.
+        self._last_level = min(1.0, math.sqrt(level) * 5.0) if level > 0.0 else 0.0
 
     def show_pill(self) -> None:
         cursor = QCursor.pos()
@@ -98,5 +105,22 @@ class QtOverlayWidget(QWidget):
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(dot_qcolor)
         painter.drawEllipse(8, 10, 20, 20)
+
+        if self._state.phase == OverlayPhase.RECORDING:
+            frame = self._state.current_waveform_frame(lambda: self._last_level)
+            bar_w = 4
+            bar_count = len(frame.bars)
+            bar_area_x = 36
+            bar_area_w = PILL_WIDTH - bar_area_x - 8
+            spacing = (bar_area_w - bar_count * bar_w) / max(1, bar_count - 1)
+            center_y = PILL_HEIGHT // 2
+            max_h = PILL_HEIGHT - 6  # 2px padding top and bottom (3px each side from center)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 195))
+            for i, bar_val in enumerate(frame.bars):
+                bar_h = max(3, int(bar_val * max_h))
+                bx = int(bar_area_x + i * (bar_w + spacing))
+                by = center_y - bar_h // 2
+                painter.drawRoundedRect(bx, by, bar_w, bar_h, bar_w // 2, bar_w // 2)
 
         painter.end()

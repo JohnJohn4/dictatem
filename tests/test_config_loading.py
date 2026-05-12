@@ -30,7 +30,7 @@ class TestConfigSubDataclasses:
     def test_hotkey_section(self) -> None:
         cfg = Config()
         assert isinstance(cfg.hotkey, HotkeyConfig)
-        assert cfg.hotkey.modifiers == ("ctrl", "win")
+        assert cfg.hotkey.modifiers == ("win", "alt")
         assert cfg.hotkey.tap_threshold_ms == 200
 
     def test_model_section(self) -> None:
@@ -121,7 +121,7 @@ class TestLoadConfigPartialFile:
         """))
         cfg = load_config(path)
         assert cfg.hotkey.tap_threshold_ms == 300
-        assert cfg.hotkey.modifiers == ("ctrl", "win")
+        assert cfg.hotkey.modifiers == ("win", "alt")
         # All other sections should be defaults
         assert cfg.model == ModelConfig()
         assert cfg.paste == PasteConfig()
@@ -312,7 +312,7 @@ class TestRoundTrip:
         assert cfg2.model.idle_unload_minutes == 60
         # Other values unchanged
         assert cfg2.model.name == "large-v3-turbo"
-        assert cfg2.hotkey.modifiers == ("ctrl", "win")
+        assert cfg2.hotkey.modifiers == ("win", "alt")
 
     def test_round_trip_full_config(self, tmp_path: Path) -> None:
         path = tmp_path / "config.toml"

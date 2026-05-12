@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from dictatem.audio.buffer import AudioBuffer
 from dictatem.types import SAMPLE_RATE
@@ -74,6 +75,23 @@ class TestCurrentLevel:
         buf.append(np.zeros(SAMPLE_RATE // 10, dtype=np.float32))
         level = buf.current_level()
         assert level < 0.1
+
+
+class TestDurationSeconds:
+    def test_empty_buffer_is_zero(self) -> None:
+        buf = AudioBuffer(sample_rate=16_000)
+        assert buf.duration_seconds == 0.0
+
+    def test_one_second_of_audio(self) -> None:
+        buf = AudioBuffer(sample_rate=16_000)
+        buf.append(np.zeros(16_000, dtype=np.float32))
+        assert buf.duration_seconds == pytest.approx(1.0)
+
+    def test_duration_after_flush_resets(self) -> None:
+        buf = AudioBuffer(sample_rate=16_000)
+        buf.append(np.zeros(16_000 * 5, dtype=np.float32))
+        buf.flush()
+        assert buf.duration_seconds == 0.0
 
 
 class TestIsIdleForSeconds:

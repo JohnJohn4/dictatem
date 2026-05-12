@@ -92,10 +92,11 @@ def core(
 
 
 def _do_ptt_cycle(core: DaemonCore) -> None:
-    """Drive a full PTT cycle: key down → timer → key up."""
+    """Drive a full PTT cycle: key down → timer → key up → drain transcription."""
     core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
     core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
     core.on_hotkey_event(Event.KEY_UP, now_ms=1500)
+    core.drain_transcription_for_test(now_ms=1500)
 
 
 # ── Overlay recording display ────────────────────────────────────────
@@ -275,6 +276,7 @@ class TestTrayMenuActions:
     ) -> None:
         core.on_tray_start_recording()
         core.on_tray_stop_recording()
+        core.drain_transcription_for_test(now_ms=0)
         assert sm.state is State.IDLE
         assert keystroke.paste_count == 1
 
