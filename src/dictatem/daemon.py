@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import queue
 import sys
 from typing import TYPE_CHECKING
 
@@ -60,7 +61,14 @@ class _OverlayAdapter:
 
 
 class _HotkeyBridge:
-    """Maps HotkeyClassifier events to StateMachine events and forwards them."""
+    """Maps HotkeyClassifier events to StateMachine events and forwards them.
+
+    The OS keyboard hook runs on a separate thread; Qt widget operations
+    must run on the GUI thread.  ``enqueue_key_event`` is the thread-safe
+    entry point for the hook thread, and ``tick`` (driven by a Qt timer on
+    the GUI thread) drains the queue and runs all classifier + dispatch
+    logic single-threaded.
+    """
 
     def __init__(
         self,
@@ -71,6 +79,13 @@ class _HotkeyBridge:
         self._classifier = classifier
         self._callback = callback
         self._combo_active = False
+        self._queue: queue.Queue[tuple[int, KeyAction, int]] = queue.Queue()
+
+    def enqueue_key_event(
+        self, vk: int, action: KeyAction, timestamp_ms: int
+    ) -> None:
+        """Thread-safe entry point invoked from the keyboard hook thread."""
+        self._queue.put((vk, action, timestamp_ms))
 
     def on_key_event(self, vk: int, action: KeyAction, timestamp_ms: int) -> object:
         decision, event = self._classifier.process_event(vk, action, timestamp_ms)
@@ -89,6 +104,13 @@ class _HotkeyBridge:
         return decision
 
     def tick(self, timestamp_ms: int) -> None:
+        while True:
+            try:
+                vk, action, ev_ts = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            self.on_key_event(vk, action, ev_ts)
+
         event = self._classifier.tick(timestamp_ms)
         if event is not None:
             self._dispatch_event(event, timestamp_ms)
@@ -116,6 +138,8 @@ class _TrayAdapter:
         self._icon = icon
         self._recording = False
         self._error = False
+        self._model_loaded = False
+        self._model_loading = False
 
     def set_idle(self) -> None:
         self._recording = False
@@ -130,6 +154,18 @@ class _TrayAdapter:
         self._error = True
         self._sync()
 
+    def set_model_loaded(self, loaded: bool) -> None:
+        if loaded == self._model_loaded:
+            return
+        self._model_loaded = loaded
+        self._sync()
+
+    def set_model_loading(self, loading: bool) -> None:
+        if loading == self._model_loading:
+            return
+        self._model_loading = loading
+        self._sync()
+
     def show_notification(self, title: str, message: str) -> None:
         self._icon.show_notification(title, message)  # type: ignore[attr-defined]
 
@@ -139,8 +175,9 @@ class _TrayAdapter:
         self._icon.update_state(  # type: ignore[attr-defined]
             TrayState(
                 is_recording=self._recording,
-                is_model_loaded=False,
+                is_model_loaded=self._model_loaded,
                 has_error=self._error,
+                is_model_loading=self._model_loading,
             )
         )
 
@@ -297,8 +334,14 @@ class DaemonCore:
             return
 
         if isinstance(result, EmptyResult):
+            logger.info("Transcription produced empty result")
             commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
         else:
+            logger.info(
+                "Transcription complete (%d chars): %r",
+                len(result),
+                result[:80] + ("..." if len(result) > 80 else ""),
+            )
             self._last_text = result
             commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
 
@@ -314,11 +357,23 @@ class DaemonCore:
                 keystroke=self._keystroke,
                 foreground=self._foreground,
             )
+        else:
+            logger.warning(
+                "Paste skipped: text=%r, clipboard=%s, keystroke=%s, foreground=%s",
+                bool(self._last_text),
+                self._clipboard is not None,
+                self._keystroke is not None,
+                self._foreground is not None,
+            )
         self._overlay.hide()
         self._tray.set_idle()
         self._last_text = None
 
     def _do_cancel(self) -> None:
+        try:
+            self._audio_capture.stop()
+        except Exception:
+            logger.exception("Error stopping audio capture during cancel")
         self._overlay.hide()
         self._tray.set_idle()
         self._last_text = None
@@ -328,12 +383,33 @@ class DaemonCore:
             self._lifecycle.preload()
         except Exception:
             logger.error("Error preloading model", exc_info=True)
+        self.sync_model_loaded()
 
     def on_tray_unload(self) -> None:
         try:
             self._lifecycle.unload()
         except Exception:
             logger.error("Error unloading model", exc_info=True)
+        self.sync_model_loaded()
+
+    def sync_model_loaded(self) -> None:
+        """Push the current model-load state into the tray.
+
+        Model loading runs on a background thread, so the tray must be
+        polled to reflect transitions in/out of the loaded and loading
+        states.
+        """
+        try:
+            self._tray.set_model_loaded(self._lifecycle.is_loaded)  # type: ignore[attr-defined]
+            self._tray.set_model_loading(self._lifecycle.is_loading)  # type: ignore[attr-defined]
+        except Exception:
+            logger.error("Error syncing model-load state", exc_info=True)
+
+    def check_idle(self) -> None:
+        try:
+            self._lifecycle.check_idle()
+        except Exception:
+            logger.error("Error during idle check", exc_info=True)
 
     def on_tray_start_recording(self) -> None:
         if self._sm.state is not State.IDLE:
@@ -349,6 +425,10 @@ class DaemonCore:
 
     def _recover_to_idle(self) -> None:
         self._sm._state = State.IDLE
+        try:
+            self._audio_capture.stop()
+        except Exception:
+            logger.exception("Error stopping audio capture during recovery")
         self._overlay.hide()
         self._tray.set_idle()
         self._last_text = None
@@ -398,6 +478,10 @@ def _start_windows_daemon() -> None:
         level=getattr(logging, config.logging.level.upper(), logging.INFO),
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
+    # Library chatter — model-download HTTP requests, hub probes, etc. — is
+    # noisy at INFO. Our own load/unload lines tell the user what they need.
+    for noisy in ("httpx", "huggingface_hub", "filelock", "urllib3"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     app = QApplication(sys.argv)
 
@@ -452,16 +536,25 @@ def _start_windows_daemon() -> None:
     tray_icon.on_quit = app.quit
 
     classifier = HotkeyClassifier(tap_threshold_ms=config.hotkey.tap_threshold_ms)
+    classifier.set_active(True)
     bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
-    hook = WHKeyboardLLHook(classifier)
+    hook = WHKeyboardLLHook(bridge.enqueue_key_event)
     hook.install()
 
     silence_timer = QTimer()
     silence_timer.setInterval(5000)
-    silence_timer.timeout.connect(
-        lambda: daemon.check_silence(now_ms=int(time.monotonic() * 1000))
-    )
+
+    def _on_silence_tick() -> None:
+        daemon.check_silence(now_ms=int(time.monotonic() * 1000))
+        daemon.check_idle()
+        daemon.sync_model_loaded()
+
+    silence_timer.timeout.connect(_on_silence_tick)
     silence_timer.start()
+
+    if config.startup.preload_model:
+        logger.info("Startup preload enabled — loading model in background")
+        daemon.on_tray_preload()
 
     tick_timer = QTimer()
     tick_timer.setInterval(50)

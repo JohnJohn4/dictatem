@@ -289,6 +289,33 @@ class TestHotkeyBridge:
 
         assert sm.state == State.PTT_REC
 
+    def test_enqueue_then_tick_drives_state_machine(self) -> None:
+        """The hook thread enqueues key events; tick (main thread) drains them."""
+        classifier = _clf.HotkeyClassifier(tap_threshold_ms=200)
+        sm = StateMachine(tap_threshold_ms=200)
+        daemon = DaemonCore(
+            state_machine=sm,
+            audio_capture=FakeAudioCapture(duration_s=1.0),
+            lifecycle=TranscribeLifecycle(
+                backend=FakeTranscriberBackend(result="hello"),
+                clock=lambda: 0.0,
+            ),
+            overlay=FakeOverlayRenderer(),
+            tray=FakeTrayRenderer(),
+            clipboard=FakeClipboardIO(),
+            keystroke=FakeKeystrokeSender(),
+            foreground=FakeForegroundTracker(),
+        )
+        bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
+
+        bridge.enqueue_key_event(_clf.VK_LCONTROL, _clf.KeyAction.KEY_DOWN, 0)
+        bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_DOWN, 0)
+        bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_UP, 100)
+
+        assert sm.state == State.IDLE, "queue must not be drained until tick"
+        bridge.tick(100)
+        assert sm.state == State.TOGGLE_REC
+
     def test_hold_then_release_transcribes(self) -> None:
         classifier = _clf.HotkeyClassifier(tap_threshold_ms=200)
         sm = StateMachine(tap_threshold_ms=200)

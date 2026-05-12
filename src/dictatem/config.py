@@ -74,6 +74,7 @@ class AudioConfig:
 @dataclass
 class StartupConfig:
     autostart: bool = True
+    preload_model: bool = False
 
 
 @dataclass

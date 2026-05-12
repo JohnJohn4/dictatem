@@ -170,6 +170,16 @@ class TestTrayIconStateUpdates:
         core.on_hotkey_event(Event.ESC, now_ms=100)
         assert tray.state == "idle"
 
+    def test_esc_stops_audio_capture_to_discard_buffered_audio(
+        self, core: DaemonCore, audio: FakeAudioCapture
+    ) -> None:
+        """Cancelling must stop the mic stream; otherwise the buffered
+        audio from the cancelled session bleeds into the next recording."""
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        assert audio.started
+        core.on_hotkey_event(Event.ESC, now_ms=100)
+        assert audio.stopped
+
     def test_idle_after_empty_result_sets_tray_idle(
         self,
         core: DaemonCore,
@@ -203,6 +213,46 @@ class TestTrayMenuActions:
         backend._loaded = True
         core.on_tray_unload()
         assert not backend.is_loaded
+
+    def test_preload_then_sync_marks_tray_model_loaded(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        tray: FakeTrayRenderer,
+    ) -> None:
+        """After preload completes, the tray must know the model is loaded."""
+        # FakeTranscriberBackend.load_model is synchronous, so preload's
+        # background thread is effectively a no-op for ordering here.
+        core.on_tray_preload()
+        # on_tray_preload calls sync_model_loaded() at the end
+        assert tray.model_loaded is True
+
+    def test_unload_marks_tray_model_unloaded(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        tray: FakeTrayRenderer,
+    ) -> None:
+        backend._loaded = True
+        core.sync_model_loaded()
+        assert tray.model_loaded is True
+        core.on_tray_unload()
+        assert tray.model_loaded is False
+
+    def test_sync_model_loaded_reflects_backend_state(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        tray: FakeTrayRenderer,
+    ) -> None:
+        """Polling sync_model_loaded() must mirror backend.is_loaded."""
+        assert tray.model_loaded is False
+        backend._loaded = True
+        core.sync_model_loaded()
+        assert tray.model_loaded is True
+        backend._loaded = False
+        core.sync_model_loaded()
+        assert tray.model_loaded is False
 
     def test_start_recording_begins_capture(
         self,

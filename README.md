@@ -8,10 +8,10 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 - **Two recording modes** — Push-to-talk (hold) or toggle (tap to start/stop, auto-stops after silence)
 - **GPU-accelerated transcription** — Faster-Whisper + CUDA for sub-realtime performance
 - **Smart paste** — Saves and restores clipboard content and window focus around each paste
-- **System tray** — Idle/recording/error status icons with context menu
-- **Overlay UI** — Animated pill with waveform visualization while recording
-- **Fully offline** — No network calls; all inference runs locally
-- **TOML config** — Tune model, hotkey, audio, overlay, and paste behaviour
+- **System tray** — Idle/recording/error status icons; menu items to preload or unload the model on demand
+- **Overlay UI** — Pill that appears in the corner of the active monitor while recording
+- **Fully offline** — All inference runs locally; the only network calls are the one-off model download on first use
+- **TOML config** — Tune model, hotkey, audio, overlay, paste, and startup behaviour
 
 ## Requirements
 
@@ -87,8 +87,15 @@ The daemon starts in the system tray — look for the dictatem icon in the botto
 | Push-to-talk | Hold Ctrl+Win |
 | Toggle record | Tap Ctrl+Win |
 | Stop toggle recording | Tap Ctrl+Win again |
+| Cancel recording | Press Esc |
 
 Transcribed text is pasted automatically into the focused window.
+
+### Tray menu
+
+Right-click the tray icon for: Start/Stop Recording, **Preload Model** (load Whisper into GPU memory ahead of time so the first dictation is fast), **Unload Model** (free the ~3 GB of GPU memory), Show Log, Restart, Quit. The model also auto-unloads after the configured idle period.
+
+> **Heads up on the default hotkey:** `Ctrl+Win+Left/Right/D/F4` are Windows shortcuts for virtual desktops. Pressing them while dictatem is running will accidentally trigger recording. If you use virtual desktops, change the hotkey in `config.toml`.
 
 ## Configuration
 
@@ -103,12 +110,14 @@ tap_threshold_ms = 200          # Below this = toggle tap; above = push-to-talk 
 name = "large-v3-turbo"
 compute_type = "float16"
 vad_filter = true
-unload_after_idle_minutes = 30  # Free GPU VRAM when idle
+idle_unload_minutes = 30        # Free GPU VRAM when idle for this long
+min_transcription_chars = 3     # Below this, treat the result as empty
 
 [paste]
 trailing_space = true
-strip_trailing_newlines = true
-clipboard_retries = 5
+strip_newlines = true
+clipboard_retry_attempts = 5
+clipboard_retry_delay_ms = 10
 
 [audio]
 sample_rate = 16000
@@ -118,6 +127,15 @@ silence_timeout_s = 60          # Auto-stop toggle recording after this much sil
 
 [overlay]
 position = "bottom-right"
+fade_in_ms = 100
+fade_out_ms = 400
+
+[startup]
+autostart = true
+preload_model = false           # Load the model on daemon startup vs lazily on first use
+
+[logging]
+level = "info"
 ```
 
 ## Development

@@ -111,6 +111,17 @@ class TestInputNormalization:
         set_call = next(c for c in clip.calls if c[0] == "set_text")
         assert set_call[1] == "hello "
 
+    def test_leading_whitespace_stripped(self) -> None:
+        """faster-whisper prefixes a space; consecutive pastes must not double up."""
+        clip = FakeClipboardIO()
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker()
+
+        paste(" hello world", clipboard=clip, keystroke=ks, foreground=fg)
+
+        set_call = next(c for c in clip.calls if c[0] == "set_text")
+        assert set_call[1] == "hello world "
+
 
 class TestClipboardRestore:
     """Original clipboard text is restored after paste completes."""

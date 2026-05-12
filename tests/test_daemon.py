@@ -9,10 +9,15 @@ import pytest
 from dictatem.daemon import main
 from dictatem.exceptions import PlatformNotSupportedError
 
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="main() starts the Qt event loop on Windows and blocks; "
+    "platform-gate behaviour is only meaningful to test on non-Windows.",
+)
+
 
 class TestDaemonPlatformGate:
-    def test_raises_on_linux(self) -> None:
-        assert sys.platform != "win32", "This test must run on Linux"
+    def test_raises_on_non_windows(self) -> None:
         with pytest.raises(PlatformNotSupportedError, match="Windows-only"):
             main()
 

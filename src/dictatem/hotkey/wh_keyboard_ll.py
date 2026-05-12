@@ -1,19 +1,28 @@
-"""Windows WH_KEYBOARD_LL adapter — bridges SetWindowsHookEx to HotkeyClassifier.
+"""Windows WH_KEYBOARD_LL adapter — bridges SetWindowsHookEx to a thread-safe handler.
 
 This module requires pywin32 and only works on Windows.
 It is NOT imported at module level by any pure-core module;
 tests run on Linux without touching this file.
+
+The hook callback runs on the hook thread.  Qt widget operations must
+happen on the Qt GUI thread, so the handler passed in here must itself
+be thread-safe (typically an enqueue-only function that hands work over
+to a main-thread poller).
 """
 
 from __future__ import annotations
 
+import logging
 import sys
 import threading
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
+logger = logging.getLogger(__name__)
 
-    from dictatem.hotkey.classifier import HotkeyClassifier
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from dictatem.hotkey.classifier import KeyAction
 
 if sys.platform != "win32":
     raise ImportError("wh_keyboard_ll requires Windows")
@@ -29,12 +38,27 @@ WM_KEYUP = 0x0101
 WM_SYSKEYDOWN = 0x0104
 WM_SYSKEYUP = 0x0105
 
+# On 64-bit Windows, WPARAM/LPARAM are pointer-sized (8 bytes), but
+# ctypes.wintypes.WPARAM/LPARAM are c_ulong/c_long (4 bytes). Using the
+# wrong types causes OverflowError on every keystroke when l_param holds a
+# 64-bit pointer value. c_size_t / c_ssize_t are always pointer-sized.
+_WPARAM = ctypes.c_size_t
+_LPARAM = ctypes.c_ssize_t
+
 HOOKPROC = ctypes.CFUNCTYPE(
-    ctypes.wintypes.LPARAM,
+    _LPARAM,
     ctypes.c_int,
-    ctypes.wintypes.WPARAM,
-    ctypes.wintypes.LPARAM,
+    _WPARAM,
+    _LPARAM,
 )
+
+user32.CallNextHookEx.argtypes = [
+    ctypes.c_void_p,  # hhk
+    ctypes.c_int,     # nCode
+    _WPARAM,          # wParam
+    _LPARAM,          # lParam
+]
+user32.CallNextHookEx.restype = _LPARAM
 
 
 class KBDLLHOOKSTRUCT(ctypes.Structure):
@@ -48,10 +72,12 @@ class KBDLLHOOKSTRUCT(ctypes.Structure):
 
 
 class WHKeyboardLLHook:
-    """Low-level keyboard hook that feeds events to a HotkeyClassifier."""
+    """Low-level keyboard hook that forwards events to a thread-safe handler."""
 
-    def __init__(self, classifier: HotkeyClassifier) -> None:
-        self._classifier = classifier
+    def __init__(
+        self, on_key_event: Callable[[int, KeyAction, int], None]
+    ) -> None:
+        self._on_key_event = on_key_event
         self._hook_handle: int | None = None
         self._hook_thread: threading.Thread | None = None
         self._proc: ctypes.CFUNCTYPE | None = None  # type: ignore[type-arg]
@@ -66,21 +92,25 @@ class WHKeyboardLLHook:
             self._hook_handle = None
 
     def _run_hook(self) -> None:
-        from dictatem.hotkey.classifier import HookDecision, KeyAction
+        from dictatem.hotkey.classifier import KeyAction
 
         def _ll_callback(
             n_code: int, w_param: int, l_param: int
         ) -> int:
-            if n_code >= 0:
-                kb = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
-                vk = kb.vkCode
-                is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
-                action = KeyAction.KEY_DOWN if is_down else KeyAction.KEY_UP
-                timestamp_ms = kb.time
-                decision, _event = self._classifier.process_event(vk, action, timestamp_ms)
-
-                if decision is HookDecision.SUPPRESS:
-                    return 1
+            # SAFETY: always call through to the next hook, even on errors.
+            # Returning without calling CallNextHookEx swallows the key
+            # system-wide, rendering the keyboard unusable until the process
+            # exits.
+            try:
+                if n_code >= 0:
+                    kb = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                    vk = kb.vkCode
+                    is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
+                    action = KeyAction.KEY_DOWN if is_down else KeyAction.KEY_UP
+                    timestamp_ms = kb.time
+                    self._on_key_event(vk, action, timestamp_ms)
+            except Exception:
+                logger.error("Error in keyboard hook callback", exc_info=True)
 
             return user32.CallNextHookEx(self._hook_handle, n_code, w_param, l_param)
 

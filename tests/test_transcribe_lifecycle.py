@@ -158,6 +158,38 @@ class TestPreload:
         time.sleep(0.1)
         assert backend.load_count == 1
 
+    def test_is_loading_false_before_preload(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        assert lc.is_loading is False
+
+    def test_is_loading_false_after_preload_completes(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        lc.preload()
+        time.sleep(0.1)
+        assert lc.is_loading is False
+        assert lc.is_loaded is True
+
+    def test_preload_sets_last_activity_so_idle_unload_works(self) -> None:
+        """A preloaded-but-never-transcribed model must still auto-unload."""
+        current_time = 0.0
+
+        def clock() -> float:
+            return current_time
+
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(
+            backend=backend, clock=clock, idle_timeout_s=1800.0
+        )
+        lc.preload()
+        time.sleep(0.1)
+        assert lc.is_loaded is True
+
+        current_time = 30 * 60
+        lc.check_idle()
+        assert lc.is_loaded is False
+
 
 class TestEmptyResultDetection:
     def test_empty_string(self) -> None:

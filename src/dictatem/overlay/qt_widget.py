@@ -21,9 +21,11 @@ from dictatem.overlay.state import (
 if TYPE_CHECKING:
     from dictatem.overlay.state import OverlayState
 
+from dictatem.overlay.state import MonitorRect
+
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtGui import QColor, QCursor, QPainter, QPen
+from PySide6.QtWidgets import QApplication, QWidget
 
 
 class QtOverlayWidget(QWidget):
@@ -50,9 +52,17 @@ class QtOverlayWidget(QWidget):
         self._timer.timeout.connect(self._on_tick)
 
     def show_pill(self) -> None:
+        cursor = QCursor.pos()
+        monitors = [
+            MonitorRect(
+                g.x(), g.y(), g.width(), g.height(),
+            )
+            for s in QApplication.screens()
+            for g in (s.geometry(),)
+        ]
         pos = self._state.compute_position(
-            cursor_position=Point(0, 0),
-            monitors=[],
+            cursor_position=Point(cursor.x(), cursor.y()),
+            monitors=monitors,
         )
         self.move(pos.x, pos.y)
         self.show()

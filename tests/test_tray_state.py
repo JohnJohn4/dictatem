@@ -48,15 +48,35 @@ class TestMenuItemEnabled:
         assert loaded.menu_item_enabled(MenuItem.UNLOAD) is True
         assert not_loaded.menu_item_enabled(MenuItem.UNLOAD) is False
 
+    def test_preload_enabled_only_when_model_not_loaded(self) -> None:
+        loaded = TrayState(is_recording=False, is_model_loaded=True, has_error=False)
+        not_loaded = TrayState(is_recording=False, is_model_loaded=False, has_error=False)
+        assert loaded.menu_item_enabled(MenuItem.PRELOAD) is False
+        assert not_loaded.menu_item_enabled(MenuItem.PRELOAD) is True
+
+    def test_preload_disabled_while_loading(self) -> None:
+        loading = TrayState(
+            is_recording=False, is_model_loaded=False, has_error=False,
+            is_model_loading=True,
+        )
+        assert loading.menu_item_enabled(MenuItem.PRELOAD) is False
+
+    def test_unload_disabled_while_loading(self) -> None:
+        loading = TrayState(
+            is_recording=False, is_model_loaded=True, has_error=False,
+            is_model_loading=True,
+        )
+        assert loading.menu_item_enabled(MenuItem.UNLOAD) is False
+
     def test_always_enabled_items(self) -> None:
         state = TrayState(is_recording=False, is_model_loaded=False, has_error=False)
-        for item in (MenuItem.START, MenuItem.PRELOAD, MenuItem.SHOW_LOG,
+        for item in (MenuItem.START, MenuItem.SHOW_LOG,
                      MenuItem.RESTART, MenuItem.QUIT):
             assert state.menu_item_enabled(item) is True, f"{item} should always be enabled"
 
     def test_always_enabled_items_during_recording(self) -> None:
         state = TrayState(is_recording=True, is_model_loaded=True, has_error=True)
-        for item in (MenuItem.START, MenuItem.PRELOAD, MenuItem.SHOW_LOG,
+        for item in (MenuItem.START, MenuItem.SHOW_LOG,
                      MenuItem.RESTART, MenuItem.QUIT):
             assert state.menu_item_enabled(item) is True, f"{item} should be enabled even in error"
 

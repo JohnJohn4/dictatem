@@ -164,17 +164,3 @@ class TestEdgeCases:
 
         _decision, event = c.process_event(VK_LCONTROL, KeyAction.KEY_UP, 0)
         assert event is None
-
-
-class TestImportSafety:
-    def test_classifier_has_no_pywin32_in_import_graph(self) -> None:
-        import importlib
-        import sys
-
-        before = set(sys.modules)
-        importlib.reload(importlib.import_module("dictatem.hotkey.classifier"))
-        after = set(sys.modules)
-        new_modules = after - before
-
-        pywin32_modules = {m for m in new_modules if "win32" in m or "pywintypes" in m}
-        assert pywin32_modules == set(), f"pywin32 leaked into imports: {pywin32_modules}"

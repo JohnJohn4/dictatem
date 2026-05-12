@@ -161,6 +161,20 @@ class TrayRenderer(Protocol):
         """Set the tray icon to the error state."""
         ...
 
+    def set_model_loaded(self, loaded: bool) -> None:
+        """Update whether the transcription model is currently loaded.
+
+        Used to enable/disable the Preload and Unload menu items.
+        """
+        ...
+
+    def set_model_loading(self, loading: bool) -> None:
+        """Update whether a model load is currently in progress.
+
+        Used to disable Preload and Unload while a background load runs.
+        """
+        ...
+
     def show_notification(self, title: str, message: str) -> None:
         """Display a tray balloon/notification."""
         ...
