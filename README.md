@@ -4,12 +4,12 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 
 ## Features
 
-- **Global hotkey** — Ctrl+Win activates recording from any window
+- **Global hotkey** — Win+Alt activates recording from any window
 - **Two recording modes** — Push-to-talk (hold) or toggle (tap to start/stop, auto-stops after silence)
 - **GPU-accelerated transcription** — Faster-Whisper + CUDA for sub-realtime performance
 - **Smart paste** — Saves and restores clipboard content and window focus around each paste
 - **System tray** — Idle/recording/error status icons; menu items to preload or unload the model on demand
-- **Overlay UI** — Pill that appears in the corner of the active monitor while recording
+- **Overlay UI** — Pill that appears in the corner of the active monitor while recording, with an animated waveform proportional to mic level
 - **Fully offline** — All inference runs locally; the only network calls are the one-off model download on first use
 - **TOML config** — Tune model, hotkey, audio, overlay, paste, and startup behaviour
 
@@ -84,9 +84,9 @@ The daemon starts in the system tray — look for the dictatem icon in the botto
 
 | Action | Hotkey |
 |---|---|
-| Push-to-talk | Hold Ctrl+Win |
-| Toggle record | Tap Ctrl+Win |
-| Stop toggle recording | Tap Ctrl+Win again |
+| Push-to-talk | Hold Win+Alt |
+| Toggle record | Tap Win+Alt |
+| Stop toggle recording | Tap Win+Alt again |
 | Cancel recording | Press Esc |
 
 Transcribed text is pasted automatically into the focused window.
@@ -95,15 +95,13 @@ Transcribed text is pasted automatically into the focused window.
 
 Right-click the tray icon for: Start/Stop Recording, **Preload Model** (load Whisper into GPU memory ahead of time so the first dictation is fast), **Unload Model** (free the ~3 GB of GPU memory), Show Log, Restart, Quit. The model also auto-unloads after the configured idle period.
 
-> **Heads up on the default hotkey:** `Ctrl+Win+Left/Right/D/F4` are Windows shortcuts for virtual desktops. Pressing them while dictatem is running will accidentally trigger recording. If you use virtual desktops, change the hotkey in `config.toml`.
-
 ## Configuration
 
 On first launch, a default config is written to `~/.dictatem/config.toml`. Edit it to customise behaviour:
 
 ```toml
 [hotkey]
-modifiers = ["ctrl", "win"]
+modifiers = ["win", "alt"]
 tap_threshold_ms = 200          # Below this = toggle tap; above = push-to-talk hold
 
 [model]
@@ -124,6 +122,7 @@ sample_rate = 16000
 
 [behaviour]
 silence_timeout_s = 60          # Auto-stop toggle recording after this much silence
+max_recording_seconds = 300     # Hard cap on recording length regardless of audio activity
 
 [overlay]
 position = "bottom-right"
