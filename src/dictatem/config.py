@@ -89,6 +89,11 @@ class BehaviourConfig:
     max_recording_seconds: int = 300
 
 
+@dataclass
+class TransformConfig:
+    enabled: bool = True
+
+
 _SECTION_CLASSES: dict[str, type[Any]] = {
     "hotkey": HotkeyConfig,
     "model": ModelConfig,
@@ -98,6 +103,7 @@ _SECTION_CLASSES: dict[str, type[Any]] = {
     "startup": StartupConfig,
     "logging": LoggingConfig,
     "behaviour": BehaviourConfig,
+    "transform": TransformConfig,
 }
 
 
@@ -113,6 +119,7 @@ class Config:
     startup: StartupConfig = field(default_factory=StartupConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     behaviour: BehaviourConfig = field(default_factory=BehaviourConfig)
+    transform: TransformConfig = field(default_factory=TransformConfig)
 
 
 def load_config(path: Path) -> Config:

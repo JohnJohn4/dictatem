@@ -48,6 +48,14 @@ class KeystrokeSender(Protocol):
         """Send a Ctrl+V keystroke via the OS input system."""
         ...
 
+    def send_backspaces(self, n: int) -> None:
+        """Send *n* backspace keystrokes via the OS input system.
+
+        Used by the Trigger Fire path to delete the Last Paste before
+        pasting the transformed text. See ``CONTEXT.md#trigger-fire``.
+        """
+        ...
+
 
 @runtime_checkable
 class ForegroundTracker(Protocol):
@@ -117,6 +125,22 @@ class TranscriberBackend(Protocol):
     @property
     def is_loaded(self) -> bool:
         """Whether the model is currently loaded."""
+        ...
+
+
+@runtime_checkable
+class TransformBackend(Protocol):
+    """Text-to-text Transform backend (e.g. a local LLM via Ollama).
+
+    See ``CONTEXT.md#transform``.
+    """
+
+    def transform(self, text: str, system_prompt: str) -> str:
+        """Apply *system_prompt* to *text* and return the rewritten text.
+
+        Raises ``TransformFailedError`` for any failure (connection
+        refused, timeout, non-200, malformed response, etc.).
+        """
         ...
 
 

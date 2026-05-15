@@ -23,3 +23,7 @@ class TranscriptionFailedError(Exception):
 
 class ModelLoadError(Exception):
     """Raised when the transcription model fails to load (corrupt download, missing CUDA libs, etc.)."""
+
+
+class TransformFailedError(Exception):
+    """Raised when a Transform call fails (Ollama unreachable, timeout, non-200, bad JSON)."""

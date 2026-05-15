@@ -10,6 +10,7 @@ from tests.fakes.fake_keyboard_hook import FakeKeyboardHook
 from tests.fakes.fake_keystroke import FakeKeystrokeSender
 from tests.fakes.fake_overlay import FakeOverlayRenderer
 from tests.fakes.fake_transcriber import FakeTranscriberBackend
+from tests.fakes.fake_transform import FakeTransformBackend
 from tests.fakes.fake_tray import FakeTrayRenderer
 
 __all__ = [
@@ -20,5 +21,6 @@ __all__ = [
     "FakeKeystrokeSender",
     "FakeOverlayRenderer",
     "FakeTranscriberBackend",
+    "FakeTransformBackend",
     "FakeTrayRenderer",
 ]

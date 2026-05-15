@@ -13,13 +13,14 @@ EXPECTED_PROTOCOLS = [
     "KeyboardHook",
     "AudioCapture",
     "TranscriberBackend",
+    "TransformBackend",
     "OverlayRenderer",
     "TrayRenderer",
 ]
 
 
 class TestProtocolsExist:
-    def test_all_eight_protocols_defined(self) -> None:
+    def test_all_protocols_defined(self) -> None:
         for name in EXPECTED_PROTOCOLS:
             cls = getattr(interfaces, name)
             assert inspect.isclass(cls), f"{name} is not a class"
@@ -33,6 +34,9 @@ class TestProtocolSignatures:
 
     def test_keystroke_sender_methods(self) -> None:
         assert callable(getattr(interfaces.KeystrokeSender, "send_paste", None))
+        assert callable(
+            getattr(interfaces.KeystrokeSender, "send_backspaces", None)
+        )
 
     def test_foreground_tracker_methods(self) -> None:
         assert callable(getattr(interfaces.ForegroundTracker, "capture", None))
@@ -52,6 +56,9 @@ class TestProtocolSignatures:
         assert callable(getattr(interfaces.TranscriberBackend, "transcribe", None))
         assert callable(getattr(interfaces.TranscriberBackend, "empty_cache", None))
         assert callable(getattr(interfaces.TranscriberBackend, "set_progress_callback", None))
+
+    def test_transform_backend_methods(self) -> None:
+        assert callable(getattr(interfaces.TransformBackend, "transform", None))
 
     def test_overlay_renderer_methods(self) -> None:
         assert callable(getattr(interfaces.OverlayRenderer, "show", None))

@@ -19,6 +19,7 @@ from dictatem.config import (
     OverlayConfig,
     PasteConfig,
     StartupConfig,
+    TransformConfig,
     load_config,
     write_config,
 )
@@ -82,6 +83,11 @@ class TestConfigSubDataclasses:
         assert isinstance(cfg.behaviour, BehaviourConfig)
         assert cfg.behaviour.silence_timeout_s == 60
 
+    def test_transform_section(self) -> None:
+        cfg = Config()
+        assert isinstance(cfg.transform, TransformConfig)
+        assert cfg.transform.enabled is True
+
 
 class TestLoadConfigMissingFile:
     """load_config with no file present returns defaults and writes the file."""
@@ -103,6 +109,7 @@ class TestLoadConfigMissingFile:
         assert "[startup]" in content
         assert "[logging]" in content
         assert "[behaviour]" in content
+        assert "[transform]" in content
 
     def test_creates_parent_dirs(self, tmp_path: Path) -> None:
         path = tmp_path / "subdir" / "nested" / "config.toml"
@@ -130,6 +137,7 @@ class TestLoadConfigPartialFile:
         assert cfg.startup == StartupConfig()
         assert cfg.logging == LoggingConfig()
         assert cfg.behaviour == BehaviourConfig()
+        assert cfg.transform == TransformConfig()
 
     def test_partial_section_with_some_keys(self, tmp_path: Path) -> None:
         path = tmp_path / "config.toml"
@@ -345,7 +353,7 @@ class TestWriteConfig:
         write_config(Config(), path)
         content = path.read_text()
         for section in ["hotkey", "model", "paste", "overlay", "audio",
-                        "startup", "logging", "behaviour"]:
+                        "startup", "logging", "behaviour", "transform"]:
             assert f"[{section}]" in content
 
     def test_creates_parent_dirs(self, tmp_path: Path) -> None:
@@ -359,3 +367,27 @@ class TestWriteConfig:
         cfg = load_config(path)
         assert cfg.model.language is None
         assert cfg.audio.device is None
+
+
+class TestTransformKillSwitch:
+    """[transform].enabled is the kill switch for the Trigger Words feature."""
+
+    def test_enabled_defaults_to_true(self, tmp_path: Path) -> None:
+        cfg = load_config(tmp_path / "config.toml")
+        assert cfg.transform.enabled is True
+
+    def test_can_be_disabled(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text(dedent("""\
+            [transform]
+            enabled = false
+        """))
+        cfg = load_config(path)
+        assert cfg.transform.enabled is False
+
+    def test_round_trip_disabled(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        cfg = Config(transform=TransformConfig(enabled=False))
+        write_config(cfg, path)
+        cfg2 = load_config(path)
+        assert cfg2.transform.enabled is False

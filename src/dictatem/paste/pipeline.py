@@ -22,7 +22,12 @@ _RETRY_DELAY_S = 0.010
 _POST_PASTE_SETTLE_S = 0.100
 
 
-def _normalize(text: str) -> str:
+def normalize_pasted_text(text: str) -> str:
+    """Return *text* as it will actually be placed on the clipboard.
+
+    Public because the daemon snapshots the post-normalisation form into
+    ``LastPaste`` so backspace counts line up with what the user sees.
+    """
     # faster-whisper prefixes transcribed segments with a space; strip both
     # ends so we don't paste double spaces between consecutive transcriptions.
     text = text.replace("\r\n", " ").replace("\n", " ")
@@ -46,18 +51,34 @@ def paste(
     clipboard: ClipboardIO,
     keystroke: KeystrokeSender,
     foreground: ForegroundTracker,
+    replace_chars: int = 0,
 ) -> None:
+    """Paste *text* into the focused window.
+
+    If *replace_chars* is non-zero, *replace_chars* backspaces are sent
+    after restoring the foreground window and before the paste itself.
+    This is the Trigger Fire path described in ADR-0001: the previously
+    pasted text is deleted in place, then the rewritten text takes its
+    place.
+    """
     hwnd = foreground.capture()
-    logger.info("Paste: captured foreground hwnd=%s, text length=%d", hwnd, len(text))
+    logger.info(
+        "Paste: captured foreground hwnd=%s, text length=%d, replace_chars=%d",
+        hwnd,
+        len(text),
+        replace_chars,
+    )
     saved = clipboard.save()
 
     try:
         _open_with_retry(clipboard)
-        clipboard.set_text(_normalize(text))
+        clipboard.set_text(normalize_pasted_text(text))
         clipboard.close()
         logger.info("Paste: clipboard set, restoring foreground and sending Ctrl+V")
 
         foreground.restore(hwnd)
+        if replace_chars > 0:
+            keystroke.send_backspaces(replace_chars)
         keystroke.send_paste()
         time.sleep(_POST_PASTE_SETTLE_S)
         logger.info("Paste: complete")

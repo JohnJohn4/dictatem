@@ -208,6 +208,80 @@ class TestContentionRetry:
         assert clip._content == "precious"
 
 
+class TestReplaceChars:
+    """replace_chars sends N backspaces before the paste."""
+
+    def test_default_zero_sends_no_backspaces(self) -> None:
+        clip = FakeClipboardIO()
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker()
+
+        paste("hello", clipboard=clip, keystroke=ks, foreground=fg)
+
+        assert ks.total_backspaces == 0
+        assert ks.paste_count == 1
+
+    def test_positive_replace_sends_that_many_backspaces(self) -> None:
+        clip = FakeClipboardIO()
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker()
+
+        paste("new", clipboard=clip, keystroke=ks, foreground=fg, replace_chars=7)
+
+        assert ks.backspace_counts == [7]
+        assert ks.paste_count == 1
+
+    def test_backspaces_before_paste(self) -> None:
+        clip = FakeClipboardIO()
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker()
+
+        paste("new", clipboard=clip, keystroke=ks, foreground=fg, replace_chars=3)
+
+        assert ks.events == [("backspaces", 3), ("paste", 1)]
+
+    def test_foreground_restored_before_backspaces(self) -> None:
+        """Otherwise the backspaces hit whatever stole focus during transcription."""
+        order: list[str] = []
+        clip = FakeClipboardIO()
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker(hwnd=42)
+
+        orig_restore = fg.restore
+        orig_back = ks.send_backspaces
+
+        def tracking_restore(hwnd: int) -> None:
+            order.append("restore_fg")
+            orig_restore(hwnd)
+
+        def tracking_back(n: int) -> None:
+            order.append("backspaces")
+            orig_back(n)
+
+        fg.restore = tracking_restore  # type: ignore[assignment]
+        ks.send_backspaces = tracking_back  # type: ignore[assignment]
+
+        paste("x", clipboard=clip, keystroke=ks, foreground=fg, replace_chars=5)
+
+        assert order.index("restore_fg") < order.index("backspaces")
+
+    def test_negative_replace_treated_as_zero(self) -> None:
+        clip = FakeClipboardIO()
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker()
+
+        paste(
+            "x",
+            clipboard=clip,
+            keystroke=ks,
+            foreground=fg,
+            replace_chars=-3,
+        )
+
+        assert ks.total_backspaces == 0
+        assert ks.paste_count == 1
+
+
 class TestImportSafety:
     """paste.pipeline must not import pywin32 or Win32 modules."""
 

@@ -13,8 +13,10 @@ from dictatem.exceptions import (
     ModelLoadError,
     PlatformNotSupportedError,
     TranscriptionFailedError,
+    TransformFailedError,
 )
 from dictatem.state import Command, Event, State
+from dictatem.transform.last_paste import LastPaste
 from dictatem.types import EmptyResult, RecordingMode
 
 if TYPE_CHECKING:
@@ -33,6 +35,8 @@ if TYPE_CHECKING:
     from dictatem.overlay.state import OverlayState
     from dictatem.state import StateMachine
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
+    from dictatem.transform.detector import TriggerDetector
+    from dictatem.transform.lifecycle import TransformLifecycle
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +208,10 @@ class DaemonCore:
         foreground: ForegroundTracker | None = None,
         silence_timeout_s: float = 60.0,
         max_recording_s: float = 300.0,
+        transform_lifecycle: TransformLifecycle | None = None,
+        trigger_detector: TriggerDetector | None = None,
+        transform_enabled: bool = False,
+        last_paste_ttl_s: float = 300.0,
     ) -> None:
         self._sm = state_machine
         self._audio_capture = audio_capture
@@ -220,6 +228,16 @@ class DaemonCore:
         self._transcription_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._transcription_active: bool = False
         self._transcription_thread: threading.Thread | None = None
+        # --- Trigger Words / Transform state (see CONTEXT.md) ---
+        self._transform_lifecycle = transform_lifecycle
+        self._trigger_detector = trigger_detector
+        self._transform_enabled = transform_enabled
+        self._last_paste_ttl_s = last_paste_ttl_s
+        self._last_paste: LastPaste | None = None
+        self._pending_replace_chars: int = 0
+        self._transform_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        self._transform_active: bool = False
+        self._transform_thread: threading.Thread | None = None
 
     def on_hotkey_event(self, event: Event, *, now_ms: int = 0) -> None:
         """Feed an event to the state machine and execute resulting commands."""
@@ -278,7 +296,7 @@ class DaemonCore:
         elif cmd is Command.CANCEL:
             self._do_cancel()
         elif cmd is Command.PASTE:
-            self._do_paste()
+            self._do_paste(now_ms=now_ms)
         elif cmd is Command.FLASH_ERROR:
             self._overlay.show_error()
             self._tray.set_idle()
@@ -358,10 +376,9 @@ class DaemonCore:
         if not self._transcription_active:
             return  # ESC was pressed before result arrived — discard
 
-        self._transcription_active = False
-
         try:
             if kind == "transcription_failed":
+                self._transcription_active = False
                 logger.error("GPU memory exhausted; transcription failed")
                 self._tray.show_notification(
                     "Transcription Failed",
@@ -369,6 +386,7 @@ class DaemonCore:
                 )
                 self._recover_to_idle()
             elif kind == "model_error":
+                self._transcription_active = False
                 logger.error("Model unavailable; check log", exc_info=data)  # type: ignore[arg-type]
                 self._tray.show_notification(
                     "Model Unavailable",
@@ -376,6 +394,7 @@ class DaemonCore:
                 )
                 self._recover_to_idle()
             elif kind == "unexpected_error":
+                self._transcription_active = False
                 logger.error("Unexpected transcription error: %s", data)
                 self._tray.show_notification(
                     "Transcription Error",
@@ -385,9 +404,16 @@ class DaemonCore:
             else:
                 result = data
                 if isinstance(result, EmptyResult):
+                    self._transcription_active = False
                     logger.info("Transcription produced empty result")
                     commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
-                else:
+                    self._execute_commands(commands, now_ms=now_ms)
+                    return
+
+                # Trigger Word detection — see CONTEXT.md#trigger-fire.
+                prompt = self._detect_trigger(result)  # type: ignore[arg-type]
+                if prompt is None:
+                    self._transcription_active = False
                     logger.info(
                         "Transcription complete (%d chars): %r",
                         len(result),  # type: ignore[arg-type]
@@ -395,29 +421,152 @@ class DaemonCore:
                     )
                     self._last_text = result  # type: ignore[assignment]
                     commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
-                self._execute_commands(commands, now_ms=now_ms)
+                    self._execute_commands(commands, now_ms=now_ms)
+                else:
+                    self._handle_trigger_fire(prompt, now_ms=now_ms)
         except Exception:
             logger.error("Unhandled error processing transcription result", exc_info=True)
             self._recover_to_idle()
 
+    def _detect_trigger(self, text: str) -> str | None:
+        """Return the prompt body for *text* if it is a Trigger Word.
+
+        Returns ``None`` if the feature is disabled, no detector is wired,
+        no Last Paste exists, or *text* is just regular dictation.
+        """
+        if not self._transform_enabled:
+            return None
+        if self._trigger_detector is None:
+            return None
+        if self._last_paste is None:
+            return None
+        return self._trigger_detector.match(text)
+
+    def _handle_trigger_fire(self, prompt: str, *, now_ms: int) -> None:
+        """Run a Transform on the Last Paste; defer the SM event until it returns.
+
+        Safety rails (HWND + TTL) gate the call. On rail failure the
+        transcription leg is closed with EMPTY_RESULT so the existing
+        FLASH_ERROR path runs; the document is untouched.
+        """
+        assert self._last_paste is not None
+        assert self._transform_lifecycle is not None
+
+        current_hwnd = self._foreground.capture() if self._foreground is not None else 0
+        if not self._last_paste.rails_ok(
+            current_hwnd=current_hwnd,
+            now_ms=now_ms,
+            ttl_s=self._last_paste_ttl_s,
+        ):
+            logger.info(
+                "Trigger Fire aborted: rails failed "
+                "(hwnd_now=%s, hwnd_paste=%s, age_ms=%d, ttl_s=%.0f)",
+                current_hwnd,
+                self._last_paste.hwnd,
+                now_ms - self._last_paste.pasted_at_ms,
+                self._last_paste_ttl_s,
+            )
+            self._last_paste = None
+            self._transcription_active = False
+            commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
+            self._execute_commands(commands, now_ms=now_ms)
+            return
+
+        captured = self._last_paste
+        lifecycle = self._transform_lifecycle
+        self._transform_active = True
+        logger.info(
+            "Trigger Fire: starting Transform on %d-char Last Paste",
+            captured.char_count,
+        )
+
+        def _worker() -> None:
+            try:
+                out = lifecycle.transform(captured.text, prompt)
+            except TransformFailedError as exc:
+                self._transform_queue.put(("transform_failed", exc))
+            except Exception as exc:
+                self._transform_queue.put(("transform_unexpected", exc))
+            else:
+                self._transform_queue.put(("ok", (out, captured.char_count)))
+
+        t = threading.Thread(
+            target=_worker, daemon=True, name="transform-worker"
+        )
+        self._transform_thread = t
+        t.start()
+
+    def check_transform_result(self, *, now_ms: int = 0) -> None:
+        """Drain the transform result queue and feed the SM the deferred event."""
+        try:
+            kind, data = self._transform_queue.get_nowait()
+        except queue.Empty:
+            return
+
+        if not self._transform_active or not self._transcription_active:
+            # ESC pressed during transform; discard.
+            return
+
+        self._transform_active = False
+        self._transcription_active = False
+
+        try:
+            if kind == "ok":
+                text, replace_chars = data  # type: ignore[misc]
+                logger.info(
+                    "Transform complete (%d chars), replacing %d chars",
+                    len(text),
+                    replace_chars,
+                )
+                self._last_text = text
+                self._pending_replace_chars = replace_chars
+                commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
+                self._execute_commands(commands, now_ms=now_ms)
+            else:
+                logger.warning("Transform failed: %s", data)
+                self._tray.show_notification(
+                    "Transform Failed",
+                    "The Trigger Word transform could not be applied; check log",
+                )
+                commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
+                self._execute_commands(commands, now_ms=now_ms)
+        except Exception:
+            logger.error("Unhandled error processing transform result", exc_info=True)
+            self._recover_to_idle()
+
     def drain_transcription_for_test(self, *, now_ms: int = 0) -> None:
-        """Block until in-flight transcription completes, then process the result.
+        """Block until in-flight transcription (and any deferred transform)
+        completes, then process the result.
 
         Only for use in tests — production code uses the 50 ms tick timer.
         """
         if self._transcription_thread is not None:
             self._transcription_thread.join(timeout=5.0)
         self.check_transcription_result(now_ms=now_ms)
+        if self._transform_thread is not None:
+            self._transform_thread.join(timeout=5.0)
+        self.check_transform_result(now_ms=now_ms)
 
-    def _do_paste(self) -> None:
+    def _do_paste(self, *, now_ms: int = 0) -> None:
+        replace = self._pending_replace_chars
+        self._pending_replace_chars = 0
+
         if self._last_text and self._clipboard and self._keystroke and self._foreground:
-            from dictatem.paste.pipeline import paste
+            from dictatem.paste.pipeline import normalize_pasted_text, paste
 
             paste(
                 self._last_text,
                 clipboard=self._clipboard,
                 keystroke=self._keystroke,
                 foreground=self._foreground,
+                replace_chars=replace,
+            )
+            normalized = normalize_pasted_text(self._last_text)
+            self._last_paste = LastPaste(
+                text=normalized,
+                char_count=len(normalized),
+                hwnd=self._foreground.capture(),
+                pasted_at_ms=now_ms,
             )
         else:
             logger.warning(
@@ -433,6 +582,9 @@ class DaemonCore:
 
     def _do_cancel(self) -> None:
         self._transcription_active = False
+        self._transform_active = False
+        self._pending_replace_chars = 0
+        self._last_paste = None
         try:
             self._audio_capture.stop()
         except Exception:
@@ -488,6 +640,9 @@ class DaemonCore:
 
     def _recover_to_idle(self) -> None:
         self._transcription_active = False
+        self._transform_active = False
+        self._pending_replace_chars = 0
+        self._last_paste = None
         self._sm._state = State.IDLE
         try:
             self._audio_capture.stop()
@@ -533,6 +688,10 @@ def _start_windows_daemon() -> None:
     from dictatem.state import StateMachine
     from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
+    from dictatem.transform.detector import TriggerDetector
+    from dictatem.transform.lifecycle import TransformLifecycle
+    from dictatem.transform.ollama_backend import OllamaBackend
+    from dictatem.transform.prompts import DEFAULT_ALIASES
     from dictatem.tray.qt_tray import QtTrayIcon
 
     config_path = Path.home() / ".dictatem" / "config.toml"
@@ -567,6 +726,20 @@ def _start_windows_daemon() -> None:
     keystroke = Win32KeystrokeSender()
     foreground = Win32ForegroundTracker()
 
+    # --- Transform / Trigger Words wiring (slice 1 of #19) ---
+    # Slice 3 of #19 moves model/url/timeout/ttl into [transform] config.
+    _TRANSFORM_MODEL = "gemma4:e4b"
+    _TRANSFORM_BASE_URL = "http://localhost:11434"
+    _TRANSFORM_TIMEOUT_S = 30.0
+    _LAST_PASTE_TTL_S = 300.0
+    transform_backend = OllamaBackend(
+        model_name=_TRANSFORM_MODEL,
+        base_url=_TRANSFORM_BASE_URL,
+        timeout_s=_TRANSFORM_TIMEOUT_S,
+    )
+    transform_lifecycle = TransformLifecycle(backend=transform_backend)
+    trigger_detector = TriggerDetector(DEFAULT_ALIASES)
+
     overlay_state = OverlayState(
         clock=time.monotonic,
         fade_in_ms=config.overlay.fade_in_ms,
@@ -592,6 +765,10 @@ def _start_windows_daemon() -> None:
         foreground=foreground,
         silence_timeout_s=float(config.behaviour.silence_timeout_s),
         max_recording_s=float(config.behaviour.max_recording_seconds),
+        transform_lifecycle=transform_lifecycle,
+        trigger_detector=trigger_detector,
+        transform_enabled=config.transform.enabled,
+        last_paste_ttl_s=_LAST_PASTE_TTL_S,
     )
 
     tray_icon.on_start = daemon.on_tray_start_recording
@@ -626,6 +803,7 @@ def _start_windows_daemon() -> None:
         bridge.tick(now)
         overlay.update_level(audio_capture._buffer.current_level())
         daemon.check_transcription_result(now_ms=now)
+        daemon.check_transform_result(now_ms=now)
 
     tick_timer = QTimer()
     tick_timer.setInterval(50)

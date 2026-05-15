@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 VK_CONTROL = 0x11
 VK_V = 0x56
+VK_BACK = 0x08
 KEYEVENTF_KEYUP = 0x0002
 INPUT_KEYBOARD = 1
 
@@ -83,4 +84,25 @@ class Win32KeystrokeSender:
             err = ctypes.windll.kernel32.GetLastError()
             logger.warning(
                 "SendInput dispatched %d/4 events (GetLastError=%d)", sent, err
+            )
+
+    def send_backspaces(self, n: int) -> None:
+        if n <= 0:
+            return
+        count = n * 2  # one keydown + one keyup per backspace
+        inputs_array = _INPUT * count
+        inputs = inputs_array()
+        for i in range(n):
+            inputs[2 * i] = _key_input(VK_BACK)
+            inputs[2 * i + 1] = _key_input(VK_BACK, KEYEVENTF_KEYUP)
+        sent = ctypes.windll.user32.SendInput(
+            count, ctypes.byref(inputs), ctypes.sizeof(_INPUT)
+        )
+        if sent != count:
+            err = ctypes.windll.kernel32.GetLastError()
+            logger.warning(
+                "SendInput dispatched %d/%d backspace events (GetLastError=%d)",
+                sent,
+                count,
+                err,
             )
