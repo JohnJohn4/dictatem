@@ -11,6 +11,7 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 - **System tray** — Idle/recording/error status icons; menu items to preload or unload the model on demand
 - **Overlay UI** — Pill that appears in the corner of the active monitor while recording, with an animated waveform proportional to mic level
 - **Fully offline** — All inference runs locally; the only network calls are the one-off model download on first use
+- **Trigger Words** — Say `"summarize"` (or your own custom prompt) right after a dictation paste, and dictatem rewrites the just-pasted text in place via a local Ollama model
 - **TOML config** — Tune model, hotkey, audio, overlay, paste, and startup behaviour
 
 ## Requirements
@@ -144,6 +145,27 @@ timeout_s = 30                  # Per-request Ollama timeout
 last_paste_ttl_s = 300          # How long a Last Paste stays eligible for a Trigger Fire
 ```
 
+## Trigger Words
+
+A Trigger Word is a single utterance that rewrites the previously-pasted dictation in place instead of being pasted as-is. After any normal dictation paste, say one trigger (e.g. `"summarize"`) within the configured TTL — dictatem deletes the just-pasted text and replaces it with the output of a local [Ollama](https://ollama.com) model run with that trigger's prompt.
+
+Requires Ollama running locally with the configured model pulled (`ollama pull gemma4:e4b` by default). If Ollama is offline or the call fails, the document is left untouched and the overlay flashes an error.
+
+### Custom triggers
+
+Prompts live as markdown files in `~/.dictatem/prompts/`, created on first daemon start. Each file declares its aliases in YAML-style frontmatter; the body is the system prompt sent to Ollama:
+
+```markdown
+---
+aliases: [expand, expound]
+---
+You expand terse notes into full prose. Preserve every fact. Output only the expanded text.
+```
+
+Drop a new `.md` file into the folder and restart the daemon to register the new trigger. Edits to existing files survive upgrades — the bootstrap only copies in files that don't already exist. Aliases are matched case-insensitively with trailing punctuation stripped, so `"Expand."` fires the same trigger as `"expand"`.
+
+Safety rails: a Trigger Fire only runs if (a) the focused window is still the same one you pasted into and (b) the paste is younger than `last_paste_ttl_s`. Switching windows or waiting too long discards the trigger silently.
+
 ## Development
 
 ```powershell
@@ -178,6 +200,8 @@ src/dictatem/
 ├── audio/               # Buffer, silence detection, sounddevice adapter
 ├── hotkey/              # Windows keyboard hook, tap/hold classifier
 ├── transcribe/          # Faster-Whisper adapter, model lifecycle
+├── transform/           # Trigger Words: detector, Ollama backend, prompt-file loader
+├── default_prompts/     # Bundled prompt files copied to ~/.dictatem/prompts/ on first run
 ├── paste/               # Clipboard save/restore, keystroke simulation
 ├── overlay/             # Qt animated pill widget
 └── tray/                # Qt system tray icon and menu
