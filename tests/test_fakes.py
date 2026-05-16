@@ -57,6 +57,12 @@ class TestFakeKeystrokeSender:
         ks.send_paste()
         assert ks.paste_count == 2
 
+    def test_captures_typed_text(self) -> None:
+        ks = FakeKeystrokeSender()
+        ks.send_text("hello ")
+        ks.send_text("world")
+        assert ks.typed_texts == ["hello ", "world"]
+
 
 class TestFakeForegroundTracker:
     def test_satisfies_protocol(self) -> None:

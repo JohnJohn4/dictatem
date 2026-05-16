@@ -37,6 +37,7 @@ class TestProtocolSignatures:
         assert callable(
             getattr(interfaces.KeystrokeSender, "send_backspaces", None)
         )
+        assert callable(getattr(interfaces.KeystrokeSender, "send_text", None))
 
     def test_foreground_tracker_methods(self) -> None:
         assert callable(getattr(interfaces.ForegroundTracker, "capture", None))

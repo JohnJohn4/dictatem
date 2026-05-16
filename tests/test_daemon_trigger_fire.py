@@ -154,6 +154,7 @@ class TestTriggerFireHappyPath:
         assert keystroke.paste_count == 1
         assert keystroke.total_backspaces == 0
         assert _set_texts(clipboard) == ["the long verbose thing "]
+        assert keystroke.typed_texts == []
         assert transform_backend.calls == []  # no trigger yet
 
         # Second cycle: utter "summarize"
@@ -164,8 +165,11 @@ class TestTriggerFireHappyPath:
         # Replacement: backspaces = char_count of previous LastPaste.
         # "the long verbose thing" → normalize → "the long verbose thing " (23 chars).
         assert keystroke.total_backspaces == 23
-        assert keystroke.paste_count == 2
-        assert _set_texts(clipboard)[-1] == "CONDENSED "
+        # Trigger fire types directly via send_text — no extra Ctrl+V paste,
+        # no extra clipboard write (see #23).
+        assert keystroke.paste_count == 1
+        assert keystroke.typed_texts == ["CONDENSED "]
+        assert _set_texts(clipboard) == ["the long verbose thing "]
         # Transform got the previous LastPaste text + the matched prompt.
         assert transform_backend.calls == [
             ("the long verbose thing ", SUMMARIZE_PROMPT)
@@ -199,13 +203,15 @@ class TestTriggerFireHappyPath:
 
         second_backspaces = keystroke.total_backspaces - first_backspaces
         assert second_backspaces == 6
-        assert _set_texts(clipboard)[-1] == "tinier "
+        assert keystroke.typed_texts == ["short ", "tinier "]
         # Second transform fed the post-first-trigger LastPaste text.
         assert transform_backend.calls == [
             ("the verbose text ", SUMMARIZE_PROMPT),
             ("short ", SUMMARIZE_PROMPT),
         ]
-        assert keystroke.paste_count == 3
+        # Only the first dictation went through the clipboard+Ctrl+V path.
+        assert keystroke.paste_count == 1
+        assert _set_texts(clipboard) == ["the verbose text "]
 
     def test_alias_variant_summarise_fires(
         self,
