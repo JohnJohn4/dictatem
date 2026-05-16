@@ -29,6 +29,7 @@ _POSITIVE_INT_FIELDS: dict[str, set[str]] = {
     "audio": {"sample_rate"},
     "logging": {"rotation_days"},
     "behaviour": {"silence_timeout_s", "max_recording_seconds"},
+    "transform": {"timeout_s", "last_paste_ttl_s"},
 }
 
 
@@ -92,6 +93,10 @@ class BehaviourConfig:
 @dataclass
 class TransformConfig:
     enabled: bool = True
+    model_name: str = "gemma4:e4b"
+    base_url: str = "http://localhost:11434"
+    timeout_s: int = 30
+    last_paste_ttl_s: int = 300
 
 
 _SECTION_CLASSES: dict[str, type[Any]] = {

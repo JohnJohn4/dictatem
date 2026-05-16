@@ -135,6 +135,13 @@ preload_model = false           # Load the model on daemon startup vs lazily on 
 
 [logging]
 level = "info"
+
+[transform]
+enabled = true                  # Master switch for Trigger Words (local-LLM rewrites)
+model_name = "gemma4:e4b"       # Ollama model tag; must match `ollama list`
+base_url = "http://localhost:11434"
+timeout_s = 30                  # Per-request Ollama timeout
+last_paste_ttl_s = 300          # How long a Last Paste stays eligible for a Trigger Fire
 ```
 
 ## Development

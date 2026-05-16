@@ -726,16 +726,10 @@ def _start_windows_daemon() -> None:
     keystroke = Win32KeystrokeSender()
     foreground = Win32ForegroundTracker()
 
-    # --- Transform / Trigger Words wiring (slice 1 of #19) ---
-    # Slice 3 of #19 moves model/url/timeout/ttl into [transform] config.
-    _TRANSFORM_MODEL = "gemma4:e4b"
-    _TRANSFORM_BASE_URL = "http://localhost:11434"
-    _TRANSFORM_TIMEOUT_S = 30.0
-    _LAST_PASTE_TTL_S = 300.0
     transform_backend = OllamaBackend(
-        model_name=_TRANSFORM_MODEL,
-        base_url=_TRANSFORM_BASE_URL,
-        timeout_s=_TRANSFORM_TIMEOUT_S,
+        model_name=config.transform.model_name,
+        base_url=config.transform.base_url,
+        timeout_s=float(config.transform.timeout_s),
     )
     transform_lifecycle = TransformLifecycle(backend=transform_backend)
     trigger_detector = TriggerDetector(DEFAULT_ALIASES)
@@ -768,7 +762,7 @@ def _start_windows_daemon() -> None:
         transform_lifecycle=transform_lifecycle,
         trigger_detector=trigger_detector,
         transform_enabled=config.transform.enabled,
-        last_paste_ttl_s=_LAST_PASTE_TTL_S,
+        last_paste_ttl_s=float(config.transform.last_paste_ttl_s),
     )
 
     tray_icon.on_start = daemon.on_tray_start_recording
