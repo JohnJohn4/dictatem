@@ -30,10 +30,17 @@ their prompt, and lets users refine prompts without editing source.
 ## Consequences
 
 - A minimal inline frontmatter parser is sufficient — the schema is fixed
-  (`aliases: [list]`), so we don't add a `pyyaml` dependency.
-- The repo ships a default `prompts/summarize.md`; on first daemon start
-  we copy any missing defaults into `~/.dictatem/prompts/` (mirroring the
-  `config.toml` bootstrap pattern), so user edits survive upgrades.
+  to flow-style `aliases: [list]`, so we don't add a `pyyaml` dependency.
+- The package ships its default prompts at
+  `src/dictatem/default_prompts/` (inside the installable package so the
+  files survive `pip install`). On first daemon start we copy any missing
+  defaults into `~/.dictatem/prompts/`, mirroring the `config.toml`
+  bootstrap pattern, so user edits survive upgrades.
 - The filename has no runtime meaning. Aliases declared in frontmatter are
-  the single source of truth. A file with no aliases is ignored with a
-  warning at startup.
+  the single source of truth. A file with no aliases — or with malformed
+  frontmatter — is skipped with a warning at startup.
+- Aliases are normalised (lowercase, strip ASCII punctuation, strip
+  whitespace) at load time so they line up with `TriggerDetector`'s
+  match-time normalisation. On a collision across files the first
+  occurrence wins (deterministic by sorted filename) and a warning is
+  logged.

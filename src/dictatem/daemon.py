@@ -691,7 +691,11 @@ def _start_windows_daemon() -> None:
     from dictatem.transform.detector import TriggerDetector
     from dictatem.transform.lifecycle import TransformLifecycle
     from dictatem.transform.ollama_backend import OllamaBackend
-    from dictatem.transform.prompts import DEFAULT_ALIASES
+    from dictatem.transform.prompts import (
+        bootstrap_prompts,
+        default_prompts_dir,
+        load_prompts_dir,
+    )
     from dictatem.tray.qt_tray import QtTrayIcon
 
     config_path = Path.home() / ".dictatem" / "config.toml"
@@ -732,7 +736,9 @@ def _start_windows_daemon() -> None:
         timeout_s=float(config.transform.timeout_s),
     )
     transform_lifecycle = TransformLifecycle(backend=transform_backend)
-    trigger_detector = TriggerDetector(DEFAULT_ALIASES)
+    prompts_dir = Path.home() / ".dictatem" / "prompts"
+    bootstrap_prompts(prompts_dir, default_prompts_dir())
+    trigger_detector = TriggerDetector(load_prompts_dir(prompts_dir))
 
     overlay_state = OverlayState(
         clock=time.monotonic,
