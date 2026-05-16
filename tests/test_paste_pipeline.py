@@ -207,11 +207,31 @@ class TestContentionRetry:
 
         assert clip._content == "precious"
 
+    def test_restore_oserror_is_swallowed_not_raised(self) -> None:
+        # When restore() loses the race against the target's Ctrl+V
+        # handler, OpenClipboard raises Access-denied. We must swallow
+        # it: that outcome is *correct* (the target reads the new text
+        # we put on the clipboard). Retrying would put the old text
+        # back before the target reads, breaking the paste — see #23.
+        clip = FakeClipboardIO(restore_failures=1)
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker()
+
+        paste("hello", clipboard=clip, keystroke=ks, foreground=fg)
+
+        assert ks.paste_count == 1
+        assert len(clip.restore_timestamps) == 1  # attempted once, no retry
+
 
 class TestReplaceChars:
-    """replace_chars sends N backspaces before the paste."""
+    """replace_chars > 0 takes the typed-replacement path: no clipboard, no Ctrl+V.
 
-    def test_default_zero_sends_no_backspaces(self) -> None:
+    See #23 — the clipboard+Ctrl+V path races the target window's paste handler
+    when backspaces queue ahead of Ctrl+V. Typing via send_text sidesteps the
+    whole clipboard mechanism for the Trigger Fire case.
+    """
+
+    def test_default_zero_uses_clipboard_paste_path(self) -> None:
         clip = FakeClipboardIO()
         ks = FakeKeystrokeSender()
         fg = FakeForegroundTracker()
@@ -220,8 +240,11 @@ class TestReplaceChars:
 
         assert ks.total_backspaces == 0
         assert ks.paste_count == 1
+        assert ks.typed_texts == []
+        # Clipboard path: save + open + set + close + restore.
+        assert any(c[0] == "set_text" for c in clip.calls)
 
-    def test_positive_replace_sends_that_many_backspaces(self) -> None:
+    def test_positive_replace_sends_backspaces_and_types_text(self) -> None:
         clip = FakeClipboardIO()
         ks = FakeKeystrokeSender()
         fg = FakeForegroundTracker()
@@ -229,16 +252,29 @@ class TestReplaceChars:
         paste("new", clipboard=clip, keystroke=ks, foreground=fg, replace_chars=7)
 
         assert ks.backspace_counts == [7]
-        assert ks.paste_count == 1
+        assert ks.typed_texts == ["new "]
+        assert ks.paste_count == 0  # no Ctrl+V on the typed path
 
-    def test_backspaces_before_paste(self) -> None:
+    def test_positive_replace_does_not_touch_clipboard(self) -> None:
+        # The whole point of the refactor: typed path leaves clipboard alone.
+        clip = FakeClipboardIO()
+        clip._content = "user's precious clipboard"
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker()
+
+        paste("new", clipboard=clip, keystroke=ks, foreground=fg, replace_chars=4)
+
+        assert clip.calls == []  # no save/open/set/close/restore
+        assert clip._content == "user's precious clipboard"
+
+    def test_backspaces_before_typed_text(self) -> None:
         clip = FakeClipboardIO()
         ks = FakeKeystrokeSender()
         fg = FakeForegroundTracker()
 
         paste("new", clipboard=clip, keystroke=ks, foreground=fg, replace_chars=3)
 
-        assert ks.events == [("backspaces", 3), ("paste", 1)]
+        assert ks.events == [("backspaces", 3), ("send_text", "new ")]
 
     def test_foreground_restored_before_backspaces(self) -> None:
         """Otherwise the backspaces hit whatever stole focus during transcription."""
@@ -265,6 +301,17 @@ class TestReplaceChars:
 
         assert order.index("restore_fg") < order.index("backspaces")
 
+    def test_typed_text_is_normalized(self) -> None:
+        # Same normalisation as the clipboard path so LastPaste char counts
+        # line up across consecutive trigger fires.
+        clip = FakeClipboardIO()
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker()
+
+        paste(" line1\nline2", clipboard=clip, keystroke=ks, foreground=fg, replace_chars=5)
+
+        assert ks.typed_texts == ["line1 line2 "]
+
     def test_negative_replace_treated_as_zero(self) -> None:
         clip = FakeClipboardIO()
         ks = FakeKeystrokeSender()
@@ -278,8 +325,10 @@ class TestReplaceChars:
             replace_chars=-3,
         )
 
+        # Falls through to the regular clipboard+Ctrl+V path.
         assert ks.total_backspaces == 0
         assert ks.paste_count == 1
+        assert ks.typed_texts == []
 
 
 class TestImportSafety:

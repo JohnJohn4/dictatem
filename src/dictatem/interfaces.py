@@ -52,7 +52,16 @@ class KeystrokeSender(Protocol):
         """Send *n* backspace keystrokes via the OS input system.
 
         Used by the Trigger Fire path to delete the Last Paste before
-        pasting the transformed text. See ``CONTEXT.md#trigger-fire``.
+        typing the transformed text. See ``CONTEXT.md#trigger-fire``.
+        """
+        ...
+
+    def send_text(self, text: str) -> None:
+        """Type *text* directly via the OS input system, character-by-character.
+
+        Used by the Trigger Fire path instead of clipboard+Ctrl+V: avoids
+        racing the target window's paste handler over clipboard ownership
+        (see #23) and leaves the user's clipboard untouched.
         """
         ...
 

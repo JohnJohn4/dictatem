@@ -55,32 +55,54 @@ def paste(
 ) -> None:
     """Paste *text* into the focused window.
 
-    If *replace_chars* is non-zero, *replace_chars* backspaces are sent
-    after restoring the foreground window and before the paste itself.
-    This is the Trigger Fire path described in ADR-0001: the previously
-    pasted text is deleted in place, then the rewritten text takes its
-    place.
+    When *replace_chars* is zero (regular dictation), the text is placed on
+    the clipboard and Ctrl+V is sent. When *replace_chars* is positive
+    (Trigger Fire), the previously-pasted text is deleted via backspaces
+    and the new text is *typed* directly via ``send_text`` — bypassing the
+    clipboard entirely. Typing avoids the race between the daemon's
+    clipboard-restore and the target window's paste handler (see #23) and
+    leaves the user's clipboard untouched as a bonus.
     """
+    normalized = normalize_pasted_text(text)
     hwnd = foreground.capture()
     logger.info(
         "Paste: captured foreground hwnd=%s, text length=%d, replace_chars=%d",
         hwnd,
-        len(text),
+        len(normalized),
         replace_chars,
     )
-    saved = clipboard.save()
 
+    if replace_chars > 0:
+        # Typed-replacement path: no clipboard, no settle, no race.
+        foreground.restore(hwnd)
+        keystroke.send_backspaces(replace_chars)
+        keystroke.send_text(normalized)
+        logger.info("Paste: typed-replacement complete")
+        return
+
+    # Regular dictation path: clipboard + Ctrl+V.
+    saved = clipboard.save()
     try:
         _open_with_retry(clipboard)
-        clipboard.set_text(normalize_pasted_text(text))
+        clipboard.set_text(normalized)
         clipboard.close()
         logger.info("Paste: clipboard set, restoring foreground and sending Ctrl+V")
 
         foreground.restore(hwnd)
-        if replace_chars > 0:
-            keystroke.send_backspaces(replace_chars)
         keystroke.send_paste()
         time.sleep(_POST_PASTE_SETTLE_S)
         logger.info("Paste: complete")
     finally:
-        clipboard.restore(saved)
+        # restore() can race the target window's Ctrl+V handler — both call
+        # OpenClipboard. Swallow the resulting Access-denied; losing the race
+        # is the correct outcome (target reads the new text we just put on
+        # the clipboard). Retrying would put the old text back before the
+        # target reads it. See #23.
+        try:
+            clipboard.restore(saved)
+        except OSError as exc:
+            logger.warning(
+                "Clipboard restore lost race with target's paste handler "
+                "(%s); user's original clipboard not restored",
+                exc,
+            )

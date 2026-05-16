@@ -12,6 +12,7 @@ VK_CONTROL = 0x11
 VK_V = 0x56
 VK_BACK = 0x08
 KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_UNICODE = 0x0004
 INPUT_KEYBOARD = 1
 
 
@@ -63,9 +64,9 @@ class _INPUT(ctypes.Structure):
     ]
 
 
-def _key_input(vk: int, flags: int = 0) -> _INPUT:
+def _key_input(vk: int, flags: int = 0, scan: int = 0) -> _INPUT:
     inp = _INPUT(type=INPUT_KEYBOARD)
-    inp.ki = _KEYBDINPUT(wVk=vk, wScan=0, dwFlags=flags, time=0, dwExtraInfo=None)
+    inp.ki = _KEYBDINPUT(wVk=vk, wScan=scan, dwFlags=flags, time=0, dwExtraInfo=None)
     return inp
 
 
@@ -102,6 +103,34 @@ class Win32KeystrokeSender:
             err = ctypes.windll.kernel32.GetLastError()
             logger.warning(
                 "SendInput dispatched %d/%d backspace events (GetLastError=%d)",
+                sent,
+                count,
+                err,
+            )
+
+    def send_text(self, text: str) -> None:
+        if not text:
+            return
+        # Encode to UTF-16 LE so supplementary-plane code points are split
+        # into surrogate pairs — each 16-bit unit becomes one keystroke.
+        units_bytes = text.encode("utf-16-le")
+        n_units = len(units_bytes) // 2
+        count = n_units * 2  # one keydown + one keyup per unit
+        inputs_array = _INPUT * count
+        inputs = inputs_array()
+        for i in range(n_units):
+            unit = int.from_bytes(units_bytes[2 * i : 2 * i + 2], "little")
+            inputs[2 * i] = _key_input(0, KEYEVENTF_UNICODE, scan=unit)
+            inputs[2 * i + 1] = _key_input(
+                0, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, scan=unit
+            )
+        sent = ctypes.windll.user32.SendInput(
+            count, ctypes.byref(inputs), ctypes.sizeof(_INPUT)
+        )
+        if sent != count:
+            err = ctypes.windll.kernel32.GetLastError()
+            logger.warning(
+                "SendInput dispatched %d/%d unicode events (GetLastError=%d)",
                 sent,
                 count,
                 err,
