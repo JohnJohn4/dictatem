@@ -87,6 +87,10 @@ class TestConfigSubDataclasses:
         cfg = Config()
         assert isinstance(cfg.transform, TransformConfig)
         assert cfg.transform.enabled is True
+        assert cfg.transform.model_name == "gemma4:e4b"
+        assert cfg.transform.base_url == "http://localhost:11434"
+        assert cfg.transform.timeout_s == 30
+        assert cfg.transform.last_paste_ttl_s == 300
 
 
 class TestLoadConfigMissingFile:
@@ -391,3 +395,89 @@ class TestTransformKillSwitch:
         write_config(cfg, path)
         cfg2 = load_config(path)
         assert cfg2.transform.enabled is False
+
+
+class TestTransformOllamaKnobs:
+    """[transform] exposes model/url/timeout/ttl knobs (#22)."""
+
+    def test_full_section_round_trips(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text(dedent("""\
+            [transform]
+            enabled = true
+            model_name = "llama3.2:3b"
+            base_url = "http://remote:11434"
+            timeout_s = 60
+            last_paste_ttl_s = 120
+        """))
+        cfg = load_config(path)
+        assert cfg.transform.enabled is True
+        assert cfg.transform.model_name == "llama3.2:3b"
+        assert cfg.transform.base_url == "http://remote:11434"
+        assert cfg.transform.timeout_s == 60
+        assert cfg.transform.last_paste_ttl_s == 120
+
+    def test_first_write_emits_full_section(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        load_config(path)
+        content = path.read_text()
+        assert "[transform]" in content
+        assert "enabled" in content
+        assert "model_name" in content
+        assert "base_url" in content
+        assert "timeout_s" in content
+        assert "last_paste_ttl_s" in content
+
+    def test_zero_timeout_falls_back_to_default(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text(dedent("""\
+            [transform]
+            timeout_s = 0
+        """))
+        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert cfg.transform.timeout_s == 30
+        assert any(
+            "timeout_s" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        )
+
+    def test_negative_timeout_falls_back_to_default(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text(dedent("""\
+            [transform]
+            timeout_s = -1
+        """))
+        cfg = load_config(path)
+        assert cfg.transform.timeout_s == 30
+
+    def test_zero_ttl_falls_back_to_default(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text(dedent("""\
+            [transform]
+            last_paste_ttl_s = 0
+        """))
+        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert cfg.transform.last_paste_ttl_s == 300
+        assert any(
+            "last_paste_ttl_s" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        )
+
+    def test_round_trip_custom_values(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        cfg = Config(transform=TransformConfig(
+            enabled=False,
+            model_name="qwen2.5:7b",
+            base_url="http://192.168.1.10:11434",
+            timeout_s=45,
+            last_paste_ttl_s=600,
+        ))
+        write_config(cfg, path)
+        cfg2 = load_config(path)
+        assert cfg2.transform == cfg.transform
