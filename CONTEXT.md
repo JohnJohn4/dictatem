@@ -5,6 +5,23 @@ the code or in ADRs (`docs/adr/`), not here.
 
 ## Terms
 
+### Tap
+
+A press-and-release of the hotkey combo (Alt+Win) whose total held
+duration is shorter than the **tap threshold** (default 200 ms, configurable
+via `[hotkey].tap_threshold_ms`). A Tap toggles recording on and off:
+the first Tap starts recording, the next Tap stops it and transcribes.
+
+Discriminating a Tap from a [Hold](#hold) requires that every timestamp
+in the hotkey pipeline come from the same clock; see
+[ADR-0005](docs/adr/0005-hotkey-uses-time-monotonic-end-to-end.md).
+
+### Hold
+
+A press of the hotkey combo (Alt+Win) held continuously for at least
+the **tap threshold**. While the combo is held, recording runs in
+push-to-talk mode and stops on release.
+
 ### Last Paste
 
 The snapshot of the text most recently pasted by Dictatem into the user's
