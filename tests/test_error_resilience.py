@@ -213,9 +213,9 @@ class TestSilenceTimeout:
 
 
 class TestMaxRecordingDuration:
-    """AC: duration >= max_recording_seconds → IDLE + tray notify, INFO log."""
+    """AC: duration >= max_recording_seconds → transcribe the audio so far + tray notify, INFO log."""
 
-    def test_max_duration_cancels_recording(
+    def test_max_duration_transcribes_recording(
         self,
         sm: StateMachine,
         audio: FakeAudioCapture,
@@ -251,7 +251,7 @@ class TestMaxRecordingDuration:
         with caplog.at_level(logging.INFO, logger="dictatem.daemon"):
             core.check_silence(now_ms=10_200)
 
-        assert sm.state is State.IDLE
+        assert sm.state is State.TRANSCRIBING
         assert any("max" in r.message.lower() or "duration" in r.message.lower() for r in caplog.records)
         assert any("max duration" in msg.lower() for _, msg in tray.notifications)
 

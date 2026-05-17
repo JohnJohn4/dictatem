@@ -261,14 +261,14 @@ class DaemonCore:
                 return
             if self._audio_buffer.duration_seconds >= self._max_recording_s:
                 logger.info(
-                    "Max recording duration reached (%.0f s), auto-aborting",
+                    "Max recording duration reached (%.0f s), transcribing",
                     self._max_recording_s,
                 )
                 self._tray.show_notification(
                     "Dictatem",
-                    "Recording stopped — max duration reached.",
+                    "Max duration reached — transcribing…",
                 )
-                commands = self._sm.handle(Event.SILENCE_TIMEOUT, now_ms=now_ms)
+                commands = self._sm.handle(Event.MAX_DURATION, now_ms=now_ms)
                 self._execute_commands(commands, now_ms=now_ms)
                 return
             if self._audio_buffer.is_idle_for_seconds(self._silence_timeout_s):

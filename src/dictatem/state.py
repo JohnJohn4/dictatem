@@ -26,6 +26,7 @@ class Event(enum.Enum):
     ESC = "esc"
     TIMER_EXPIRED = "timer_expired"
     SILENCE_TIMEOUT = "silence_timeout"
+    MAX_DURATION = "max_duration"
     TRANSCRIPTION_DONE = "transcription_done"
     EMPTY_RESULT = "empty_result"
     OOM = "oom"
@@ -136,9 +137,11 @@ _HANDLERS: dict[tuple[State, Event], _Handler] = {
     (State.TOGGLE_REC, Event.KEY_DOWN): StateMachine._toggle_key_down,
     (State.TOGGLE_REC, Event.ESC): StateMachine._cancel_to_idle,
     (State.TOGGLE_REC, Event.SILENCE_TIMEOUT): StateMachine._cancel_to_idle,
+    (State.TOGGLE_REC, Event.MAX_DURATION): StateMachine._toggle_key_down,
     (State.PTT_REC, Event.KEY_UP): StateMachine._ptt_key_up,
     (State.PTT_REC, Event.ESC): StateMachine._cancel_to_idle,
     (State.PTT_REC, Event.SILENCE_TIMEOUT): StateMachine._cancel_to_idle,
+    (State.PTT_REC, Event.MAX_DURATION): StateMachine._ptt_key_up,
     (State.TRANSCRIBING, Event.TRANSCRIPTION_DONE): StateMachine._transcribing_done,
     (State.TRANSCRIBING, Event.ESC): StateMachine._cancel_to_idle,
     (State.TRANSCRIBING, Event.EMPTY_RESULT): StateMachine._transcribing_empty,
