@@ -298,6 +298,30 @@ class TestSilenceTimeoutFromActiveStates:
         assert Command.CANCEL in cmds
 
 
+class TestMaxDurationFromActiveStates:
+    def test_max_duration_from_toggle_rec_transcribes(self) -> None:
+        sm = StateMachine()
+        sm.handle(Event.KEY_DOWN, now_ms=0)
+        sm.handle(Event.KEY_UP, now_ms=50)
+        assert sm.state is State.TOGGLE_REC
+
+        cmds = sm.handle(Event.MAX_DURATION, now_ms=300_050)
+        assert sm.state is State.TRANSCRIBING
+        assert Command.RECORD_STOP_AND_TRANSCRIBE in cmds
+        assert Command.CANCEL not in cmds
+
+    def test_max_duration_from_ptt_rec_transcribes(self) -> None:
+        sm = StateMachine()
+        sm.handle(Event.KEY_DOWN, now_ms=0)
+        sm.handle(Event.TIMER_EXPIRED, now_ms=200)
+        assert sm.state is State.PTT_REC
+
+        cmds = sm.handle(Event.MAX_DURATION, now_ms=300_200)
+        assert sm.state is State.TRANSCRIBING
+        assert Command.RECORD_STOP_AND_TRANSCRIBE in cmds
+        assert Command.CANCEL not in cmds
+
+
 class TestFullCycleRoundTrips:
     def test_toggle_happy_path(self) -> None:
         sm = StateMachine()
@@ -363,7 +387,8 @@ class TestEnumCompleteness:
     def test_all_events_defined(self) -> None:
         expected = {
             "KEY_DOWN", "KEY_UP", "ESC", "TIMER_EXPIRED",
-            "SILENCE_TIMEOUT", "TRANSCRIPTION_DONE", "EMPTY_RESULT", "OOM",
+            "SILENCE_TIMEOUT", "MAX_DURATION", "TRANSCRIPTION_DONE",
+            "EMPTY_RESULT", "OOM",
         }
         assert set(Event.__members__) == expected
 
