@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
 from typing import TYPE_CHECKING
 
 logger = logging.getLogger(__name__)
@@ -107,7 +108,12 @@ class WHKeyboardLLHook:
                     vk = kb.vkCode
                     is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
                     action = KeyAction.KEY_DOWN if is_down else KeyAction.KEY_UP
-                    timestamp_ms = kb.time
+                    # Use time.monotonic, not kb.time. kb.time is
+                    # GetTickCount-derived; the Qt tick that drives
+                    # HOLD_START detection passes time.monotonic. If the two
+                    # clocks have a non-zero offset, a single tap fires a
+                    # spurious HOLD_START → PTT_REC → instant stop.
+                    timestamp_ms = int(time.monotonic() * 1000)
                     self._on_key_event(vk, action, timestamp_ms)
             except Exception:
                 logger.error("Error in keyboard hook callback", exc_info=True)
