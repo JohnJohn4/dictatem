@@ -343,6 +343,83 @@ class TestHotkeyBridge:
         assert sm.state == State.IDLE
         assert keystroke.paste_count == 1
 
+    def test_tap_survives_event_clock_offset(self) -> None:
+        # Regression: HOLD_START must be measured in the same clock as the
+        # key event timestamps. Previously the hook fed kb.time (GetTickCount)
+        # while the Qt tick fed time.monotonic — any offset between the two
+        # made a tap fire a spurious HOLD_START → PTT_REC → instant stop.
+        classifier = _clf.HotkeyClassifier(tap_threshold_ms=200)
+        sm = StateMachine(tap_threshold_ms=200)
+        daemon = DaemonCore(
+            state_machine=sm,
+            audio_capture=FakeAudioCapture(duration_s=1.0),
+            lifecycle=TranscribeLifecycle(
+                backend=FakeTranscriberBackend(result="hello"),
+                clock=lambda: 0.0,
+            ),
+            overlay=FakeOverlayRenderer(),
+            tray=FakeTrayRenderer(),
+            clipboard=FakeClipboardIO(),
+            keystroke=FakeKeystrokeSender(),
+            foreground=FakeForegroundTracker(),
+        )
+        bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
+
+        # Simulate the hook now feeding a monotonic-style timestamp:
+        # press at 1000, tick (between press and release) at 1010, release
+        # at 1050, tick at 1060. With a unified clock the elapsed across the
+        # tap stays under 200 ms.
+        bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_DOWN, 1000)
+        bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_DOWN, 1000)
+        bridge.tick(1010)
+        bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_UP, 1050)
+        bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_UP, 1050)
+        bridge.tick(1060)
+
+        assert sm.state == State.TOGGLE_REC
+
+    def test_three_back_to_back_toggle_cycles(self) -> None:
+        # Regression: a full tap-start → tap-stop → paste cycle, repeated.
+        # Verifies that no per-cycle state (combo_active, _key_down_at,
+        # _combo_pressed_at) leaks across cycles and breaks a later tap.
+        classifier = _clf.HotkeyClassifier(tap_threshold_ms=200)
+        sm = StateMachine(tap_threshold_ms=200)
+        daemon = DaemonCore(
+            state_machine=sm,
+            audio_capture=FakeAudioCapture(duration_s=1.0),
+            lifecycle=TranscribeLifecycle(
+                backend=FakeTranscriberBackend(result="hello"),
+                clock=lambda: 0.0,
+            ),
+            overlay=FakeOverlayRenderer(),
+            tray=FakeTrayRenderer(),
+            clipboard=FakeClipboardIO(),
+            keystroke=FakeKeystrokeSender(),
+            foreground=FakeForegroundTracker(),
+        )
+        bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
+
+        for cycle in range(3):
+            base = cycle * 10_000
+            # Tap to start
+            bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_DOWN, base)
+            bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_DOWN, base)
+            bridge.tick(base + 25)
+            bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_UP, base + 50)
+            bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_UP, base + 50)
+            bridge.tick(base + 75)
+            assert sm.state == State.TOGGLE_REC, f"cycle {cycle} start: {sm.state}"
+
+            # Tap to stop
+            bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_DOWN, base + 5000)
+            bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_DOWN, base + 5000)
+            bridge.tick(base + 5025)
+            bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_UP, base + 5050)
+            bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_UP, base + 5050)
+            bridge.tick(base + 5075)
+            daemon.drain_transcription_for_test(now_ms=base + 5075)
+            assert sm.state == State.IDLE, f"cycle {cycle} end: {sm.state}"
+
 
 # ── Full adapter integration ────────────────────────────────────────────
 
