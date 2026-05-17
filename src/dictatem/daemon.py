@@ -607,6 +607,11 @@ class DaemonCore:
             logger.error("Error unloading model", exc_info=True)
         self.sync_model_loaded()
 
+    def on_tray_quit(self, quit_callback: Callable[[], None]) -> None:
+        """Unload the model gracefully, then invoke ``quit_callback`` to exit."""
+        self.on_tray_unload()
+        quit_callback()
+
     def sync_model_loaded(self) -> None:
         """Push the current model-load state into the tray.
 
@@ -775,7 +780,7 @@ def _start_windows_daemon() -> None:
     tray_icon.on_stop = daemon.on_tray_stop_recording
     tray_icon.on_preload = daemon.on_tray_preload
     tray_icon.on_unload = daemon.on_tray_unload
-    tray_icon.on_quit = app.quit
+    tray_icon.on_quit = lambda: daemon.on_tray_quit(app.quit)
 
     classifier = HotkeyClassifier(tap_threshold_ms=config.hotkey.tap_threshold_ms)
     classifier.set_active(True)

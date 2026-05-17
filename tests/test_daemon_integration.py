@@ -240,6 +240,46 @@ class TestTrayMenuActions:
         core.on_tray_unload()
         assert tray.model_loaded is False
 
+    def test_quit_unloads_loaded_model_before_calling_quit_callback(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+    ) -> None:
+        backend._loaded = True
+        call_order: list[str] = []
+
+        def fake_quit() -> None:
+            call_order.append("quit")
+
+        original_unload = backend.unload_model
+
+        def tracking_unload() -> None:
+            call_order.append("unload")
+            original_unload()
+
+        backend.unload_model = tracking_unload  # type: ignore[method-assign]
+
+        core.on_tray_quit(fake_quit)
+
+        assert call_order == ["unload", "quit"]
+        assert not backend.is_loaded
+
+    def test_quit_when_model_not_loaded_still_calls_quit_callback(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+    ) -> None:
+        assert not backend.is_loaded
+        quit_called = False
+
+        def fake_quit() -> None:
+            nonlocal quit_called
+            quit_called = True
+
+        core.on_tray_quit(fake_quit)
+
+        assert quit_called
+
     def test_sync_model_loaded_reflects_backend_state(
         self,
         core: DaemonCore,
