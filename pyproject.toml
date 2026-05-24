@@ -12,10 +12,13 @@ runtime = [
     "faster-whisper>=1.1",
     "sounddevice>=0.5",
     "PySide6>=6.7",
-    "nvidia-cublas-cu12",
-    "nvidia-cudnn-cu12",
     "nvidia-ml-py>=12",
     "pywin32>=306; sys_platform == 'win32'",
+]
+runtime-gpu = [
+    "dictatem[runtime]",
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12",
 ]
 
 [dependency-groups]

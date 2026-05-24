@@ -18,7 +18,8 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 
 - Windows 11
 - Python 3.11+
-- NVIDIA GPU with CUDA support
+- x64 CPU, ~8 GB RAM (minimum — CPU-only works using the `base` Whisper model)
+- NVIDIA GPU with CUDA support — optional, recommended for larger models and sub-realtime speed
 - [`uv`](https://docs.astral.sh/uv/) (fast Python package manager)
 - [Ollama](https://ollama.com) — optional, only for [Trigger Words](#trigger-words); see [Ollama / Transform setup](#ollama--transform-setup)
 
@@ -27,8 +28,21 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 ```powershell
 git clone https://github.com/JohnJohn4/dictatem
 cd dictatem
+```
+
+**CPU-only (no NVIDIA GPU)** — installs the CPU-lean set of dependencies (~200 MB, no CUDA download):
+
+```powershell
 uv sync --extra runtime
 ```
+
+**NVIDIA GPU users** — adds the ~2 GB CUDA libraries (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`) for GPU-accelerated transcription:
+
+```powershell
+uv sync --extra runtime-gpu
+```
+
+If you have an NVIDIA GPU and want the fastest transcription, use `runtime-gpu`. If you are on a CPU-only machine or want a lighter install, use `runtime`.
 
 ## Verify the setup
 
@@ -53,7 +67,10 @@ print('CUDA devices:', ctranslate2.get_cuda_device_count())
 "
 ```
 
-All lines should print without errors, and CUDA devices should be `>= 1`.
+All lines should print without errors. For the CUDA device count:
+
+- **CPU-only install** (`runtime`): `CUDA devices: 0` is expected and fine — transcription runs on CPU.
+- **GPU install** (`runtime-gpu`): `CUDA devices: 1` (or more) means GPU acceleration is active.
 
 ### End-to-end test (GPU + mic + transcription)
 
