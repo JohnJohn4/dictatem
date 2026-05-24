@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import queue
-import shutil
 import sys
 import threading
 from typing import TYPE_CHECKING
@@ -40,17 +39,6 @@ if TYPE_CHECKING:
     from dictatem.transform.lifecycle import TransformLifecycle
 
 logger = logging.getLogger(__name__)
-
-
-def _default_ollama_binary_probe() -> bool:
-    """Return whether an ``ollama`` binary is on PATH.
-
-    The sole OS touch behind the Transform-failure classifier. Kept as a
-    free function so it can be swapped for a fake in tests, leaving the
-    classifier itself pure. Does not start, install, or pull anything
-    (ADR-0008).
-    """
-    return shutil.which("ollama") is not None
 
 
 class _OverlayAdapter:
@@ -225,7 +213,7 @@ class DaemonCore:
         transform_enabled: bool = False,
         last_paste_ttl_s: float = 300.0,
         transform_model_name: str = "",
-        ollama_binary_probe: Callable[[], bool] | None = None,
+        transform_base_url: str = "",
     ) -> None:
         self._sm = state_machine
         self._audio_capture = audio_capture
@@ -248,14 +236,7 @@ class DaemonCore:
         self._transform_enabled = transform_enabled
         self._last_paste_ttl_s = last_paste_ttl_s
         self._transform_model_name = transform_model_name
-        # The one OS touch the failure classifier needs (probing PATH for the
-        # ``ollama`` binary) is injected so the daemon stays testable and the
-        # classifier itself stays pure. Defaults to a thin shutil.which probe.
-        self._ollama_binary_probe = (
-            ollama_binary_probe
-            if ollama_binary_probe is not None
-            else _default_ollama_binary_probe
-        )
+        self._transform_base_url = transform_base_url
         self._last_paste: LastPaste | None = None
         self._pending_replace_chars: int = 0
         self._transform_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -559,9 +540,8 @@ class DaemonCore:
         """Map a failed Transform into a ``(title, message)`` to surface.
 
         For a ``TransformFailedError`` carrying a structured ``failure``
-        signal, run the pure classifier (probing PATH for the ``ollama``
-        binary first) so the user gets an actionable next step. Everything
-        else falls back to a generic check-the-log message.
+        signal, run the pure classifier so the user gets an actionable next
+        step. Everything else falls back to a generic check-the-log message.
         """
         from dictatem.transform.failure_classifier import (
             FailureReason,
@@ -575,19 +555,12 @@ class DaemonCore:
                 "The Trigger Word transform could not be applied; check log",
             )
 
-        try:
-            binary_present = bool(self._ollama_binary_probe())
-        except Exception:
-            logger.error("Error probing for ollama binary", exc_info=True)
-            binary_present = True  # assume installed; don't mislead the user
-
         reason, message = classify_transform_failure(
-            binary_present=binary_present,
             failure=failure,
             model_name=self._transform_model_name,
+            base_url=self._transform_base_url,
         )
         titles = {
-            FailureReason.NOT_INSTALLED: "Ollama Not Installed",
             FailureReason.NOT_RUNNING: "Ollama Not Running",
             FailureReason.MODEL_MISSING: "Ollama Model Missing",
             FailureReason.UNKNOWN: "Transform Failed",
@@ -840,6 +813,7 @@ def _start_windows_daemon() -> None:
         transform_enabled=config.transform.enabled,
         last_paste_ttl_s=float(config.transform.last_paste_ttl_s),
         transform_model_name=config.transform.model_name,
+        transform_base_url=config.transform.base_url,
     )
 
     tray_icon.on_start = daemon.on_tray_start_recording

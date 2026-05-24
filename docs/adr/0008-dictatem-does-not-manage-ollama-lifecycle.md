@@ -4,18 +4,27 @@ The [Transform](../../CONTEXT.md#transform) feature calls a local Ollama server
 over HTTP. Dictatem deliberately **does not** install Ollama, start it
 (`ollama serve`), or pull models on the user's behalf. When a
 [Trigger Fire](../../CONTEXT.md#trigger-fire) fails because Ollama isn't ready,
-Dictatem diagnoses *why* and tells the user the exact manual step to take,
-distinguishing three cases:
+Dictatem diagnoses *why* from the **network response** and tells the user the
+exact manual step to take:
 
-- **not installed** — no `ollama` binary on PATH → point to the README setup.
-- **not running** — connection refused / transport error reaching the server →
-  start Ollama, then try again.
+- **not running / unreachable** — connection refused or transport error reaching
+  `base_url` → "Ollama isn't reachable at `<base_url>`; make sure it's running —
+  see the README to install it." The message names `base_url` (so a WSL/remote
+  user sees *where* we looked) and keeps the install hint (so a brand-new user is
+  still pointed at setup).
 - **model missing** — HTTP 404 from `/api/generate` → name the configured model
   and the `ollama pull <model>` command.
 
-The diagnosis is a pure classifier fed structured failure signals; the single OS
-touch (probing PATH for the binary) is injected so the classifier stays pure and
-unit-tested.
+The diagnosis is a pure classifier fed the structured failure signal; it makes no
+network or filesystem calls.
+
+We deliberately do **not** try to distinguish "not installed" as its own case.
+The obvious signal — an `ollama` binary on PATH — is unreliable: Ollama commonly
+runs in WSL, a container, or on another host reachable via `base_url` with no
+binary on the local PATH, so "no binary" is not evidence it's uninstalled and
+must never override a "connection refused". An unreachable server is therefore
+reported as *not running* (with an install hint) rather than a false *not
+installed*.
 
 ## Considered options
 
@@ -27,8 +36,8 @@ unit-tested.
   install is surprising and hard to undo. Deferred to a separate, explicitly
   user-initiated effort.
 - **One generic "Transform failed" error** (what shipped before). Cheap but
-  unactionable: the user can't tell "never installed" from "server down" from
-  "wrong model tag" — each needs a different fix.
+  unactionable: the user can't tell "Ollama unreachable" from "wrong model tag"
+  from a server error — each needs a different fix.
 - **Proactively probe Ollama health at startup / on a timer.** Lets the tray show
   readiness before the first Trigger Fire, but adds background polling and a
   health-state machine for a feature that's off by default. Diagnosing lazily on
@@ -36,8 +45,8 @@ unit-tested.
 
 ## Consequences
 
-- Default users without Ollama get a friendly "Summarise needs Ollama — see
-  README" message, not a crash or a silent no-op.
+- Default users without Ollama get a friendly "Ollama isn't reachable … see the
+  README" message (with install guidance), not a crash or a silent no-op.
 - The Ollama backend enriches its failure with a small structured value (failure
   kind + any HTTP status) so the classifier can distinguish cases without
   re-probing the network.

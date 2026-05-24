@@ -155,13 +155,14 @@ last_paste_ttl_s = 300          # How long a Last Paste stays eligible for a Tri
 2. **Start the Ollama server** — `ollama serve` (the desktop app starts it for you). It listens on `http://localhost:11434` by default, matching `[transform].base_url`.
 3. **Pull the configured model** — `ollama pull gemma4:e4b` (or whatever you set in `[transform].model_name`). Confirm it's present with `ollama list`.
 
-Trigger Words are enabled by default in config (`[transform].enabled = true`), but they only fire once all three steps are done. Until then, firing a trigger leaves your document untouched and surfaces a message telling you which step is missing:
+Trigger Words are enabled by default in config (`[transform].enabled = true`), but they only fire once all three steps are done. Until then, firing a trigger leaves your document untouched and surfaces a message telling you what's wrong:
 
 | What's wrong | Message |
 |---|---|
-| Ollama not installed (no `ollama` on PATH) | Points you to this setup section |
-| Ollama installed but server not running | Start Ollama, then try again |
+| Ollama unreachable at `base_url` (not running, not installed, or wrong URL) | Names `base_url`; says to make sure Ollama is running and points to this setup section |
 | Server running but model not pulled | Run `ollama pull <model>` |
+
+dictatem diagnoses this from the network response, not from a local `ollama` binary — so a server running in WSL, a container, or on another host (reachable via `[transform].base_url`) is handled correctly.
 
 ## Trigger Words
 

@@ -410,8 +410,8 @@ def _make_core(
     foreground: FakeForegroundTracker,
     transform_lifecycle: TransformLifecycle,
     trigger_detector: TriggerDetector,
-    binary_present: bool,
     model_name: str = "gemma4:e4b",
+    base_url: str = "http://localhost:11434",
 ) -> DaemonCore:
     return DaemonCore(
         state_machine=sm,
@@ -427,7 +427,7 @@ def _make_core(
         transform_enabled=True,
         last_paste_ttl_s=300.0,
         transform_model_name=model_name,
-        ollama_binary_probe=lambda: binary_present,
+        transform_base_url=base_url,
     )
 
 
@@ -448,7 +448,7 @@ class TestActionableFailureMessaging:
         )
         _cycle(core, start_ms=2_000, end_ms=3_000)
 
-    def test_not_installed_message_points_to_readme(
+    def test_unreachable_message_points_to_readme(
         self,
         sm: StateMachine,
         audio: FakeAudioCapture,
@@ -467,7 +467,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector, binary_present=False,
+            trigger_detector=trigger_detector,
         )
         self._run_failure(
             core=core, backend=backend, transform_backend=transform_backend,
@@ -481,7 +481,7 @@ class TestActionableFailureMessaging:
         assert keystroke.total_backspaces == 0
         assert any(c[0] == "show_error" for c in overlay.calls)
 
-    def test_not_running_message_says_start_ollama(
+    def test_not_running_message_mentions_running(
         self,
         sm: StateMachine,
         audio: FakeAudioCapture,
@@ -500,7 +500,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector, binary_present=True,
+            trigger_detector=trigger_detector,
         )
         self._run_failure(
             core=core, backend=backend, transform_backend=transform_backend,
@@ -509,7 +509,7 @@ class TestActionableFailureMessaging:
 
         _title, message = tray.notifications[-1]
         lowered = message.lower()
-        assert "start" in lowered and "ollama" in lowered
+        assert "running" in lowered and "ollama" in lowered
 
     def test_model_missing_message_names_model_and_pull(
         self,
@@ -530,7 +530,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector, binary_present=True,
+            trigger_detector=trigger_detector,
             model_name="llama3.2:1b",
         )
         self._run_failure(
@@ -563,7 +563,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector, binary_present=True,
+            trigger_detector=trigger_detector,
         )
         self._run_failure(
             core=core, backend=backend, transform_backend=transform_backend,
