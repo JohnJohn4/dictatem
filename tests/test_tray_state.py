@@ -6,7 +6,7 @@ import enum
 import importlib
 import sys
 
-from dictatem.tray.state import IconVariant, MenuItem, TrayState
+from dictatem.tray.state import IconVariant, MenuItem, TrayState, glyph_tint_rgba
 
 
 class TestIconVariant:
@@ -33,6 +33,20 @@ class TestIconVariant:
     def test_idle_when_only_model_loaded(self) -> None:
         state = TrayState(is_recording=False, is_model_loaded=True, has_error=False)
         assert state.current_icon_variant() == IconVariant.Idle
+
+
+class TestGlyphTint:
+    def test_dark_background_yields_light_glyph(self) -> None:
+        r, g, b, _a = glyph_tint_rgba(is_dark_background=True)
+        assert (r, g, b) == (255, 255, 255)
+
+    def test_light_background_yields_dark_glyph(self) -> None:
+        r, g, b, _a = glyph_tint_rgba(is_dark_background=False)
+        assert (r, g, b) == (0, 0, 0)
+
+    def test_tint_is_fully_opaque(self) -> None:
+        assert glyph_tint_rgba(is_dark_background=True)[3] == 255
+        assert glyph_tint_rgba(is_dark_background=False)[3] == 255
 
 
 class TestMenuItemEnabled:
