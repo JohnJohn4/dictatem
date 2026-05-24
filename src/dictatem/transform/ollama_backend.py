@@ -14,6 +14,7 @@ import urllib.request
 from typing import Any
 
 from dictatem.exceptions import TransformFailedError
+from dictatem.transform.failure import OllamaFailure
 
 logger = logging.getLogger(__name__)
 
@@ -55,37 +56,52 @@ class OllamaBackend:
         except urllib.error.HTTPError as exc:
             logger.warning("Ollama HTTP %d at %s: %s", exc.code, url, exc)
             raise TransformFailedError(
-                f"Ollama returned HTTP {exc.code}"
+                f"Ollama returned HTTP {exc.code}",
+                failure=OllamaFailure.http_status(exc.code),
             ) from exc
         except urllib.error.URLError as exc:
             # ConnectionRefusedError, socket.timeout, DNS failures, etc.
             logger.warning("Ollama unreachable at %s: %s", url, exc)
+            if isinstance(exc.reason, ConnectionRefusedError):
+                failure = OllamaFailure.connection_refused()
+            elif isinstance(exc.reason, TimeoutError):
+                failure = OllamaFailure.timeout()
+            else:
+                failure = OllamaFailure.url_error(exc.reason)
             raise TransformFailedError(
-                f"Ollama unreachable at {url}: {exc.reason}"
+                f"Ollama unreachable at {url}: {exc.reason}",
+                failure=failure,
             ) from exc
         except TimeoutError as exc:
             logger.warning("Ollama timed out after %.1fs", self._timeout_s)
             raise TransformFailedError(
-                f"Ollama timed out after {self._timeout_s}s"
+                f"Ollama timed out after {self._timeout_s}s",
+                failure=OllamaFailure.timeout(),
             ) from exc
 
         if status != 200:
-            raise TransformFailedError(f"Ollama returned HTTP {status}")
+            raise TransformFailedError(
+                f"Ollama returned HTTP {status}",
+                failure=OllamaFailure.http_status(status),
+            )
 
         try:
             data = json.loads(raw.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise TransformFailedError(
-                "Ollama response was not valid JSON"
+                "Ollama response was not valid JSON",
+                failure=OllamaFailure.malformed(),
             ) from exc
 
         if not isinstance(data, dict) or "response" not in data:
             raise TransformFailedError(
-                "Ollama response missing 'response' field"
+                "Ollama response missing 'response' field",
+                failure=OllamaFailure.malformed(),
             )
         result = data["response"]
         if not isinstance(result, str):
             raise TransformFailedError(
-                "Ollama 'response' field was not a string"
+                "Ollama 'response' field was not a string",
+                failure=OllamaFailure.malformed(),
             )
         return result

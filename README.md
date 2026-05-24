@@ -20,6 +20,7 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 - Python 3.11+
 - NVIDIA GPU with CUDA support
 - [`uv`](https://docs.astral.sh/uv/) (fast Python package manager)
+- [Ollama](https://ollama.com) — optional, only for [Trigger Words](#trigger-words); see [Ollama / Transform setup](#ollama--transform-setup)
 
 ## Installation
 
@@ -108,6 +109,7 @@ tap_threshold_ms = 200          # Below this = toggle tap; above = push-to-talk 
 [model]
 name = "large-v3-turbo"
 compute_type = "float16"
+device = "cuda"                 # cuda or cpu; auto-resolved on first run by Hardware Tier
 vad_filter = true
 idle_unload_minutes = 30        # Free GPU VRAM when idle for this long
 min_transcription_chars = 3     # Below this, treat the result as empty
@@ -145,11 +147,28 @@ timeout_s = 30                  # Per-request Ollama timeout
 last_paste_ttl_s = 300          # How long a Last Paste stays eligible for a Trigger Fire
 ```
 
+## Ollama / Transform setup
+
+[Trigger Words](#trigger-words) run a local [Ollama](https://ollama.com) model. **This feature is off until you set Ollama up yourself** — dictatem talks to a running Ollama but never installs it, starts it, or pulls models on your behalf (see [ADR-0008](docs/adr/0008-dictatem-does-not-manage-ollama-lifecycle.md)). The manual steps:
+
+1. **Install Ollama** — download it from [ollama.com](https://ollama.com) and run the installer.
+2. **Start the Ollama server** — `ollama serve` (the desktop app starts it for you). It listens on `http://localhost:11434` by default, matching `[transform].base_url`.
+3. **Pull the configured model** — `ollama pull gemma4:e4b` (or whatever you set in `[transform].model_name`). Confirm it's present with `ollama list`.
+
+Trigger Words are enabled by default in config (`[transform].enabled = true`), but they only fire once all three steps are done. Until then, firing a trigger leaves your document untouched and surfaces a message telling you what's wrong:
+
+| What's wrong | Message |
+|---|---|
+| Ollama unreachable at `base_url` (not running, not installed, or wrong URL) | Names `base_url`; says to make sure Ollama is running and points to this setup section |
+| Server running but model not pulled | Run `ollama pull <model>` |
+
+dictatem diagnoses this from the network response, not from a local `ollama` binary — so a server running in WSL, a container, or on another host (reachable via `[transform].base_url`) is handled correctly.
+
 ## Trigger Words
 
 A Trigger Word is a single utterance that rewrites the previously-pasted dictation in place instead of being pasted as-is. After any normal dictation paste, say one trigger (e.g. `"summarize"`) within the configured TTL — dictatem deletes the just-pasted text and replaces it with the output of a local [Ollama](https://ollama.com) model run with that trigger's prompt.
 
-Requires Ollama running locally with the configured model pulled (`ollama pull gemma4:e4b` by default). If Ollama is offline or the call fails, the document is left untouched and the overlay flashes an error.
+Requires Ollama running locally with the configured model pulled — see [Ollama / Transform setup](#ollama--transform-setup) above (`ollama pull gemma4:e4b` by default). If Ollama is offline or the call fails, the document is left untouched and the overlay flashes a message telling you which step is missing.
 
 ### Custom triggers
 
@@ -204,7 +223,19 @@ src/dictatem/
 ├── default_prompts/     # Bundled prompt files copied to ~/.dictatem/prompts/ on first run
 ├── paste/               # Clipboard save/restore, keystroke simulation
 ├── overlay/             # Qt animated pill widget
-└── tray/                # Qt system tray icon and menu
+├── tray/                # Qt system tray icon and menu
+└── assets/              # Brand art + generated application icon set (.ico/.icns/.png)
+```
+
+### Regenerating the application icon
+
+The full-colour waveform brand is the application/window icon. The master art
+lives at `src/dictatem/assets/icon.png` (opaque, white background baked in). To
+regenerate the committed cross-platform icon set (multi-resolution `.ico`,
+`.icns`, and the PNG sizes) with the white background keyed out to transparency:
+
+```powershell
+uv run python scripts/gen_icons.py
 ```
 
 ## License

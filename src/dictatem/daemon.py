@@ -212,6 +212,8 @@ class DaemonCore:
         trigger_detector: TriggerDetector | None = None,
         transform_enabled: bool = False,
         last_paste_ttl_s: float = 300.0,
+        transform_model_name: str = "",
+        transform_base_url: str = "",
     ) -> None:
         self._sm = state_machine
         self._audio_capture = audio_capture
@@ -233,6 +235,8 @@ class DaemonCore:
         self._trigger_detector = trigger_detector
         self._transform_enabled = transform_enabled
         self._last_paste_ttl_s = last_paste_ttl_s
+        self._transform_model_name = transform_model_name
+        self._transform_base_url = transform_base_url
         self._last_paste: LastPaste | None = None
         self._pending_replace_chars: int = 0
         self._transform_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -524,15 +528,44 @@ class DaemonCore:
                 self._execute_commands(commands, now_ms=now_ms)
             else:
                 logger.warning("Transform failed: %s", data)
-                self._tray.show_notification(
-                    "Transform Failed",
-                    "The Trigger Word transform could not be applied; check log",
-                )
+                title, message = self._diagnose_transform_failure(data)
+                self._tray.show_notification(title, message)
                 commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
                 self._execute_commands(commands, now_ms=now_ms)
         except Exception:
             logger.error("Unhandled error processing transform result", exc_info=True)
             self._recover_to_idle()
+
+    def _diagnose_transform_failure(self, error: object) -> tuple[str, str]:
+        """Map a failed Transform into a ``(title, message)`` to surface.
+
+        For a ``TransformFailedError`` carrying a structured ``failure``
+        signal, run the pure classifier so the user gets an actionable next
+        step. Everything else falls back to a generic check-the-log message.
+        """
+        from dictatem.transform.failure_classifier import (
+            FailureReason,
+            classify_transform_failure,
+        )
+
+        failure = getattr(error, "failure", None)
+        if failure is None:
+            return (
+                "Transform Failed",
+                "The Trigger Word transform could not be applied; check log",
+            )
+
+        reason, message = classify_transform_failure(
+            failure=failure,
+            model_name=self._transform_model_name,
+            base_url=self._transform_base_url,
+        )
+        titles = {
+            FailureReason.NOT_RUNNING: "Ollama Not Running",
+            FailureReason.MODEL_MISSING: "Ollama Model Missing",
+            FailureReason.UNKNOWN: "Transform Failed",
+        }
+        return titles[reason], message
 
     def drain_transcription_for_test(self, *, now_ms: int = 0) -> None:
         """Block until in-flight transcription (and any deferred transform)
@@ -683,6 +716,7 @@ def _start_windows_daemon() -> None:
 
     from dictatem.audio.sounddevice_capture import SoundDeviceCapture
     from dictatem.config import load_config
+    from dictatem.hardware.nvidia_probe import NvidiaHardwareProbe
     from dictatem.hotkey.classifier import HotkeyClassifier
     from dictatem.hotkey.wh_keyboard_ll import WHKeyboardLLHook
     from dictatem.overlay.qt_widget import QtOverlayWidget
@@ -703,17 +737,27 @@ def _start_windows_daemon() -> None:
     )
     from dictatem.tray.qt_tray import QtTrayIcon
 
-    config_path = Path.home() / ".dictatem" / "config.toml"
-    config = load_config(config_path)
-
+    # Configure logging before load_config so the first-run Hardware Tier
+    # baking line (logged inside load_config) is actually emitted. Start at
+    # INFO, then drop to the configured level once we've read it.
     logging.basicConfig(
-        level=getattr(logging, config.logging.level.upper(), logging.INFO),
+        level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
     # Library chatter — model-download HTTP requests, hub probes, etc. — is
     # noisy at INFO. Our own load/unload lines tell the user what they need.
     for noisy in ("httpx", "huggingface_hub", "filelock", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    config_path = Path.home() / ".dictatem" / "config.toml"
+    # First run with no config: probe the machine once and bake the resolved
+    # Hardware Tier (model/device/compute_type + transform tag) into the file.
+    # Existing configs are read unchanged and the probe is not consulted.
+    config = load_config(config_path, probe=NvidiaHardwareProbe())
+
+    logging.getLogger().setLevel(
+        getattr(logging, config.logging.level.upper(), logging.INFO)
+    )
 
     app = QApplication(sys.argv)
 
@@ -722,6 +766,7 @@ def _start_windows_daemon() -> None:
     backend = FasterWhisperBackend(
         model_name=config.model.name,
         compute_type=config.model.compute_type,
+        device=config.model.device,
         language=config.model.language,
         vad_filter=config.model.vad_filter,
     )
@@ -774,6 +819,8 @@ def _start_windows_daemon() -> None:
         trigger_detector=trigger_detector,
         transform_enabled=config.transform.enabled,
         last_paste_ttl_s=float(config.transform.last_paste_ttl_s),
+        transform_model_name=config.transform.model_name,
+        transform_base_url=config.transform.base_url,
     )
 
     tray_icon.on_start = daemon.on_tray_start_recording

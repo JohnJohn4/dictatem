@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+import urllib.error
 from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
@@ -12,6 +13,7 @@ from typing import Any
 import pytest
 
 from dictatem.exceptions import TransformFailedError
+from dictatem.transform.failure import FailureKind
 from dictatem.transform.ollama_backend import OllamaBackend
 
 ServerBehaviour = Callable[[BaseHTTPRequestHandler, bytes], None]
@@ -205,3 +207,117 @@ class TestFailureModes:
         backend = OllamaBackend(model_name="m", base_url=url, timeout_s=0.1)
         with pytest.raises(TransformFailedError):
             backend.transform("x", "y")
+
+
+class TestStructuredFailureSignal:
+    """The raised TransformFailedError carries an OllamaFailure so the pure
+    classifier can distinguish cases downstream (see #37)."""
+
+    def test_http_404_carries_http_status_kind_and_code(
+        self,
+        server: tuple[str, list[dict[str, Any]], dict[str, ServerBehaviour]],
+    ) -> None:
+        url, _captured, state = server
+
+        def behaviour(handler: BaseHTTPRequestHandler, _body: bytes) -> None:
+            handler.send_response(404)
+            handler.send_header("Content-Length", "0")
+            handler.end_headers()
+
+        _set(state, behaviour)
+
+        backend = OllamaBackend(model_name="m", base_url=url, timeout_s=5.0)
+        with pytest.raises(TransformFailedError) as exc_info:
+            backend.transform("x", "y")
+        failure = exc_info.value.failure
+        assert failure.kind is FailureKind.HTTP_STATUS
+        assert failure.status_code == 404
+
+    def test_500_carries_http_status_kind_and_code(
+        self,
+        server: tuple[str, list[dict[str, Any]], dict[str, ServerBehaviour]],
+    ) -> None:
+        url, _captured, state = server
+
+        def behaviour(handler: BaseHTTPRequestHandler, _body: bytes) -> None:
+            handler.send_response(500)
+            handler.send_header("Content-Length", "0")
+            handler.end_headers()
+
+        _set(state, behaviour)
+
+        backend = OllamaBackend(model_name="m", base_url=url, timeout_s=5.0)
+        with pytest.raises(TransformFailedError) as exc_info:
+            backend.transform("x", "y")
+        failure = exc_info.value.failure
+        assert failure.kind is FailureKind.HTTP_STATUS
+        assert failure.status_code == 500
+
+    def test_connection_refused_carries_connection_refused_kind(
+        self, mocker: Any
+    ) -> None:
+        # A genuine connection-refused depends on the host's TCP stack
+        # sending RST for a closed port; some sandboxes silently drop the
+        # SYN and the client times out instead. Drive the exact transport
+        # error the backend must map so the assertion is deterministic.
+        mocker.patch(
+            "dictatem.transform.ollama_backend.urllib.request.urlopen",
+            side_effect=urllib.error.URLError(ConnectionRefusedError()),
+        )
+        backend = OllamaBackend(
+            model_name="m",
+            base_url="http://127.0.0.1:1",
+            timeout_s=2.0,
+        )
+        with pytest.raises(TransformFailedError) as exc_info:
+            backend.transform("x", "y")
+        assert exc_info.value.failure.kind is FailureKind.CONNECTION_REFUSED
+
+    def test_generic_url_error_carries_url_error_kind(self, mocker: Any) -> None:
+        mocker.patch(
+            "dictatem.transform.ollama_backend.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("Name or service not known"),
+        )
+        backend = OllamaBackend(
+            model_name="m",
+            base_url="http://nope.invalid",
+            timeout_s=2.0,
+        )
+        with pytest.raises(TransformFailedError) as exc_info:
+            backend.transform("x", "y")
+        assert exc_info.value.failure.kind is FailureKind.URL_ERROR
+
+    def test_malformed_json_carries_malformed_kind(
+        self,
+        server: tuple[str, list[dict[str, Any]], dict[str, ServerBehaviour]],
+    ) -> None:
+        url, _captured, state = server
+
+        def behaviour(handler: BaseHTTPRequestHandler, _body: bytes) -> None:
+            handler.send_response(200)
+            handler.send_header("Content-Length", "5")
+            handler.end_headers()
+            handler.wfile.write(b"{not}")
+
+        _set(state, behaviour)
+
+        backend = OllamaBackend(model_name="m", base_url=url, timeout_s=5.0)
+        with pytest.raises(TransformFailedError) as exc_info:
+            backend.transform("x", "y")
+        assert exc_info.value.failure.kind is FailureKind.MALFORMED
+
+    def test_timeout_carries_timeout_kind(
+        self,
+        server: tuple[str, list[dict[str, Any]], dict[str, ServerBehaviour]],
+    ) -> None:
+        url, _captured, state = server
+
+        def behaviour(_handler: BaseHTTPRequestHandler, _body: bytes) -> None:
+            time.sleep(0.5)
+
+        _set(state, behaviour)
+
+        backend = OllamaBackend(model_name="m", base_url=url, timeout_s=0.1)
+        with pytest.raises(TransformFailedError) as exc_info:
+            backend.transform("x", "y")
+        assert exc_info.value.failure.kind is FailureKind.TIMEOUT

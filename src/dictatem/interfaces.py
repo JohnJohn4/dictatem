@@ -12,7 +12,12 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from dictatem.types import AudioChunk, RecordingMode, TranscriptionResult
+    from dictatem.types import (
+        AudioChunk,
+        HardwareProfile,
+        RecordingMode,
+        TranscriptionResult,
+    )
 
 
 @runtime_checkable
@@ -102,6 +107,20 @@ class AudioCapture(Protocol):
 
     def stop(self) -> AudioChunk:
         """Stop capturing and return the accumulated audio as a single chunk."""
+        ...
+
+
+@runtime_checkable
+class HardwareProbe(Protocol):
+    """Detect the machine's transcription-relevant hardware.
+
+    Implementations inspect CUDA presence and VRAM and degrade gracefully to
+    a CPU profile when neither is available. Consulted exactly once on first
+    run; the resolved result is baked into the config (see ADR-0007).
+    """
+
+    def probe(self) -> HardwareProfile:
+        """Return a snapshot of CUDA availability and total VRAM."""
         ...
 
 

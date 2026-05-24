@@ -16,6 +16,7 @@ from dictatem.exceptions import TransformFailedError
 from dictatem.state import Event, State, StateMachine
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
 from dictatem.transform.detector import TriggerDetector
+from dictatem.transform.failure import OllamaFailure
 from dictatem.transform.lifecycle import TransformLifecycle
 from tests.fakes import (
     FakeAudioCapture,
@@ -391,6 +392,187 @@ class TestTransformFailure:
         assert keystroke.total_backspaces == 0
         assert keystroke.paste_count == 1
         # Overlay flashed an error.
+        assert any(c[0] == "show_error" for c in overlay.calls)
+
+
+# ── Actionable failure messaging (#37) ───────────────────────────────
+
+
+def _make_core(
+    *,
+    sm: StateMachine,
+    audio: FakeAudioCapture,
+    lifecycle: TranscribeLifecycle,
+    overlay: FakeOverlayRenderer,
+    tray: FakeTrayRenderer,
+    clipboard: FakeClipboardIO,
+    keystroke: FakeKeystrokeSender,
+    foreground: FakeForegroundTracker,
+    transform_lifecycle: TransformLifecycle,
+    trigger_detector: TriggerDetector,
+    model_name: str = "gemma4:e4b",
+    base_url: str = "http://localhost:11434",
+) -> DaemonCore:
+    return DaemonCore(
+        state_machine=sm,
+        audio_capture=audio,
+        lifecycle=lifecycle,
+        overlay=overlay,
+        tray=tray,
+        clipboard=clipboard,
+        keystroke=keystroke,
+        foreground=foreground,
+        transform_lifecycle=transform_lifecycle,
+        trigger_detector=trigger_detector,
+        transform_enabled=True,
+        last_paste_ttl_s=300.0,
+        transform_model_name=model_name,
+        transform_base_url=base_url,
+    )
+
+
+class TestActionableFailureMessaging:
+    def _run_failure(
+        self,
+        *,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        failure: OllamaFailure | None,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+        backend._result = "summarize"
+        transform_backend.queue_error(
+            TransformFailedError("boom", failure=failure)
+        )
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+    def test_unreachable_message_points_to_readme(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        lifecycle: TranscribeLifecycle,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+        transform_lifecycle: TransformLifecycle,
+        trigger_detector: TriggerDetector,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+    ) -> None:
+        core = _make_core(
+            sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
+            clipboard=clipboard, keystroke=keystroke, foreground=foreground,
+            transform_lifecycle=transform_lifecycle,
+            trigger_detector=trigger_detector,
+        )
+        self._run_failure(
+            core=core, backend=backend, transform_backend=transform_backend,
+            failure=OllamaFailure.connection_refused(),
+        )
+
+        assert tray.notifications, "expected a tray notification"
+        _title, message = tray.notifications[-1]
+        assert "README" in message
+        # Document untouched + overlay flashed.
+        assert keystroke.total_backspaces == 0
+        assert any(c[0] == "show_error" for c in overlay.calls)
+
+    def test_not_running_message_mentions_running(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        lifecycle: TranscribeLifecycle,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+        transform_lifecycle: TransformLifecycle,
+        trigger_detector: TriggerDetector,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+    ) -> None:
+        core = _make_core(
+            sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
+            clipboard=clipboard, keystroke=keystroke, foreground=foreground,
+            transform_lifecycle=transform_lifecycle,
+            trigger_detector=trigger_detector,
+        )
+        self._run_failure(
+            core=core, backend=backend, transform_backend=transform_backend,
+            failure=OllamaFailure.connection_refused(),
+        )
+
+        _title, message = tray.notifications[-1]
+        lowered = message.lower()
+        assert "running" in lowered and "ollama" in lowered
+
+    def test_model_missing_message_names_model_and_pull(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        lifecycle: TranscribeLifecycle,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+        transform_lifecycle: TransformLifecycle,
+        trigger_detector: TriggerDetector,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+    ) -> None:
+        core = _make_core(
+            sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
+            clipboard=clipboard, keystroke=keystroke, foreground=foreground,
+            transform_lifecycle=transform_lifecycle,
+            trigger_detector=trigger_detector,
+            model_name="llama3.2:1b",
+        )
+        self._run_failure(
+            core=core, backend=backend, transform_backend=transform_backend,
+            failure=OllamaFailure.http_status(404),
+        )
+
+        _title, message = tray.notifications[-1]
+        assert "llama3.2:1b" in message
+        assert "ollama pull llama3.2:1b" in message
+
+    def test_failure_without_structured_signal_still_notifies(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        lifecycle: TranscribeLifecycle,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+        transform_lifecycle: TransformLifecycle,
+        trigger_detector: TriggerDetector,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+    ) -> None:
+        """A bare TransformFailedError (failure=None) must not crash and
+        should still surface a non-empty message."""
+        core = _make_core(
+            sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
+            clipboard=clipboard, keystroke=keystroke, foreground=foreground,
+            transform_lifecycle=transform_lifecycle,
+            trigger_detector=trigger_detector,
+        )
+        self._run_failure(
+            core=core, backend=backend, transform_backend=transform_backend,
+            failure=None,
+        )
+
+        assert tray.notifications, "expected a tray notification"
+        _title, message = tray.notifications[-1]
+        assert message.strip() != ""
         assert any(c[0] == "show_error" for c in overlay.calls)
 
 

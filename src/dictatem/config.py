@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from dictatem.interfaces import HardwareProbe
+
 logger = logging.getLogger(__name__)
 
 VALID_OVERLAY_POSITIONS = frozenset({
@@ -43,6 +45,7 @@ class HotkeyConfig:
 class ModelConfig:
     name: str = "large-v3-turbo"
     compute_type: str = "float16"
+    device: str = "cuda"
     language: str | None = None
     vad_filter: bool = True
     idle_unload_minutes: int = 30
@@ -127,13 +130,17 @@ class Config:
     transform: TransformConfig = field(default_factory=TransformConfig)
 
 
-def load_config(path: Path) -> Config:
+def load_config(path: Path, probe: HardwareProbe | None = None) -> Config:
     """Load configuration from *path*, falling back to defaults for missing/invalid values.
 
-    If the file does not exist, a default config is written to *path* and returned.
+    If the file does not exist this is a *first run*: when a *probe* is given,
+    the machine is probed once, the Hardware Tier resolved, and concrete values
+    (including ``device``) are baked into the written config (see ADR-0007).
+    Without a probe, a plain default config is written. An existing file is
+    read unchanged and the probe is never consulted.
     """
     if not path.exists():
-        cfg = Config()
+        cfg = _bake_first_run_config(probe) if probe is not None else Config()
         write_config(cfg, path)
         return cfg
 
@@ -144,6 +151,38 @@ def load_config(path: Path) -> Config:
         return Config()
 
     return _build_config(raw)
+
+
+def _bake_first_run_config(probe: HardwareProbe) -> Config:
+    """Probe the machine once, resolve the tier, and bake concrete values.
+
+    Imported lazily so ``config`` stays free of hardware-package import cost
+    on the common (existing-file) path. The resolver is pure logic.
+    """
+    from dictatem.hardware.resolver import HardwareTierResolver
+
+    profile = probe.probe()
+    resolved = HardwareTierResolver().resolve(profile)
+
+    vram = "unknown VRAM" if profile.total_vram_mb is None else f"{profile.total_vram_mb} MB"
+    gpu = "CUDA" if profile.cuda_available else "no CUDA"
+    logger.info(
+        "Detected %s, %s -> tier %s: %s/%s/%s, transform %s",
+        gpu,
+        vram,
+        resolved.tier,
+        resolved.model,
+        resolved.device,
+        resolved.compute_type,
+        resolved.transform_model,
+    )
+
+    cfg = Config()
+    cfg.model.name = resolved.model
+    cfg.model.device = resolved.device
+    cfg.model.compute_type = resolved.compute_type
+    cfg.transform.model_name = resolved.transform_model
+    return cfg
 
 
 def write_config(cfg: Config, path: Path) -> None:
