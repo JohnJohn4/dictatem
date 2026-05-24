@@ -1,0 +1,3 @@
+# The macOS installer is run by /bin/sh — it must stay LF so the shebang and
+# `set -eu` are not corrupted by CRLF on a Windows checkout/commit.
+install.sh text eol=lf
