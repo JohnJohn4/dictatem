@@ -173,6 +173,31 @@ class TransformBackend(Protocol):
 
 
 @runtime_checkable
+class AutostartRegistrar(Protocol):
+    """Register/unregister the daemon's OS autostart (start-at-login) entry.
+
+    The daemon owns autostart and reconciles the OS entry to
+    ``config.startup.autostart`` on launch (see ADR-0012). Implementations write
+    the per-OS entry pointing at the installed ``dictatem`` launcher — on Windows
+    the ``HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run`` key. The
+    reconcile *decision* is pure (``autostart.reconcile``); this Protocol is only
+    the I/O seam, with an in-memory fake in tests.
+    """
+
+    def enable(self) -> None:
+        """Register the autostart entry. Idempotent — a no-op if present."""
+        ...
+
+    def disable(self) -> None:
+        """Remove the autostart entry. Idempotent — a no-op if absent."""
+        ...
+
+    def is_enabled(self) -> bool:
+        """Return whether the autostart entry currently exists."""
+        ...
+
+
+@runtime_checkable
 class OverlayRenderer(Protocol):
     """Render the on-screen recording/transcribing overlay pill."""
 

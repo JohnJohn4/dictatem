@@ -29,6 +29,10 @@ class MenuItem(enum.Enum):
     STOP = "stop"
     PRELOAD = "preload"
     UNLOAD = "unload"
+    # "Start at login" — a checkable toggle bound to config.startup.autostart.
+    # Always enabled; its checked state is driven separately by the daemon, not
+    # by TrayState (which tracks enable/disable only). See ADR-0012.
+    AUTOSTART = "autostart"
     SHOW_LOG = "show_log"
     RESTART = "restart"
     QUIT = "quit"

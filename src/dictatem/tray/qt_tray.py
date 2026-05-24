@@ -22,6 +22,7 @@ _MENU_LABELS: dict[MenuItem, str] = {
     MenuItem.STOP: "Stop Recording",
     MenuItem.PRELOAD: "Preload Model",
     MenuItem.UNLOAD: "Unload Model",
+    MenuItem.AUTOSTART: "Start at Login",
     MenuItem.SHOW_LOG: "Show Log",
     MenuItem.RESTART: "Restart",
     MenuItem.QUIT: "Quit",
@@ -118,6 +119,8 @@ class QtTrayIcon:
         self.on_stop: Callable[[], None] | None = None
         self.on_preload: Callable[[], None] | None = None
         self.on_unload: Callable[[], None] | None = None
+        # "Start at Login" toggle — receives the new checked state (ADR-0012).
+        self.on_autostart_toggled: Callable[[bool], None] | None = None
         self.on_show_log: Callable[[], None] | None = None
         self.on_restart: Callable[[], None] | None = None
         self.on_quit: Callable[[], None] | None = None
@@ -150,9 +153,24 @@ class QtTrayIcon:
 
         for item in MenuItem:
             action = QAction(_MENU_LABELS[item], self._parent)
-            action.triggered.connect(callback_map[item])
+            if item is MenuItem.AUTOSTART:
+                # Checkable "Start at Login" toggle. triggered passes the new
+                # checked state straight through to the daemon, which flips the
+                # config flag and reconciles the OS entry (ADR-0012).
+                action.setCheckable(True)
+                action.triggered.connect(self._on_autostart_triggered)
+            else:
+                action.triggered.connect(callback_map[item])
             self._actions[item] = action
             self._menu.addAction(action)
+
+    def _on_autostart_triggered(self, checked: bool) -> None:
+        if self.on_autostart_toggled is not None:
+            self.on_autostart_toggled(checked)
+
+    def set_autostart_checked(self, checked: bool) -> None:
+        """Reflect the current ``config.startup.autostart`` flag in the menu."""
+        self._actions[MenuItem.AUTOSTART].setChecked(checked)
 
     def update_state(self, state: TrayState) -> None:
         # The tray glyph is static brand identity (ADR-0006); only menu-item

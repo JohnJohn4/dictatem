@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from dictatem.hotkey.classifier import HotkeyClassifier, HotkeyEvent, KeyAction
     from dictatem.interfaces import (
         AudioCapture,
+        AutostartRegistrar,
         ClipboardIO,
         ForegroundTracker,
         KeystrokeSender,
@@ -216,6 +217,8 @@ class DaemonCore:
         transform_model_name: str = "",
         transform_base_url: str = "",
         latency_monitor: LatencyMonitor | None = None,
+        autostart_registrar: AutostartRegistrar | None = None,
+        persist_autostart: Callable[[bool], None] | None = None,
     ) -> None:
         self._sm = state_machine
         self._audio_capture = audio_capture
@@ -246,6 +249,29 @@ class DaemonCore:
         self._transform_thread: threading.Thread | None = None
         # --- Latency tip (one-shot, see ADR-0007) ---
         self._latency_monitor = latency_monitor
+        # --- Autostart toggle (see ADR-0012) ---
+        self._autostart_registrar = autostart_registrar
+        self._persist_autostart = persist_autostart
+
+    def on_tray_set_autostart(self, enabled: bool) -> None:
+        """Apply the tray "Start at login" toggle (see ADR-0012).
+
+        Reconciles the OS autostart entry to *enabled* via the registrar and
+        persists the new ``config.startup.autostart`` flag so it survives a
+        restart — keeping the flag the single source of truth. Wrapped so a
+        registry hiccup can never crash the daemon.
+        """
+        try:
+            if self._autostart_registrar is not None:
+                from dictatem.autostart.reconcile import apply_autostart
+
+                apply_autostart(
+                    desired=enabled, registrar=self._autostart_registrar
+                )
+            if self._persist_autostart is not None:
+                self._persist_autostart(enabled)
+        except Exception:
+            logger.error("Error applying autostart toggle", exc_info=True)
 
     def on_hotkey_event(self, event: Event, *, now_ms: int = 0) -> None:
         """Feed an event to the state machine and execute resulting commands."""
@@ -747,7 +773,9 @@ def _start_windows_daemon() -> None:
     from PySide6.QtWidgets import QApplication  # type: ignore[import-not-found]
 
     from dictatem.audio.sounddevice_capture import SoundDeviceCapture
-    from dictatem.config import load_config
+    from dictatem.autostart.reconcile import apply_autostart
+    from dictatem.autostart.win32_registrar import Win32AutostartRegistrar
+    from dictatem.config import load_config, write_config
     from dictatem.hardware.nvidia_probe import NvidiaHardwareProbe
     from dictatem.hotkey.classifier import HotkeyClassifier
     from dictatem.hotkey.wh_keyboard_ll import WHKeyboardLLHook
@@ -815,6 +843,15 @@ def _start_windows_daemon() -> None:
         getattr(logging, config.logging.level.upper(), logging.INFO)
     )
 
+    # Reconcile the OS autostart entry to config.startup.autostart on launch
+    # (#55 / ADR-0012). The daemon — not the installer — owns autostart, so the
+    # flag is the single source of truth: register the HKCU Run entry when the
+    # flag is on and it's missing, remove it when the flag is off and it's
+    # present. apply_autostart runs the pure decision and applies it via the
+    # registrar adapter; the tray "Start at login" toggle flips the same flag.
+    autostart_registrar = Win32AutostartRegistrar()
+    apply_autostart(desired=config.startup.autostart, registrar=autostart_registrar)
+
     app = QApplication(sys.argv)
 
     audio_capture = SoundDeviceCapture(config)
@@ -861,6 +898,12 @@ def _start_windows_daemon() -> None:
 
     latency_monitor = LatencyMonitor(clock=time.monotonic)
 
+    def _persist_autostart(enabled: bool) -> None:
+        # Flip the live flag and rewrite the config so the toggle survives a
+        # restart. The config file is the single source of truth (ADR-0012).
+        config.startup.autostart = enabled
+        write_config(config, config_path)
+
     daemon = DaemonCore(
         state_machine=sm,
         audio_capture=audio_capture,
@@ -880,12 +923,16 @@ def _start_windows_daemon() -> None:
         transform_model_name=config.transform.model_name,
         transform_base_url=config.transform.base_url,
         latency_monitor=latency_monitor,
+        autostart_registrar=autostart_registrar,
+        persist_autostart=_persist_autostart,
     )
 
     tray_icon.on_start = daemon.on_tray_start_recording
     tray_icon.on_stop = daemon.on_tray_stop_recording
     tray_icon.on_preload = daemon.on_tray_preload
     tray_icon.on_unload = daemon.on_tray_unload
+    tray_icon.on_autostart_toggled = daemon.on_tray_set_autostart
+    tray_icon.set_autostart_checked(config.startup.autostart)
     tray_icon.on_quit = lambda: daemon.on_tray_quit(app.quit)
 
     classifier = HotkeyClassifier(

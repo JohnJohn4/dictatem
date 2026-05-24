@@ -14,6 +14,7 @@ EXPECTED_PROTOCOLS = [
     "AudioCapture",
     "TranscriberBackend",
     "TransformBackend",
+    "AutostartRegistrar",
     "OverlayRenderer",
     "TrayRenderer",
 ]
@@ -60,6 +61,11 @@ class TestProtocolSignatures:
 
     def test_transform_backend_methods(self) -> None:
         assert callable(getattr(interfaces.TransformBackend, "transform", None))
+
+    def test_autostart_registrar_methods(self) -> None:
+        assert callable(getattr(interfaces.AutostartRegistrar, "enable", None))
+        assert callable(getattr(interfaces.AutostartRegistrar, "disable", None))
+        assert callable(getattr(interfaces.AutostartRegistrar, "is_enabled", None))
 
     def test_overlay_renderer_methods(self) -> None:
         assert callable(getattr(interfaces.OverlayRenderer, "show", None))
