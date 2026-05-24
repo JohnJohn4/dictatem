@@ -18,6 +18,8 @@ VALID_OVERLAY_POSITIONS = frozenset({
     "top-left", "top-right", "bottom-left", "bottom-right",
 })
 
+VALID_MODIFIER_NAMES = frozenset({"win", "alt", "ctrl", "shift"})
+
 VALID_LOG_LEVELS = frozenset({
     "debug", "info", "warning", "error", "critical",
 })
@@ -236,6 +238,18 @@ def _validate_field(
 ) -> Any:
     """Return *value* if valid, otherwise log a warning and return *default*."""
     positive_fields = _POSITIVE_INT_FIELDS.get(section, set())
+
+    # Validate [hotkey].modifiers: all names must be known and result non-empty.
+    if section == "hotkey" and key == "modifiers" and isinstance(value, tuple):
+        valid_names = tuple(n for n in value if n in VALID_MODIFIER_NAMES)
+        if not valid_names or len(valid_names) != len(value):
+            logger.warning(
+                "Invalid value for [%s].%s: %r — using default %r",
+                section, key, value, default,
+            )
+            return default
+        return value
+
     invalid = (
         (key in positive_fields and isinstance(value, int) and value <= 0)
         or (section == "overlay" and key == "position"

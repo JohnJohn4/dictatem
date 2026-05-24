@@ -481,3 +481,58 @@ class TestTransformOllamaKnobs:
         write_config(cfg, path)
         cfg2 = load_config(path)
         assert cfg2.transform == cfg.transform
+
+
+class TestHotkeyModifiersValidation:
+    """[hotkey].modifiers validates names and falls back to default on invalid input."""
+
+    def test_valid_modifiers_loaded(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text('modifiers = ["ctrl", "win"]\n'.join(["[hotkey]\n", ""]))
+        cfg = load_config(path)
+        assert cfg.hotkey.modifiers == ("ctrl", "win")
+
+    def test_unknown_modifier_names_fall_back_to_default(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text('[hotkey]\nmodifiers = ["bogus", "unknown"]\n')
+        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert cfg.hotkey.modifiers == ("win", "alt")
+        assert any(
+            "modifiers" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        )
+
+    def test_empty_modifiers_list_falls_back_to_default(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text("[hotkey]\nmodifiers = []\n")
+        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert cfg.hotkey.modifiers == ("win", "alt")
+        assert any(
+            "modifiers" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        )
+
+    def test_mixed_valid_and_unknown_falls_back_to_default(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text('[hotkey]\nmodifiers = ["win", "turbo"]\n')
+        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert cfg.hotkey.modifiers == ("win", "alt")
+        assert any(
+            "modifiers" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        )
+
+    def test_all_four_valid_names_accepted(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text('[hotkey]\nmodifiers = ["win", "alt", "ctrl", "shift"]\n')
+        cfg = load_config(path)
+        assert cfg.hotkey.modifiers == ("win", "alt", "ctrl", "shift")

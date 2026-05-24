@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from dictatem.hotkey.classifier import (
     VK_ESCAPE,
+    VK_LCONTROL,
     VK_LEFT,
     VK_LMENU,
+    VK_LSHIFT,
     VK_LWIN,
+    VK_RCONTROL,
     VK_RMENU,
+    VK_RSHIFT,
     VK_RWIN,
     HookDecision,
     HotkeyClassifier,
@@ -164,3 +168,125 @@ class TestEdgeCases:
 
         _decision, event = c.process_event(VK_LMENU, KeyAction.KEY_UP, 0)
         assert event is None
+
+
+class TestConfigurableModifiers:
+    """HotkeyClassifier honours any configured modifier set."""
+
+    def test_ctrl_win_combo_fires_tap(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "win"))
+
+        c.process_event(VK_LCONTROL, KeyAction.KEY_DOWN, 0)
+        c.process_event(VK_LWIN, KeyAction.KEY_DOWN, 10)
+
+        _decision, event = c.process_event(VK_LWIN, KeyAction.KEY_UP, 150)
+        assert event == HotkeyEvent.TAP
+
+    def test_ctrl_win_does_not_treat_win_alt_as_combo(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "win"))
+
+        c.process_event(VK_LMENU, KeyAction.KEY_DOWN, 0)
+        c.process_event(VK_LWIN, KeyAction.KEY_DOWN, 10)
+
+        _decision, event = c.process_event(VK_LWIN, KeyAction.KEY_UP, 150)
+        assert event is None
+
+    def test_right_ctrl_right_win_fires_tap(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "win"))
+
+        c.process_event(VK_RCONTROL, KeyAction.KEY_DOWN, 0)
+        c.process_event(VK_RWIN, KeyAction.KEY_DOWN, 10)
+
+        _decision, event = c.process_event(VK_RWIN, KeyAction.KEY_UP, 150)
+        assert event == HotkeyEvent.TAP
+
+    def test_single_modifier_ctrl_fires_tap(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl",))
+
+        c.process_event(VK_LCONTROL, KeyAction.KEY_DOWN, 0)
+
+        _decision, event = c.process_event(VK_LCONTROL, KeyAction.KEY_UP, 100)
+        assert event == HotkeyEvent.TAP
+
+    def test_single_modifier_ctrl_fires_hold_start(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl",))
+
+        c.process_event(VK_LCONTROL, KeyAction.KEY_DOWN, 0)
+
+        event = c.tick(210)
+        assert event == HotkeyEvent.HOLD_START
+
+    def test_shift_modifier_fires_tap(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("shift",))
+
+        c.process_event(VK_LSHIFT, KeyAction.KEY_DOWN, 0)
+
+        _decision, event = c.process_event(VK_LSHIFT, KeyAction.KEY_UP, 100)
+        assert event == HotkeyEvent.TAP
+
+    def test_right_shift_fires_tap(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("shift",))
+
+        c.process_event(VK_RSHIFT, KeyAction.KEY_DOWN, 0)
+
+        _decision, event = c.process_event(VK_RSHIFT, KeyAction.KEY_UP, 100)
+        assert event == HotkeyEvent.TAP
+
+    def test_three_modifier_combo_requires_all_three(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "shift", "win"))
+
+        # Only ctrl + win — shift missing, no combo
+        c.process_event(VK_LCONTROL, KeyAction.KEY_DOWN, 0)
+        c.process_event(VK_LWIN, KeyAction.KEY_DOWN, 10)
+
+        _decision, event = c.process_event(VK_LWIN, KeyAction.KEY_UP, 150)
+        assert event is None
+
+    def test_three_modifier_combo_fires_when_all_held(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "shift", "win"))
+
+        c.process_event(VK_LCONTROL, KeyAction.KEY_DOWN, 0)
+        c.process_event(VK_LSHIFT, KeyAction.KEY_DOWN, 5)
+        c.process_event(VK_LWIN, KeyAction.KEY_DOWN, 10)
+
+        _decision, event = c.process_event(VK_LWIN, KeyAction.KEY_UP, 150)
+        assert event == HotkeyEvent.TAP
+
+    def test_empty_modifiers_combo_never_held(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=())
+
+        # Press every known modifier — still no combo
+        for vk in (VK_LWIN, VK_RWIN, VK_LMENU, VK_RMENU,
+                   VK_LCONTROL, VK_RCONTROL, VK_LSHIFT, VK_RSHIFT):
+            c.process_event(vk, KeyAction.KEY_DOWN, 0)
+
+        assert c.combo_held is False
+
+    def test_empty_modifiers_tick_never_emits_hold(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=())
+
+        for vk in (VK_LWIN, VK_RWIN, VK_LMENU, VK_RMENU,
+                   VK_LCONTROL, VK_RCONTROL, VK_LSHIFT, VK_RSHIFT):
+            c.process_event(vk, KeyAction.KEY_DOWN, 0)
+
+        event = c.tick(500)
+        assert event is None
+
+    def test_all_unknown_modifiers_combo_never_held(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("bogus", "unknown"))
+
+        for vk in (VK_LWIN, VK_RWIN, VK_LMENU, VK_RMENU,
+                   VK_LCONTROL, VK_RCONTROL, VK_LSHIFT, VK_RSHIFT):
+            c.process_event(vk, KeyAction.KEY_DOWN, 0)
+
+        assert c.combo_held is False
+
+    def test_default_modifiers_unchanged(self) -> None:
+        """Constructor default still resolves to win+alt (backwards compat)."""
+        c = HotkeyClassifier(tap_threshold_ms=200)
+
+        c.process_event(VK_LMENU, KeyAction.KEY_DOWN, 0)
+        c.process_event(VK_LWIN, KeyAction.KEY_DOWN, 10)
+
+        _decision, event = c.process_event(VK_LWIN, KeyAction.KEY_UP, 150)
+        assert event == HotkeyEvent.TAP
