@@ -34,6 +34,7 @@ if TYPE_CHECKING:
     )
     from dictatem.overlay.state import OverlayState
     from dictatem.state import StateMachine
+    from dictatem.transcribe.latency_monitor import LatencyMonitor
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
     from dictatem.transform.detector import TriggerDetector
     from dictatem.transform.lifecycle import TransformLifecycle
@@ -214,6 +215,7 @@ class DaemonCore:
         last_paste_ttl_s: float = 300.0,
         transform_model_name: str = "",
         transform_base_url: str = "",
+        latency_monitor: LatencyMonitor | None = None,
     ) -> None:
         self._sm = state_machine
         self._audio_capture = audio_capture
@@ -242,6 +244,8 @@ class DaemonCore:
         self._transform_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._transform_active: bool = False
         self._transform_thread: threading.Thread | None = None
+        # --- Latency tip (one-shot, see ADR-0007) ---
+        self._latency_monitor = latency_monitor
 
     def on_hotkey_event(self, event: Event, *, now_ms: int = 0) -> None:
         """Feed an event to the state machine and execute resulting commands."""
@@ -348,7 +352,14 @@ class DaemonCore:
 
         self._transcription_active = True
 
+        from dictatem.types import SAMPLE_RATE
+
         def _worker(captured_audio: object) -> None:
+            # Only one transcription runs at a time (the state machine gates
+            # it), so the worker thread can safely drive the LatencyMonitor.
+            audio_duration_s = len(captured_audio) / SAMPLE_RATE  # type: ignore[arg-type]
+            if self._latency_monitor is not None:
+                self._latency_monitor.begin()
             try:
                 result = self._lifecycle.transcribe(captured_audio)  # type: ignore[arg-type]
             except TranscriptionFailedError:
@@ -359,6 +370,15 @@ class DaemonCore:
                 self._transcription_queue.put(("unexpected_error", exc))
             else:
                 self._transcription_queue.put(("ok", result))
+                # One-shot "transcriptions are slow" tip (see ADR-0007):
+                # surface ONE smaller-model hint when slowness is consistent.
+                # Notifications must run on the Qt GUI thread, so route the
+                # tip through the result queue rather than calling the tray
+                # from this worker thread.
+                if self._latency_monitor is not None and (
+                    self._latency_monitor.end(audio_duration_s)
+                ):
+                    self._transcription_queue.put(("latency_tip", None))
 
         t = threading.Thread(
             target=_worker, args=(audio,), daemon=True, name="transcribe-worker"
@@ -375,6 +395,18 @@ class DaemonCore:
         try:
             kind, data = self._transcription_queue.get_nowait()
         except queue.Empty:
+            return
+
+        # The one-shot latency tip (see ADR-0007) is enqueued AFTER the "ok"
+        # result, so by the time it is drained on a later tick the ok result
+        # has already cleared ``_transcription_active``. Handle it here, before
+        # the guard, so it is not silently discarded.
+        if kind == "latency_tip":
+            self._tray.show_notification(
+                "Dictatem",
+                "Transcriptions are slow — switching to a smaller model may "
+                "help. See the README.",
+            )
             return
 
         if not self._transcription_active:
@@ -726,6 +758,7 @@ def _start_windows_daemon() -> None:
     from dictatem.paste.win32_keystroke import Win32KeystrokeSender
     from dictatem.state import StateMachine
     from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
+    from dictatem.transcribe.latency_monitor import LatencyMonitor
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
     from dictatem.transform.detector import TriggerDetector
     from dictatem.transform.lifecycle import TransformLifecycle
@@ -803,6 +836,8 @@ def _start_windows_daemon() -> None:
 
     sm = StateMachine(tap_threshold_ms=config.hotkey.tap_threshold_ms)
 
+    latency_monitor = LatencyMonitor(clock=time.monotonic)
+
     daemon = DaemonCore(
         state_machine=sm,
         audio_capture=audio_capture,
@@ -821,6 +856,7 @@ def _start_windows_daemon() -> None:
         last_paste_ttl_s=float(config.transform.last_paste_ttl_s),
         transform_model_name=config.transform.model_name,
         transform_base_url=config.transform.base_url,
+        latency_monitor=latency_monitor,
     )
 
     tray_icon.on_start = daemon.on_tray_start_recording
