@@ -95,6 +95,14 @@ If you see `(No speech detected)`, check your default microphone in Windows soun
 
 ## Running
 
+If you installed with `uv tool install` (see [Installation](#installation)), launch the daemon with the `dictatem` command — it runs windowless, with no console pop:
+
+```powershell
+dictatem
+```
+
+From a development checkout (`uv sync`), the module form also works:
+
 ```powershell
 uv run python -m dictatem
 ```
