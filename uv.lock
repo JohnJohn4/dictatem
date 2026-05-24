@@ -196,6 +196,13 @@ dependencies = [
 [package.optional-dependencies]
 runtime = [
     { name = "faster-whisper" },
+    { name = "nvidia-ml-py" },
+    { name = "pyside6" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
+    { name = "sounddevice" },
+]
+runtime-gpu = [
+    { name = "faster-whisper" },
     { name = "nvidia-cublas-cu12" },
     { name = "nvidia-cudnn-cu12" },
     { name = "nvidia-ml-py" },
@@ -215,16 +222,17 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dictatem", extras = ["runtime"], marker = "extra == 'runtime-gpu'" },
     { name = "faster-whisper", marker = "extra == 'runtime'", specifier = ">=1.1" },
     { name = "numpy", specifier = ">=1.26" },
-    { name = "nvidia-cublas-cu12", marker = "extra == 'runtime'" },
-    { name = "nvidia-cudnn-cu12", marker = "extra == 'runtime'" },
+    { name = "nvidia-cublas-cu12", marker = "extra == 'runtime-gpu'" },
+    { name = "nvidia-cudnn-cu12", marker = "extra == 'runtime-gpu'" },
     { name = "nvidia-ml-py", marker = "extra == 'runtime'", specifier = ">=12" },
     { name = "pyside6", marker = "extra == 'runtime'", specifier = ">=6.7" },
     { name = "pywin32", marker = "sys_platform == 'win32' and extra == 'runtime'", specifier = ">=306" },
     { name = "sounddevice", marker = "extra == 'runtime'", specifier = ">=0.5" },
 ]
-provides-extras = ["runtime"]
+provides-extras = ["runtime", "runtime-gpu"]
 
 [package.metadata.requires-dev]
 dev = [
