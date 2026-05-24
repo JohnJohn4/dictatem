@@ -829,7 +829,10 @@ def _start_windows_daemon() -> None:
     tray_icon.on_unload = daemon.on_tray_unload
     tray_icon.on_quit = lambda: daemon.on_tray_quit(app.quit)
 
-    classifier = HotkeyClassifier(tap_threshold_ms=config.hotkey.tap_threshold_ms)
+    classifier = HotkeyClassifier(
+        tap_threshold_ms=config.hotkey.tap_threshold_ms,
+        modifiers=config.hotkey.modifiers,
+    )
     classifier.set_active(True)
     bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
     hook = WHKeyboardLLHook(bridge.enqueue_key_event)

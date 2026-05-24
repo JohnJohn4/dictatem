@@ -103,8 +103,8 @@ The daemon starts in the system tray — look for the dictatem icon in the botto
 
 | Action | Hotkey |
 |---|---|
-| Push-to-talk | Hold Win+Alt |
-| Toggle record | Tap Win+Alt |
+| Push-to-talk | Hold Win+Alt (default; see `[hotkey].modifiers`) |
+| Toggle record | Tap Win+Alt (default; see `[hotkey].modifiers`) |
 | Stop toggle recording | Tap Win+Alt again |
 | Cancel recording | Press Esc |
 
@@ -120,7 +120,7 @@ On first launch, a default config is written to `~/.dictatem/config.toml`. Edit 
 
 ```toml
 [hotkey]
-modifiers = ["win", "alt"]
+modifiers = ["win", "alt"]      # Modifier set for the combo; supported: win, alt, ctrl, shift
 tap_threshold_ms = 200          # Below this = toggle tap; above = push-to-talk hold
 
 [model]

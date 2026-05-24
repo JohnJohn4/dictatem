@@ -9,6 +9,10 @@ VK_LWIN = 0x5B
 VK_RWIN = 0x5C
 VK_LMENU = 0xA4
 VK_RMENU = 0xA5
+VK_LCONTROL = 0xA2
+VK_RCONTROL = 0xA3
+VK_LSHIFT = 0xA0
+VK_RSHIFT = 0xA1
 VK_ESCAPE = 0x1B
 VK_LEFT = 0x25
 VK_UP = 0x26
@@ -17,7 +21,17 @@ VK_DOWN = 0x28
 
 WIN_VKS = frozenset({VK_LWIN, VK_RWIN})
 ALT_VKS = frozenset({VK_LMENU, VK_RMENU})
+CTRL_VKS = frozenset({VK_LCONTROL, VK_RCONTROL})
+SHIFT_VKS = frozenset({VK_LSHIFT, VK_RSHIFT})
 ARROW_VKS = frozenset({VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN})
+
+# Map modifier name → VK group
+_MODIFIER_MAP: dict[str, frozenset[int]] = {
+    "win": WIN_VKS,
+    "alt": ALT_VKS,
+    "ctrl": CTRL_VKS,
+    "shift": SHIFT_VKS,
+}
 
 
 class KeyAction(enum.Enum):
@@ -38,8 +52,15 @@ class HookDecision(enum.Enum):
 
 
 class HotkeyClassifier:
-    def __init__(self, tap_threshold_ms: int = 200) -> None:
+    def __init__(
+        self,
+        tap_threshold_ms: int = 200,
+        modifiers: tuple[str, ...] = ("win", "alt"),
+    ) -> None:
         self._tap_threshold_ms = tap_threshold_ms
+        self._modifier_groups: list[frozenset[int]] = [
+            _MODIFIER_MAP[name] for name in modifiers if name in _MODIFIER_MAP
+        ]
         self._keys_down: set[int] = set()
         self._active = False
         self._combo_pressed_at: int | None = None
@@ -50,7 +71,9 @@ class HotkeyClassifier:
 
     @property
     def combo_held(self) -> bool:
-        return bool(self._keys_down & WIN_VKS) and bool(self._keys_down & ALT_VKS)
+        if not self._modifier_groups:
+            return False
+        return all(bool(self._keys_down & group) for group in self._modifier_groups)
 
     def process_event(
         self, vk: int, action: KeyAction, timestamp_ms: int
