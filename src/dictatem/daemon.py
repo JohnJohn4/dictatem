@@ -737,20 +737,27 @@ def _start_windows_daemon() -> None:
     )
     from dictatem.tray.qt_tray import QtTrayIcon
 
-    config_path = Path.home() / ".dictatem" / "config.toml"
-    # First run with no config: probe the machine once and bake the resolved
-    # Hardware Tier (model/device/compute_type + transform tag) into the file.
-    # Existing configs are read unchanged and the probe is not consulted.
-    config = load_config(config_path, probe=NvidiaHardwareProbe())
-
+    # Configure logging before load_config so the first-run Hardware Tier
+    # baking line (logged inside load_config) is actually emitted. Start at
+    # INFO, then drop to the configured level once we've read it.
     logging.basicConfig(
-        level=getattr(logging, config.logging.level.upper(), logging.INFO),
+        level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
     # Library chatter — model-download HTTP requests, hub probes, etc. — is
     # noisy at INFO. Our own load/unload lines tell the user what they need.
     for noisy in ("httpx", "huggingface_hub", "filelock", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    config_path = Path.home() / ".dictatem" / "config.toml"
+    # First run with no config: probe the machine once and bake the resolved
+    # Hardware Tier (model/device/compute_type + transform tag) into the file.
+    # Existing configs are read unchanged and the probe is not consulted.
+    config = load_config(config_path, probe=NvidiaHardwareProbe())
+
+    logging.getLogger().setLevel(
+        getattr(logging, config.logging.level.upper(), logging.INFO)
+    )
 
     app = QApplication(sys.argv)
 
