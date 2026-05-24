@@ -20,6 +20,13 @@ runtime = [
     "PySide6>=6.7",
     "nvidia-ml-py>=12",
     "pywin32>=306; sys_platform == 'win32'",
+    # macOS native adapters use PyObjC: Quartz for CGEventTap/CGEvent (hotkey +
+    # synthetic keystrokes), Cocoa for NSPasteboard/NSWorkspace/NSRunningApplication
+    # (clipboard + foreground), and ApplicationServices for AXIsProcessTrusted.
+    # Gated on darwin (mirrors the pywin32 line) so Windows installs stay lean.
+    "pyobjc-framework-Quartz>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-Cocoa>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices>=10; sys_platform == 'darwin'",
 ]
 runtime-gpu = [
     "dictatem[runtime]",
@@ -60,5 +67,5 @@ pythonPlatform = "All"
 venvPath = "."
 venv = ".venv"
 include = ["src"]
-exclude = ["src/dictatem/audio/sounddevice_capture.py", "src/dictatem/overlay/qt_widget.py", "src/dictatem/tray/qt_tray.py", "src/dictatem/hardware/nvidia_probe.py", "src/dictatem/autostart/win32_registrar.py"]
+exclude = ["src/dictatem/audio/sounddevice_capture.py", "src/dictatem/overlay/qt_widget.py", "src/dictatem/tray/qt_tray.py", "src/dictatem/hardware/nvidia_probe.py", "src/dictatem/autostart/win32_registrar.py", "src/dictatem/hardware/mac_probe.py", "src/dictatem/autostart/launchagent_registrar.py", "src/dictatem/macos/permissions.py", "src/dictatem/macos/permissions_ui.py", "src/dictatem/macos/cg_event_tap.py", "src/dictatem/macos/app_bundle.py", "src/dictatem/paste/ns_clipboard.py", "src/dictatem/paste/cg_keystroke.py", "src/dictatem/paste/ax_foreground.py"]
 typeCheckingMode = "standard"

@@ -756,42 +756,88 @@ class _AbortCommandChain(Exception):
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the Dictatem daemon.
 
-    With no arguments, starts the daemon (Windows only). ``--uninstall`` runs
-    the cleanup that removes the daemon-owned autostart entry and prints the
-    final ``uv tool uninstall dictatem`` step (see ADR-0011); a bare tool
-    uninstall would otherwise orphan that entry.
+    With no arguments, starts the daemon for the current platform: Windows
+    (``win32``) and macOS (``darwin``) are supported; anything else raises
+    ``PlatformNotSupportedError``. ``--uninstall`` runs the cleanup that removes
+    the daemon-owned autostart entry (and, on macOS, the generated ``.app`` and
+    LaunchAgent) and prints the final ``uv tool uninstall dictatem`` step (see
+    ADR-0011); a bare tool uninstall would otherwise orphan that entry.
+    ``--install-macos-app`` generates the local ``.app`` identity shell on macOS
+    (see ADR-0014).
     """
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="dictatem", description="Local voice-dictation daemon for Windows."
+        prog="dictatem",
+        description="Local voice-dictation daemon for Windows and macOS.",
     )
     parser.add_argument(
         "--uninstall",
         action="store_true",
         help="Remove the autostart entry, then print the uv tool uninstall step.",
     )
+    parser.add_argument(
+        "--install-macos-app",
+        action="store_true",
+        help=(
+            "macOS only: generate the ~/Applications/Dictatem.app identity shell "
+            "and register the LaunchAgent (see ADR-0014)."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    if sys.platform != "win32":
+    if sys.platform not in ("win32", "darwin"):
         raise PlatformNotSupportedError(
-            "Dictatem is Windows-only. "
+            "Dictatem supports Windows and macOS only. "
             f"Current platform: {sys.platform}"
         )
+
+    if args.install_macos_app:
+        if sys.platform != "darwin":
+            raise PlatformNotSupportedError(
+                "--install-macos-app is macOS-only. "
+                f"Current platform: {sys.platform}"
+            )
+        _install_macos_app()
+        return
 
     if args.uninstall:
         _run_uninstall()
         return
 
-    _start_windows_daemon()
+    if sys.platform == "darwin":
+        _start_macos_daemon()
+    else:
+        _start_windows_daemon()
 
 
 def _run_uninstall() -> None:
-    """Wire the Windows registrar and run the uninstall cleanup (#58)."""
+    """Run the uninstall cleanup, dispatching to the per-OS registrar (#58).
+
+    On Windows this removes the HKCU Run entry; on macOS it additionally removes
+    the generated ``.app`` shell and LaunchAgent (ADR-0014). Both then print the
+    final ``uv tool uninstall dictatem`` step.
+    """
     from dictatem.autostart.reconcile import run_uninstall
+
+    if sys.platform == "darwin":
+        from dictatem.autostart.launchagent_registrar import LaunchAgentAutostart
+        from dictatem.macos.app_bundle import remove_macos_app
+
+        run_uninstall(registrar=LaunchAgentAutostart(), out=print)
+        remove_macos_app(out=print)
+        return
+
     from dictatem.autostart.win32_registrar import Win32AutostartRegistrar
 
     run_uninstall(registrar=Win32AutostartRegistrar(), out=print)
+
+
+def _install_macos_app() -> None:
+    """Generate the macOS ``.app`` identity shell + LaunchAgent (#61 / ADR-0014)."""
+    from dictatem.macos.app_bundle import install_macos_app
+
+    install_macos_app(out=print)
 
 
 def _start_windows_daemon() -> None:
@@ -1027,4 +1073,230 @@ def _start_windows_daemon() -> None:
         )
 
     logger.info("Dictatem daemon started")
+    app.exec()
+
+
+def _start_macos_daemon() -> None:
+    """Wire macOS adapters and start the Qt event loop (#54 / ADR-0013).
+
+    Mirrors :func:`_start_windows_daemon` but resolves to a CPU tier
+    (faster-whisper on ``device="cpu"``, per ADR-0013 — CTranslate2 has no Metal
+    backend), reuses every cross-platform piece (Qt tray + overlay, sounddevice
+    audio, the CTranslate2 ``TranscriberBackend`` on CPU, the Ollama transform
+    backend, and the pure autostart reconcile), and lazy-imports all PyObjC
+    native adapters here so importing :mod:`dictatem.daemon` never pulls PyObjC
+    (``tests/test_import_safety.py``).
+    """
+    import time
+    from pathlib import Path
+
+    from PySide6.QtCore import QTimer  # type: ignore[import-not-found]
+    from PySide6.QtWidgets import QApplication  # type: ignore[import-not-found]
+
+    from dictatem.audio.sounddevice_capture import SoundDeviceCapture
+    from dictatem.autostart.launchagent_registrar import LaunchAgentAutostart
+    from dictatem.autostart.reconcile import apply_autostart
+    from dictatem.config import load_config, write_config
+    from dictatem.hardware.mac_probe import MacHardwareProbe
+    from dictatem.hardware.resolver import HardwareTierResolver
+    from dictatem.hotkey.classifier import HotkeyClassifier
+    from dictatem.macos.cg_event_tap import CGEventTapKeyboardHook
+    from dictatem.macos.permissions import probe_macos_permissions
+    from dictatem.macos.permissions_ui import guide_missing_permissions
+    from dictatem.overlay.qt_widget import QtOverlayWidget
+    from dictatem.overlay.state import OverlayState
+    from dictatem.paste.ax_foreground import AXForegroundTracker
+    from dictatem.paste.cg_keystroke import CGEventKeystrokeSender
+    from dictatem.paste.ns_clipboard import NSPasteboardClipboardIO
+    from dictatem.state import StateMachine
+    from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
+    from dictatem.transcribe.latency_monitor import LatencyMonitor
+    from dictatem.transcribe.lifecycle import TranscribeLifecycle
+    from dictatem.transform.detector import TriggerDetector
+    from dictatem.transform.lifecycle import TransformLifecycle
+    from dictatem.transform.ollama_backend import OllamaBackend
+    from dictatem.transform.prompts import (
+        bootstrap_prompts,
+        default_prompts_dir,
+        load_prompts_dir,
+    )
+    from dictatem.tray.qt_tray import QtTrayIcon
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+    for noisy in ("httpx", "huggingface_hub", "filelock", "urllib3"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    config_path = Path.home() / ".dictatem" / "config.toml"
+    # First run with no config: the macOS probe always reports a no-CUDA profile
+    # (ADR-0013), so the pure resolver bakes the CPU tier (base/cpu/int8) into the
+    # file. Existing configs are read unchanged.
+    probe = MacHardwareProbe()
+    config = load_config(config_path, probe=probe)
+
+    # Reconcile the config's pinned transcription hardware against this machine
+    # (#39 / ADR-0009). A config copied from a Windows GPU box (device="cuda")
+    # would crash faster-whisper on a Mac; the resolver falls back to the CPU tier
+    # for this session. On macOS this is the common path, not an edge case.
+    effective, did_fall_back = HardwareTierResolver().reconcile(
+        device=config.model.device,
+        model=config.model.name,
+        compute_type=config.model.compute_type,
+        profile=probe.probe(),
+    )
+    effective_model = effective.model
+    effective_device = effective.device
+    effective_compute_type = effective.compute_type
+
+    logging.getLogger().setLevel(
+        getattr(logging, config.logging.level.upper(), logging.INFO)
+    )
+
+    # First-run permission gate (#57 / ADR-0014). Detect missing Accessibility /
+    # Input Monitoring grants and guide the user to the exact System Settings
+    # panes; never grant on their behalf. Microphone stays the automatic prompt.
+    permission_status = probe_macos_permissions()
+    guide_missing_permissions(permission_status)
+
+    # Reconcile the OS autostart entry to config.startup.autostart (#55 /
+    # ADR-0012) via the LaunchAgent adapter, which launches the .app identity
+    # shell (ADR-0014). Same pure reconcile decision as Windows.
+    autostart_registrar = LaunchAgentAutostart()
+    apply_autostart(desired=config.startup.autostart, registrar=autostart_registrar)
+
+    app = QApplication(sys.argv)
+
+    audio_capture = SoundDeviceCapture(config)
+
+    backend = FasterWhisperBackend(
+        model_name=effective_model,
+        compute_type=effective_compute_type,
+        device=effective_device,
+        language=config.model.language,
+        vad_filter=config.model.vad_filter,
+    )
+    lifecycle = TranscribeLifecycle(
+        backend=backend,
+        idle_timeout_s=config.model.idle_unload_minutes * 60,
+        min_transcription_chars=config.model.min_transcription_chars,
+    )
+
+    clipboard = NSPasteboardClipboardIO()
+    keystroke = CGEventKeystrokeSender()
+    foreground = AXForegroundTracker()
+
+    transform_backend = OllamaBackend(
+        model_name=config.transform.model_name,
+        base_url=config.transform.base_url,
+        timeout_s=float(config.transform.timeout_s),
+    )
+    transform_lifecycle = TransformLifecycle(backend=transform_backend)
+    prompts_dir = Path.home() / ".dictatem" / "prompts"
+    bootstrap_prompts(prompts_dir, default_prompts_dir())
+    trigger_detector = TriggerDetector(load_prompts_dir(prompts_dir))
+
+    overlay_state = OverlayState(
+        clock=time.monotonic,
+        fade_in_ms=config.overlay.fade_in_ms,
+        fade_out_ms=config.overlay.fade_out_ms,
+    )
+    overlay_widget = QtOverlayWidget(overlay_state)
+    overlay = _OverlayAdapter(state=overlay_state, widget=overlay_widget)
+
+    tray_icon = QtTrayIcon(app)
+    tray = _TrayAdapter(icon=tray_icon)
+
+    sm = StateMachine(tap_threshold_ms=config.hotkey.tap_threshold_ms)
+
+    latency_monitor = LatencyMonitor(clock=time.monotonic)
+
+    def _persist_autostart(enabled: bool) -> None:
+        config.startup.autostart = enabled
+        write_config(config, config_path)
+
+    daemon = DaemonCore(
+        state_machine=sm,
+        audio_capture=audio_capture,
+        audio_buffer=audio_capture._buffer,
+        lifecycle=lifecycle,
+        overlay=overlay,
+        tray=tray,
+        clipboard=clipboard,
+        keystroke=keystroke,
+        foreground=foreground,
+        silence_timeout_s=float(config.behaviour.silence_timeout_s),
+        max_recording_s=float(config.behaviour.max_recording_seconds),
+        transform_lifecycle=transform_lifecycle,
+        trigger_detector=trigger_detector,
+        transform_enabled=config.transform.enabled,
+        last_paste_ttl_s=float(config.transform.last_paste_ttl_s),
+        transform_model_name=config.transform.model_name,
+        transform_base_url=config.transform.base_url,
+        latency_monitor=latency_monitor,
+        autostart_registrar=autostart_registrar,
+        persist_autostart=_persist_autostart,
+    )
+
+    tray_icon.on_start = daemon.on_tray_start_recording
+    tray_icon.on_stop = daemon.on_tray_stop_recording
+    tray_icon.on_preload = daemon.on_tray_preload
+    tray_icon.on_unload = daemon.on_tray_unload
+    tray_icon.on_autostart_toggled = daemon.on_tray_set_autostart
+    tray_icon.set_autostart_checked(config.startup.autostart)
+    tray_icon.on_quit = lambda: daemon.on_tray_quit(app.quit)
+
+    # Global hotkey via CGEventTap (#56). Feeds the SAME pure HotkeyClassifier +
+    # _HotkeyBridge the Windows hook uses, so Tap/Hold/Esc semantics are
+    # identical; the tap is the only macOS-native piece. Needs Input Monitoring.
+    classifier = HotkeyClassifier(
+        tap_threshold_ms=config.hotkey.tap_threshold_ms,
+        modifiers=config.hotkey.modifiers,
+    )
+    classifier.set_active(True)
+    bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
+    hook = CGEventTapKeyboardHook(bridge.enqueue_key_event)
+    hook.install()
+
+    silence_timer = QTimer()
+    silence_timer.setInterval(5000)
+
+    def _on_silence_tick() -> None:
+        daemon.check_silence(now_ms=int(time.monotonic() * 1000))
+        daemon.check_idle()
+        daemon.sync_model_loaded()
+
+    silence_timer.timeout.connect(_on_silence_tick)
+    silence_timer.start()
+
+    if config.startup.preload_model:
+        logger.info("Startup preload enabled — loading model in background")
+        daemon.on_tray_preload()
+
+    def _on_tick() -> None:
+        now = int(time.monotonic() * 1000)
+        bridge.tick(now)
+        overlay.update_level(audio_capture._buffer.current_level())
+        daemon.check_transcription_result(now_ms=now)
+        daemon.check_transform_result(now_ms=now)
+
+    tick_timer = QTimer()
+    tick_timer.setInterval(50)
+    tick_timer.timeout.connect(_on_tick)
+    tick_timer.start()
+
+    if did_fall_back:
+        logger.info(
+            "Config pinned device=%s (model=%s, compute_type=%s); macOS has no "
+            "CUDA, running on CPU (%s/%s/%s) this session. Config unchanged.",
+            config.model.device,
+            config.model.name,
+            config.model.compute_type,
+            effective_model,
+            effective_device,
+            effective_compute_type,
+        )
+
+    logger.info("Dictatem daemon started (macOS, CPU transcription)")
     app.exec()
