@@ -204,7 +204,19 @@ src/dictatem/
 ├── default_prompts/     # Bundled prompt files copied to ~/.dictatem/prompts/ on first run
 ├── paste/               # Clipboard save/restore, keystroke simulation
 ├── overlay/             # Qt animated pill widget
-└── tray/                # Qt system tray icon and menu
+├── tray/                # Qt system tray icon and menu
+└── assets/              # Brand art + generated application icon set (.ico/.icns/.png)
+```
+
+### Regenerating the application icon
+
+The full-colour waveform brand is the application/window icon. The master art
+lives at `src/dictatem/assets/icon.png` (opaque, white background baked in). To
+regenerate the committed cross-platform icon set (multi-resolution `.ico`,
+`.icns`, and the PNG sizes) with the white background keyed out to transparency:
+
+```powershell
+uv run python scripts/gen_icons.py
 ```
 
 ## License

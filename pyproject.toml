@@ -23,6 +23,7 @@ dev = [
     "pytest-mock>=3.14",
     "ruff>=0.8",
     "pyright>=1.1",
+    "Pillow>=10.0",
 ]
 
 [build-system]
