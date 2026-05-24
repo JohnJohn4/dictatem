@@ -3,23 +3,19 @@
 from __future__ import annotations
 
 import os
+import winreg
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
 from dictatem.assets import asset_path
-from dictatem.tray.state import IconVariant, MenuItem, TrayState
+from dictatem.tray.glyph import waveform_bars
+from dictatem.tray.state import MenuItem, TrayState, glyph_tint_rgba
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-_ICON_COLORS: dict[IconVariant, str] = {
-    IconVariant.Idle: "#808080",
-    IconVariant.Recording: "#00cc00",
-    IconVariant.Error: "#cc0000",
-}
 
 _MENU_LABELS: dict[MenuItem, str] = {
     MenuItem.START: "Start Recording",
@@ -31,21 +27,74 @@ _MENU_LABELS: dict[MenuItem, str] = {
     MenuItem.QUIT: "Quit",
 }
 
+# Draw a native pixmap at each of these side lengths and add them all to the
+# tray QIcon, so the OS picks a purpose-built size. Procedural bars stay crisp
+# at every size.
+_TRAY_ICON_SIZES = (16, 20, 24, 32, 48, 64)
 
-def _colored_pixmap(hex_color: str, size: int = 64) -> QPixmap:
+
+def _is_dark_taskbar() -> bool:
+    """True when the Windows taskbar is dark, so the glyph should be light.
+
+    The tray sits on the taskbar, whose theme is the registry value
+    ``SystemUsesLightTheme`` (0 = dark taskbar, 1 = light). This is independent
+    of the *app* theme — Windows commonly runs light apps with a dark taskbar —
+    so we must read the taskbar value, not Qt's ``colorScheme``. On a non-Windows
+    host or if the key is unreadable, fall back to Qt's app colour scheme.
+    """
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+        ) as key:
+            uses_light, _ = winreg.QueryValueEx(key, "SystemUsesLightTheme")
+        return int(uses_light) == 0
+    except OSError:
+        scheme = QApplication.styleHints().colorScheme()
+        return scheme == Qt.ColorScheme.Dark
+
+
+def _themed_glyph_pixmap(is_dark_background: bool, size: int) -> QPixmap:
+    """Draw the procedural waveform glyph at *size* px in the theme tint.
+
+    A simplified set of pill-shaped bars (geometry from ``waveform_bars``)
+    filled with the single theme-appropriate colour, so the glyph reads on any
+    taskbar. Drawn natively at *size* with antialiasing — no image, keying, or
+    dilation — so it stays crisp and bold even at 16 px.
+    """
+    r, g, b, a = glyph_tint_rgba(is_dark_background)
+
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
+
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor(hex_color))
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawEllipse(4, 4, size - 8, size - 8)
+    painter.setBrush(QColor(r, g, b, a))
+    for bar in waveform_bars(size):
+        radius = bar.w / 2.0
+        painter.drawRoundedRect(QRectF(bar.x, bar.y, bar.w, bar.h), radius, radius)
     painter.end()
+
     return pixmap
 
 
+def _themed_tray_icon(is_dark_background: bool) -> QIcon:
+    """Build a multi-resolution tray icon, one native pixmap per tray size."""
+    icon = QIcon()
+    for size in _TRAY_ICON_SIZES:
+        icon.addPixmap(_themed_glyph_pixmap(is_dark_background, size))
+    return icon
+
+
 class QtTrayIcon:
-    """System-tray icon driven by TrayState."""
+    """System-tray icon driven by TrayState.
+
+    Per ADR-0006 the tray icon is static brand identity: it shows the same
+    theme-adaptive monochrome waveform glyph regardless of recording state.
+    Only the menu enable/disable state still tracks TrayState. Recording state
+    lives on the Overlay Pill's Status Dot, not here.
+    """
 
     def __init__(self, app: QApplication) -> None:
         self._app = app
@@ -54,18 +103,14 @@ class QtTrayIcon:
         # Full-colour waveform brand as the application/window icon (taskbar,
         # alt-tab, window chrome). The multi-resolution .ico lets Windows pick
         # the crispest embedded size. Per ADR-0006 this is the *application*
-        # icon only; the state-driven tray icon below is unrelated and the
-        # theme-adaptive tray rendering is a separate slice (#38).
+        # icon only; the tray icon below is the theme-adaptive monochrome glyph.
         self._app_icon = QIcon(str(asset_path("app.ico")))
         self._app.setWindowIcon(self._app_icon)
         self._parent.setWindowIcon(self._app_icon)
 
-        self._icons: dict[IconVariant, QIcon] = {
-            variant: QIcon(_colored_pixmap(color))
-            for variant, color in _ICON_COLORS.items()
-        }
+        self._tray = QSystemTrayIcon(self._parent)
+        self._refresh_icon()
 
-        self._tray = QSystemTrayIcon(self._icons[IconVariant.Idle], self._parent)
         self._menu = QMenu()
         self._actions: dict[MenuItem, QAction] = {}
 
@@ -77,9 +122,20 @@ class QtTrayIcon:
         self.on_restart: Callable[[], None] | None = None
         self.on_quit: Callable[[], None] | None = None
 
+        # Re-tint live when the OS theme changes. colorSchemeChanged fires on a
+        # light/dark switch; we re-read the taskbar registry value (the app
+        # scheme it carries may differ from the taskbar) and repaint.
+        self._app.styleHints().colorSchemeChanged.connect(self._on_color_scheme_changed)
+
         self._build_menu()
         self._tray.setContextMenu(self._menu)
         self._tray.show()
+
+    def _refresh_icon(self) -> None:
+        self._tray.setIcon(_themed_tray_icon(_is_dark_taskbar()))
+
+    def _on_color_scheme_changed(self, _scheme: object) -> None:
+        self._refresh_icon()
 
     def _build_menu(self) -> None:
         callback_map: dict[MenuItem, Callable[[], None]] = {
@@ -99,8 +155,8 @@ class QtTrayIcon:
             self._menu.addAction(action)
 
     def update_state(self, state: TrayState) -> None:
-        variant = state.current_icon_variant()
-        self._tray.setIcon(self._icons[variant])
+        # The tray glyph is static brand identity (ADR-0006); only menu-item
+        # enable/disable tracks TrayState. The icon does not change with state.
         for item in MenuItem:
             self._actions[item].setEnabled(state.menu_item_enabled(item))
 

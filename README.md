@@ -8,7 +8,7 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 - **Two recording modes** — Push-to-talk (hold) or toggle (tap to start/stop, auto-stops after silence)
 - **GPU-accelerated transcription** — Faster-Whisper + CUDA for sub-realtime performance
 - **Smart paste** — Saves and restores clipboard content and window focus around each paste
-- **System tray** — Idle/recording/error status icons; menu items to preload or unload the model on demand
+- **System tray** — Static brand icon, rendered theme-adaptive monochrome so it stays visible on light or dark taskbars; recording state lives on the overlay's status dot, not the tray. Menu items to preload or unload the model on demand
 - **Overlay UI** — Pill that appears in the corner of the active monitor while recording, with an animated waveform proportional to mic level
 - **Fully offline** — All inference runs locally; the only network calls are the one-off model download on first use
 - **Trigger Words** — Say `"summarize"` (or your own custom prompt) right after a dictation paste, and dictatem rewrites the just-pasted text in place via a local Ollama model
