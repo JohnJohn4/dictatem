@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import shutil
 import sys
 import threading
 from typing import TYPE_CHECKING
@@ -39,6 +40,17 @@ if TYPE_CHECKING:
     from dictatem.transform.lifecycle import TransformLifecycle
 
 logger = logging.getLogger(__name__)
+
+
+def _default_ollama_binary_probe() -> bool:
+    """Return whether an ``ollama`` binary is on PATH.
+
+    The sole OS touch behind the Transform-failure classifier. Kept as a
+    free function so it can be swapped for a fake in tests, leaving the
+    classifier itself pure. Does not start, install, or pull anything
+    (ADR-0008).
+    """
+    return shutil.which("ollama") is not None
 
 
 class _OverlayAdapter:
@@ -212,6 +224,8 @@ class DaemonCore:
         trigger_detector: TriggerDetector | None = None,
         transform_enabled: bool = False,
         last_paste_ttl_s: float = 300.0,
+        transform_model_name: str = "",
+        ollama_binary_probe: Callable[[], bool] | None = None,
     ) -> None:
         self._sm = state_machine
         self._audio_capture = audio_capture
@@ -233,6 +247,15 @@ class DaemonCore:
         self._trigger_detector = trigger_detector
         self._transform_enabled = transform_enabled
         self._last_paste_ttl_s = last_paste_ttl_s
+        self._transform_model_name = transform_model_name
+        # The one OS touch the failure classifier needs (probing PATH for the
+        # ``ollama`` binary) is injected so the daemon stays testable and the
+        # classifier itself stays pure. Defaults to a thin shutil.which probe.
+        self._ollama_binary_probe = (
+            ollama_binary_probe
+            if ollama_binary_probe is not None
+            else _default_ollama_binary_probe
+        )
         self._last_paste: LastPaste | None = None
         self._pending_replace_chars: int = 0
         self._transform_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -524,15 +547,52 @@ class DaemonCore:
                 self._execute_commands(commands, now_ms=now_ms)
             else:
                 logger.warning("Transform failed: %s", data)
-                self._tray.show_notification(
-                    "Transform Failed",
-                    "The Trigger Word transform could not be applied; check log",
-                )
+                title, message = self._diagnose_transform_failure(data)
+                self._tray.show_notification(title, message)
                 commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
                 self._execute_commands(commands, now_ms=now_ms)
         except Exception:
             logger.error("Unhandled error processing transform result", exc_info=True)
             self._recover_to_idle()
+
+    def _diagnose_transform_failure(self, error: object) -> tuple[str, str]:
+        """Map a failed Transform into a ``(title, message)`` to surface.
+
+        For a ``TransformFailedError`` carrying a structured ``failure``
+        signal, run the pure classifier (probing PATH for the ``ollama``
+        binary first) so the user gets an actionable next step. Everything
+        else falls back to a generic check-the-log message.
+        """
+        from dictatem.transform.failure_classifier import (
+            FailureReason,
+            classify_transform_failure,
+        )
+
+        failure = getattr(error, "failure", None)
+        if failure is None:
+            return (
+                "Transform Failed",
+                "The Trigger Word transform could not be applied; check log",
+            )
+
+        try:
+            binary_present = bool(self._ollama_binary_probe())
+        except Exception:
+            logger.error("Error probing for ollama binary", exc_info=True)
+            binary_present = True  # assume installed; don't mislead the user
+
+        reason, message = classify_transform_failure(
+            binary_present=binary_present,
+            failure=failure,
+            model_name=self._transform_model_name,
+        )
+        titles = {
+            FailureReason.NOT_INSTALLED: "Ollama Not Installed",
+            FailureReason.NOT_RUNNING: "Ollama Not Running",
+            FailureReason.MODEL_MISSING: "Ollama Model Missing",
+            FailureReason.UNKNOWN: "Transform Failed",
+        }
+        return titles[reason], message
 
     def drain_transcription_for_test(self, *, now_ms: int = 0) -> None:
         """Block until in-flight transcription (and any deferred transform)
@@ -774,6 +834,7 @@ def _start_windows_daemon() -> None:
         trigger_detector=trigger_detector,
         transform_enabled=config.transform.enabled,
         last_paste_ttl_s=float(config.transform.last_paste_ttl_s),
+        transform_model_name=config.transform.model_name,
     )
 
     tray_icon.on_start = daemon.on_tray_start_recording
