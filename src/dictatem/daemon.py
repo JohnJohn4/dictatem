@@ -753,7 +753,30 @@ def _start_windows_daemon() -> None:
     # First run with no config: probe the machine once and bake the resolved
     # Hardware Tier (model/device/compute_type + transform tag) into the file.
     # Existing configs are read unchanged and the probe is not consulted.
-    config = load_config(config_path, probe=NvidiaHardwareProbe())
+    probe = NvidiaHardwareProbe()
+    config = load_config(config_path, probe=probe)
+
+    # Reconcile the config's pinned transcription hardware against the machine
+    # we're actually on (#39 / ADR-0009). A config baked on a GPU box and then
+    # run on a CPU-only machine would otherwise crash faster-whisper at model
+    # load. On the absent-GPU case we fall back to the CPU tier FOR THIS SESSION
+    # only — the config file is never rewritten, so the user's pinned GPU values
+    # return automatically once the hardware does.
+    from dictatem.hardware.resolver import HardwareTierResolver
+
+    effective, did_fall_back = HardwareTierResolver().reconcile(
+        device=config.model.device,
+        model=config.model.name,
+        compute_type=config.model.compute_type,
+        profile=probe.probe(),
+    )
+    # Transcription hardware only. We deliberately do NOT apply
+    # effective.transform_model: the Transform/Ollama model is independent of
+    # CUDA and reconcile carries the CPU tier's tag in the fallback case purely
+    # as a side effect of returning the whole row (see ADR-0009).
+    effective_model = effective.model
+    effective_device = effective.device
+    effective_compute_type = effective.compute_type
 
     logging.getLogger().setLevel(
         getattr(logging, config.logging.level.upper(), logging.INFO)
@@ -764,9 +787,9 @@ def _start_windows_daemon() -> None:
     audio_capture = SoundDeviceCapture(config)
 
     backend = FasterWhisperBackend(
-        model_name=config.model.name,
-        compute_type=config.model.compute_type,
-        device=config.model.device,
+        model_name=effective_model,
+        compute_type=effective_compute_type,
+        device=effective_device,
         language=config.model.language,
         vad_filter=config.model.vad_filter,
     )
@@ -864,6 +887,31 @@ def _start_windows_daemon() -> None:
     tick_timer.setInterval(50)
     tick_timer.timeout.connect(_on_tick)
     tick_timer.start()
+
+    # Surface the session CPU fallback once, after the loop is up. A
+    # QSystemTrayIcon balloon needs a visible icon and a running event loop, so
+    # we defer it with a single-shot timer rather than firing it inline (#39).
+    if did_fall_back:
+        logger.warning(
+            "Configured GPU (device=%s, model=%s, compute_type=%s) is "
+            "unavailable on this machine — running on CPU "
+            "(%s/%s/%s) for this session. The config file is unchanged.",
+            config.model.device,
+            config.model.name,
+            config.model.compute_type,
+            effective_model,
+            effective_device,
+            effective_compute_type,
+        )
+        QTimer.singleShot(
+            2000,
+            lambda: tray.show_notification(
+                "Running on CPU",
+                "Configured GPU (cuda) isn't available — running on CPU this "
+                "session. Your config is unchanged; restore the GPU to use it "
+                "again.",
+            ),
+        )
 
     logger.info("Dictatem daemon started")
     app.exec()
