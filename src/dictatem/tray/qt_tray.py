@@ -6,11 +6,12 @@ import os
 import winreg
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QColor, QIcon, QImage, QPixmap
+from PySide6.QtCore import QRectF, Qt
+from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
 from dictatem.assets import asset_path
+from dictatem.tray.glyph import waveform_bars
 from dictatem.tray.state import MenuItem, TrayState, glyph_tint_rgba
 
 if TYPE_CHECKING:
@@ -26,15 +27,10 @@ _MENU_LABELS: dict[MenuItem, str] = {
     MenuItem.QUIT: "Quit",
 }
 
-# Master glyph rendered at this side length; QSystemTrayIcon downscales to the
-# real tray size. Large enough to stay crisp at 16-32 px.
-_GLYPH_SIZE = 64
-
-# Pixels at least this luminous are treated as the baked-in white background and
-# kept fully transparent in the alpha mask; darker pixels (the near-black bars)
-# become opaque. Mirrors the white-keying threshold used by gen_icons.py so the
-# anti-aliased fringe around the bars does not leave a pale halo.
-_WHITE_THRESHOLD = 240
+# Draw a native pixmap at each of these side lengths and add them all to the
+# tray QIcon, so the OS picks a purpose-built size. Procedural bars stay crisp
+# at every size.
+_TRAY_ICON_SIZES = (16, 20, 24, 32, 48, 64)
 
 
 def _is_dark_taskbar() -> bool:
@@ -58,45 +54,37 @@ def _is_dark_taskbar() -> bool:
         return scheme == Qt.ColorScheme.Dark
 
 
-def _themed_glyph_pixmap(is_dark_background: bool, size: int = _GLYPH_SIZE) -> QPixmap:
-    """Render the brand glyph as a theme-adaptive monochrome pixmap.
+def _themed_glyph_pixmap(is_dark_background: bool, size: int) -> QPixmap:
+    """Draw the procedural waveform glyph at *size* px in the theme tint.
 
-    The master art is full-colour near-black bars on a white background. We
-    derive an alpha mask from luminance (dark bars → opaque, near-white
-    background → transparent) and fill every opaque pixel with the single
-    theme-appropriate tint colour, so the glyph reads on any taskbar.
+    A simplified set of pill-shaped bars (geometry from ``waveform_bars``)
+    filled with the single theme-appropriate colour, so the glyph reads on any
+    taskbar. Drawn natively at *size* with antialiasing — no image, keying, or
+    dilation — so it stays crisp and bold even at 16 px.
     """
-    master = QImage(str(asset_path("icon.png")))
-    master = master.convertToFormat(QImage.Format.Format_ARGB32)
-    master = master.scaled(
-        size,
-        size,
-        Qt.AspectRatioMode.KeepAspectRatio,
-        Qt.TransformationMode.SmoothTransformation,
-    )
+    r, g, b, a = glyph_tint_rgba(is_dark_background)
 
-    r, g, b, _a = glyph_tint_rgba(is_dark_background)
-    tint = QColor(r, g, b)
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
 
-    out = QImage(master.size(), QImage.Format.Format_ARGB32)
-    out.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(r, g, b, a))
+    for bar in waveform_bars(size):
+        radius = bar.w / 2.0
+        painter.drawRoundedRect(QRectF(bar.x, bar.y, bar.w, bar.h), radius, radius)
+    painter.end()
 
-    for y in range(master.height()):
-        for x in range(master.width()):
-            px = master.pixelColor(x, y)
-            if px.alpha() == 0:
-                continue
-            # Rec. 601 luminance; the baked-in background is near-white.
-            lum = 0.299 * px.red() + 0.587 * px.green() + 0.114 * px.blue()
-            if lum >= _WHITE_THRESHOLD:
-                continue
-            # Opacity tracks how dark the source pixel is, so anti-aliased edges
-            # fade smoothly: a fully black bar pixel is fully opaque, the
-            # near-white fringe trails off toward transparent.
-            alpha = int(round((_WHITE_THRESHOLD - lum) / _WHITE_THRESHOLD * 255))
-            out.setPixelColor(x, y, QColor(tint.red(), tint.green(), tint.blue(), alpha))
+    return pixmap
 
-    return QPixmap.fromImage(out)
+
+def _themed_tray_icon(is_dark_background: bool) -> QIcon:
+    """Build a multi-resolution tray icon, one native pixmap per tray size."""
+    icon = QIcon()
+    for size in _TRAY_ICON_SIZES:
+        icon.addPixmap(_themed_glyph_pixmap(is_dark_background, size))
+    return icon
 
 
 class QtTrayIcon:
@@ -144,8 +132,7 @@ class QtTrayIcon:
         self._tray.show()
 
     def _refresh_icon(self) -> None:
-        pixmap = _themed_glyph_pixmap(_is_dark_taskbar())
-        self._tray.setIcon(QIcon(pixmap))
+        self._tray.setIcon(_themed_tray_icon(_is_dark_taskbar()))
 
     def _on_color_scheme_changed(self, _scheme: object) -> None:
         self._refresh_icon()
