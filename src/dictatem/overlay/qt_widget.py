@@ -60,12 +60,16 @@ class QtOverlayWidget(QWidget):
 
     def show_pill(self) -> None:
         cursor = QCursor.pos()
+        # availableGeometry() is the screen rect MINUS the taskbar/docks, so the
+        # bottom-right resting position computed by compute_position clears the
+        # taskbar instead of overlapping it. Adapts to any taskbar height/edge
+        # (and to auto-hide, where the work area is the full screen).
         monitors = [
             MonitorRect(
                 g.x(), g.y(), g.width(), g.height(),
             )
             for s in QApplication.screens()
-            for g in (s.geometry(),)
+            for g in (s.availableGeometry(),)
         ]
         pos = self._state.compute_position(
             cursor_position=Point(cursor.x(), cursor.y()),
