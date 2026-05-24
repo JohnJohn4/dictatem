@@ -89,6 +89,48 @@ class HardwareTierResolver:
         """Return the resolved transcription + Transform settings for *profile*."""
         return _TIER_TABLE[self._classify(profile)]
 
+    def reconcile(
+        self,
+        *,
+        device: str,
+        model: str,
+        compute_type: str,
+        profile: HardwareProfile,
+    ) -> tuple[ResolvedHardware, bool]:
+        """Reconcile a config's pinned transcription values against *profile*.
+
+        Guards the absent-GPU crash (see ADR-0009): faster-whisper raises at
+        model load if asked for ``cuda`` on a machine with no CUDA. When the
+        config pins ``cuda`` but ``profile`` reports no CUDA, fall back to the
+        whole CPU tier (``base``/``cpu``/``int8``) for THIS session — flipping
+        only the device would leave a cuda compute_type (``float16`` /
+        ``int8_float16``) that also won't run on CPU. Returns
+        ``(resolved, did_fall_back=True)``.
+
+        Otherwise the pinned values are authoritative (ADR-0007): they are
+        returned unchanged as a ``"configured"`` ResolvedHardware with
+        ``did_fall_back=False``. This deliberately does NOT re-tier on VRAM —
+        only the crash is guarded, never a silent downgrade of a present GPU.
+        Pure: no I/O, no native imports; the config object/file is never
+        mutated.
+
+        Scope is the transcription hardware only. The returned CPU-tier
+        ``transform_model`` in the fallback case must NOT be applied — the
+        Transform/Ollama model is independent of CUDA (see ADR-0009).
+        """
+        if device == "cuda" and not profile.cuda_available:
+            return _TIER_TABLE["CPU"], True
+        return (
+            ResolvedHardware(
+                tier="configured",
+                model=model,
+                device=device,
+                compute_type=compute_type,
+                transform_model="",
+            ),
+            False,
+        )
+
     @staticmethod
     def _classify(profile: HardwareProfile) -> str:
         """Return the tier name for *profile*. Pure, total over all profiles."""
