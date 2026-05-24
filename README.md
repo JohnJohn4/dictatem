@@ -16,10 +16,10 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 
 ## Requirements
 
-- Windows 11
+- Windows 11, **or macOS 12+** (the macOS track is new — see the QA note under [macOS install](#macos-install))
 - Python 3.11+
 - x64 CPU, ~8 GB RAM (minimum — CPU-only works using the `base` Whisper model)
-- NVIDIA GPU with CUDA support — optional, recommended for larger models and sub-realtime speed
+- NVIDIA GPU with CUDA support — optional (Windows only), recommended for larger models and sub-realtime speed. On macOS, transcription runs on CPU faster-whisper ([ADR-0013](docs/adr/0013-macos-transcription-engine.md)); a Metal `mlx-whisper` backend is a future follow-up
 - [`uv`](https://docs.astral.sh/uv/) (fast Python package manager)
 - [Ollama](https://ollama.com) — optional, only for [Trigger Words](#trigger-words); see [Ollama / Transform setup](#ollama--transform-setup)
 
@@ -38,6 +38,35 @@ To force the dependency set instead of auto-detecting, set `DICTATEM_GPU` first:
 > The installer currently installs from `@main`. A future tagged release will pin this one-liner to a specific version (tracked in issue #60); until then you are installing the latest `main`.
 
 The script never installs or starts Ollama and never downloads a Whisper model — the model lazy-downloads on first dictation, and [Trigger Words](#trigger-words) stay off until you set Ollama up yourself ([Ollama / Transform setup](#ollama--transform-setup)).
+
+### macOS install
+
+> ⚠️ The macOS track is new and **needs QA on a real Mac** — it was authored on a Windows box and the native code paths have not yet been runtime-verified.
+
+Run this in a terminal — it installs [`uv`](https://docs.astral.sh/uv/) if needed, installs Dictatem (CPU transcription — macOS v1 runs faster-whisper on CPU, see [ADR-0013](docs/adr/0013-macos-transcription-engine.md)), generates a local `~/Applications/Dictatem.app` identity shell, registers the start-at-login LaunchAgent, and launches it:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/feat/macos-track/install.sh | sh
+```
+
+> The installer currently installs from the **`feat/macos-track` branch** (no release tag exists yet — the macOS go-live is tracked in issue #60). If you prefer to call `uv` yourself, the fallback is:
+>
+> ```sh
+> uv tool install "dictatem[runtime] @ git+https://github.com/JohnJohn4/dictatem@feat/macos-track"
+> dictatem --install-macos-app
+> ```
+
+**First launch — permissions.** macOS gates the hotkey and paste behind privacy permissions ([ADR-0014](docs/adr/0014-macos-permissions-and-app-identity-shell.md)). On the first launch Dictatem shows a dialog with deep-link buttons into the exact System Settings panes:
+
+- **Input Monitoring** — for the global dictation hotkey. Open *System Settings → Privacy & Security → Input Monitoring* and enable **Dictatem**.
+- **Accessibility** — to type transcribed text into the focused app (and replace text for Trigger Words). Open *System Settings → Privacy & Security → Accessibility* and enable **Dictatem**.
+- **Microphone** — the standard automatic prompt the first time you record; click **Allow**.
+
+After enabling Input Monitoring and Accessibility you must **fully quit and relaunch Dictatem once** — macOS only applies a new grant to a freshly launched process. The grants are bound to the generated `Dictatem.app` bundle, so they survive `uv tool` upgrades.
+
+The macOS hotkey uses the Windows defaults' Mac equivalents: **Command (⌘) + Option (⌥)** (Command maps to the `win` modifier, Option to `alt`; tune `[hotkey].modifiers` as usual).
+
+The script never installs or starts Ollama and never downloads a Whisper model, exactly as on Windows.
 
 ### Manual install (development checkout)
 
@@ -66,6 +95,13 @@ Dictatem owns its start-at-login entry, so removing it cleanly is a two-step pro
 
 ```powershell
 dictatem --uninstall      # removes the autostart entry, then prints the next step
+uv tool uninstall dictatem
+```
+
+On macOS the same two steps apply; `dictatem --uninstall` additionally removes the generated `~/Applications/Dictatem.app` and its LaunchAgent ([ADR-0014](docs/adr/0014-macos-permissions-and-app-identity-shell.md)):
+
+```sh
+dictatem --uninstall      # removes the LaunchAgent + ~/Applications/Dictatem.app, then prints the next step
 uv tool uninstall dictatem
 ```
 
