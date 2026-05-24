@@ -13,6 +13,7 @@ from dictatem.autostart.reconcile import (
     AutostartAction,
     apply_autostart,
     reconcile_autostart,
+    run_uninstall,
 )
 from tests.fakes import FakeAutostartRegistrar
 
@@ -98,3 +99,29 @@ class TestApplyAutostart:
         assert action is AutostartAction.NOOP
         assert reg.enable_calls == 0
         assert reg.disable_calls == 0
+
+
+class TestRunUninstall:
+    """`dictatem --uninstall` removes the autostart entry, then prints the
+    final `uv tool uninstall dictatem` step for the user to run (ADR-0011).
+    """
+
+    def test_removes_autostart_entry(self) -> None:
+        reg = FakeAutostartRegistrar(enabled=True)
+        run_uninstall(registrar=reg, out=lambda _msg: None)
+        assert reg.is_enabled() is False
+        assert reg.disable_calls == 1
+
+    def test_idempotent_when_entry_absent(self) -> None:
+        reg = FakeAutostartRegistrar(enabled=False)
+        run_uninstall(registrar=reg, out=lambda _msg: None)
+        assert reg.is_enabled() is False
+        # disable is always called; the registrar swallows the absent case.
+        assert reg.disable_calls == 1
+
+    def test_prints_uv_tool_uninstall_step(self) -> None:
+        reg = FakeAutostartRegistrar(enabled=True)
+        lines: list[str] = []
+        run_uninstall(registrar=reg, out=lines.append)
+        joined = "\n".join(lines)
+        assert "uv tool uninstall dictatem" in joined

@@ -14,6 +14,8 @@ import enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from dictatem.interfaces import AutostartRegistrar
 
 
@@ -57,3 +59,21 @@ def apply_autostart(
     elif action is AutostartAction.DISABLE:
         registrar.disable()
     return action
+
+
+def run_uninstall(
+    *, registrar: AutostartRegistrar, out: Callable[[str], None]
+) -> None:
+    """Run the ``dictatem --uninstall`` cleanup, then print the final step.
+
+    A plain ``uv tool uninstall`` would orphan the daemon-written autostart
+    entry (ADR-0011), so uninstall first removes that entry via *registrar* (a
+    no-op if already absent), then prints — via *out* — the ``uv tool uninstall
+    dictatem`` command for the user to run, since a tool can't uninstall its own
+    running interpreter mid-process.
+    """
+    registrar.disable()
+    out("Removed Dictatem autostart entry.")
+    out("")
+    out("To finish removing Dictatem, run:")
+    out("    uv tool uninstall dictatem")

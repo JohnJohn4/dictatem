@@ -753,15 +753,45 @@ class _AbortCommandChain(Exception):
     """Internal signal to stop processing remaining commands in a chain."""
 
 
-def main() -> None:
-    """Entry point for the Dictatem daemon."""
+def main(argv: list[str] | None = None) -> None:
+    """Entry point for the Dictatem daemon.
+
+    With no arguments, starts the daemon (Windows only). ``--uninstall`` runs
+    the cleanup that removes the daemon-owned autostart entry and prints the
+    final ``uv tool uninstall dictatem`` step (see ADR-0011); a bare tool
+    uninstall would otherwise orphan that entry.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="dictatem", description="Local voice-dictation daemon for Windows."
+    )
+    parser.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="Remove the autostart entry, then print the uv tool uninstall step.",
+    )
+    args = parser.parse_args(argv)
+
     if sys.platform != "win32":
         raise PlatformNotSupportedError(
             "Dictatem is Windows-only. "
             f"Current platform: {sys.platform}"
         )
 
+    if args.uninstall:
+        _run_uninstall()
+        return
+
     _start_windows_daemon()
+
+
+def _run_uninstall() -> None:
+    """Wire the Windows registrar and run the uninstall cleanup (#58)."""
+    from dictatem.autostart.reconcile import run_uninstall
+    from dictatem.autostart.win32_registrar import Win32AutostartRegistrar
+
+    run_uninstall(registrar=Win32AutostartRegistrar(), out=print)
 
 
 def _start_windows_daemon() -> None:
