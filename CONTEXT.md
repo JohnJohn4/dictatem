@@ -121,13 +121,16 @@ Dot, and vice versa.
 The capability-matched bundle of transcription model, compute device, and
 compute type Dictatem runs on a given machine — e.g. `large-v3-turbo` / CUDA /
 float16 on a 16 GB GPU, down to `base` / CPU / int8 on a modest laptop. A Tier
-is chosen from detected hardware; any value the user pins in config always
-overrides the chosen one. `base` is the smallest Tier ever chosen
-automatically; `tiny` is never auto-selected.
+is chosen from detected hardware on first run and baked into config; any value
+the user pins always overrides the chosen one. `base` is the smallest Tier ever
+chosen automatically; `tiny` is never auto-selected and models stay
+multilingual. See [ADR-0007](docs/adr/0007-hardware-tier-resolved-on-first-run.md).
 
-The [Transform](#transform) (Ollama) model is **not** part of the Hardware
-Tier — Ollama is a separate, user-managed process that Dictatem only talks to,
-never selects or runs on the user's behalf.
+Resolving a Tier also yields a tier-appropriate default [Transform](#transform)
+(Ollama) model tag, written into a fresh config. Beyond that suggestion the
+Transform model is not Dictatem's to manage: Ollama is a separate, user-managed
+process Dictatem only talks to — never installs, pulls, or runs on the user's
+behalf (see [ADR-0008](docs/adr/0008-dictatem-does-not-manage-ollama-lifecycle.md)).
 
 ## Flagged ambiguities
 

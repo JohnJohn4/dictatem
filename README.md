@@ -108,6 +108,7 @@ tap_threshold_ms = 200          # Below this = toggle tap; above = push-to-talk 
 [model]
 name = "large-v3-turbo"
 compute_type = "float16"
+device = "cuda"                 # cuda or cpu; auto-resolved on first run by Hardware Tier
 vad_filter = true
 idle_unload_minutes = 30        # Free GPU VRAM when idle for this long
 min_transcription_chars = 3     # Below this, treat the result as empty

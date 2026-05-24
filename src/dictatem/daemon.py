@@ -683,6 +683,7 @@ def _start_windows_daemon() -> None:
 
     from dictatem.audio.sounddevice_capture import SoundDeviceCapture
     from dictatem.config import load_config
+    from dictatem.hardware.nvidia_probe import NvidiaHardwareProbe
     from dictatem.hotkey.classifier import HotkeyClassifier
     from dictatem.hotkey.wh_keyboard_ll import WHKeyboardLLHook
     from dictatem.overlay.qt_widget import QtOverlayWidget
@@ -704,7 +705,10 @@ def _start_windows_daemon() -> None:
     from dictatem.tray.qt_tray import QtTrayIcon
 
     config_path = Path.home() / ".dictatem" / "config.toml"
-    config = load_config(config_path)
+    # First run with no config: probe the machine once and bake the resolved
+    # Hardware Tier (model/device/compute_type + transform tag) into the file.
+    # Existing configs are read unchanged and the probe is not consulted.
+    config = load_config(config_path, probe=NvidiaHardwareProbe())
 
     logging.basicConfig(
         level=getattr(logging, config.logging.level.upper(), logging.INFO),
@@ -722,6 +726,7 @@ def _start_windows_daemon() -> None:
     backend = FasterWhisperBackend(
         model_name=config.model.name,
         compute_type=config.model.compute_type,
+        device=config.model.device,
         language=config.model.language,
         vad_filter=config.model.vad_filter,
     )
