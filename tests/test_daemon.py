@@ -19,8 +19,19 @@ pytestmark = pytest.mark.skipif(
 class TestDaemonPlatformGate:
     def test_raises_on_non_windows(self) -> None:
         with pytest.raises(PlatformNotSupportedError, match="Windows-only"):
-            main()
+            main(argv=[])
 
     def test_error_message_includes_platform(self) -> None:
         with pytest.raises(PlatformNotSupportedError, match=sys.platform):
-            main()
+            main(argv=[])
+
+    def test_uninstall_flag_parses(self) -> None:
+        # --uninstall is a recognized flag (argparse does not error); the
+        # platform gate still fires first on non-Windows, before the registry.
+        with pytest.raises(PlatformNotSupportedError, match="Windows-only"):
+            main(argv=["--uninstall"])
+
+    def test_unknown_flag_errors(self) -> None:
+        # argparse exits (SystemExit) on an unrecognized flag.
+        with pytest.raises(SystemExit):
+            main(argv=["--bogus"])

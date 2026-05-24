@@ -25,6 +25,22 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 
 ## Installation
 
+### One-line install (recommended)
+
+Run this in PowerShell — it installs [`uv`](https://docs.astral.sh/uv/) if needed, auto-detects whether you have an NVIDIA GPU (picking the CUDA or CPU-lean dependency set accordingly), installs Dictatem, and launches it:
+
+```powershell
+irm https://raw.githubusercontent.com/JohnJohn4/dictatem/main/install.ps1 | iex
+```
+
+To force the dependency set instead of auto-detecting, set `DICTATEM_GPU` first: `$env:DICTATEM_GPU='cpu'` (or `'gpu'`) before running the line.
+
+> The installer currently installs from `@main`. A future tagged release will pin this one-liner to a specific version (tracked in issue #60); until then you are installing the latest `main`.
+
+The script never installs or starts Ollama and never downloads a Whisper model — the model lazy-downloads on first dictation, and [Trigger Words](#trigger-words) stay off until you set Ollama up yourself ([Ollama / Transform setup](#ollama--transform-setup)).
+
+### Manual install (development checkout)
+
 ```powershell
 git clone https://github.com/JohnJohn4/dictatem
 cd dictatem
@@ -43,6 +59,15 @@ uv sync --extra runtime-gpu
 ```
 
 If you have an NVIDIA GPU and want the fastest transcription, use `runtime-gpu`. If you are on a CPU-only machine or want a lighter install, use `runtime`.
+
+### Uninstalling
+
+Dictatem owns its start-at-login entry, so removing it cleanly is a two-step process — a bare `uv tool uninstall` would orphan that entry:
+
+```powershell
+dictatem --uninstall      # removes the autostart entry, then prints the next step
+uv tool uninstall dictatem
+```
 
 ## Verify the setup
 
@@ -94,6 +119,14 @@ Transcription: <your words here>
 If you see `(No speech detected)`, check your default microphone in Windows sound settings.
 
 ## Running
+
+If you installed with `uv tool install` (see [Installation](#installation)), launch the daemon with the `dictatem` command — it runs windowless, with no console pop:
+
+```powershell
+dictatem
+```
+
+From a development checkout (`uv sync`), the module form also works:
 
 ```powershell
 uv run python -m dictatem

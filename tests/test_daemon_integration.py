@@ -14,6 +14,7 @@ from dictatem.transcribe.lifecycle import TranscribeLifecycle
 from dictatem.types import EmptyResult, RecordingMode
 from tests.fakes import (
     FakeAudioCapture,
+    FakeAutostartRegistrar,
     FakeClipboardIO,
     FakeForegroundTracker,
     FakeKeystrokeSender,
@@ -327,3 +328,71 @@ class TestTrayMenuActions:
     ) -> None:
         core.on_tray_stop_recording()
         assert sm.state is State.IDLE
+
+
+# ── "Start at login" tray toggle (#55 / ADR-0012) ────────────────────
+
+
+class TestTrayAutostartToggle:
+    """The tray toggle flips config.startup.autostart and applies it.
+
+    The daemon owns autostart: flipping the toggle persists the flag (so it
+    survives a restart) and reconciles the OS entry via the registrar in the
+    same step, keeping the flag the single source of truth.
+    """
+
+    def _core_with_autostart(
+        self,
+        *,
+        enabled: bool,
+    ) -> tuple[DaemonCore, FakeAutostartRegistrar, list[bool]]:
+        registrar = FakeAutostartRegistrar(enabled=enabled)
+        persisted: list[bool] = []
+        core = DaemonCore(
+            state_machine=StateMachine(tap_threshold_ms=200),
+            audio_capture=FakeAudioCapture(duration_s=1.0),
+            lifecycle=TranscribeLifecycle(
+                backend=FakeTranscriberBackend(result="hi"), clock=lambda: 0.0
+            ),
+            overlay=FakeOverlayRenderer(),
+            tray=FakeTrayRenderer(),
+            autostart_registrar=registrar,
+            persist_autostart=persisted.append,
+        )
+        return core, registrar, persisted
+
+    def test_toggle_off_disables_and_persists(self) -> None:
+        core, registrar, persisted = self._core_with_autostart(enabled=True)
+        core.on_tray_set_autostart(False)
+        assert registrar.is_enabled() is False
+        assert registrar.disable_calls == 1
+        assert persisted == [False]
+
+    def test_toggle_on_enables_and_persists(self) -> None:
+        core, registrar, persisted = self._core_with_autostart(enabled=False)
+        core.on_tray_set_autostart(True)
+        assert registrar.is_enabled() is True
+        assert registrar.enable_calls == 1
+        assert persisted == [True]
+
+    def test_toggle_on_when_already_enabled_is_idempotent(self) -> None:
+        core, registrar, persisted = self._core_with_autostart(enabled=True)
+        core.on_tray_set_autostart(True)
+        assert registrar.is_enabled() is True
+        assert registrar.enable_calls == 0
+        # Still persisted so the config flag matches the toggle.
+        assert persisted == [True]
+
+    def test_toggle_without_registrar_is_safe(self) -> None:
+        # A DaemonCore built without an autostart registrar (e.g. older wiring)
+        # must not crash when the toggle fires.
+        core = DaemonCore(
+            state_machine=StateMachine(tap_threshold_ms=200),
+            audio_capture=FakeAudioCapture(duration_s=1.0),
+            lifecycle=TranscribeLifecycle(
+                backend=FakeTranscriberBackend(result="hi"), clock=lambda: 0.0
+            ),
+            overlay=FakeOverlayRenderer(),
+            tray=FakeTrayRenderer(),
+        )
+        core.on_tray_set_autostart(True)  # no raise

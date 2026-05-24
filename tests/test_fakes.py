@@ -7,6 +7,7 @@ import pytest
 
 from dictatem.interfaces import (
     AudioCapture,
+    AutostartRegistrar,
     ClipboardIO,
     ForegroundTracker,
     KeyboardHook,
@@ -18,6 +19,7 @@ from dictatem.interfaces import (
 from dictatem.types import EmptyResult, RecordingMode
 from tests.fakes import (
     FakeAudioCapture,
+    FakeAutostartRegistrar,
     FakeClipboardIO,
     FakeForegroundTracker,
     FakeKeyboardHook,
@@ -151,6 +153,27 @@ class TestFakeTranscriberBackend:
         tb.queue_error(GPUOutOfMemoryError("test"))
         with pytest.raises(GPUOutOfMemoryError):
             tb.transcribe(audio)
+
+
+class TestFakeAutostartRegistrar:
+    def test_satisfies_protocol(self) -> None:
+        assert isinstance(FakeAutostartRegistrar(), AutostartRegistrar)
+
+    def test_enable_disable_toggles_state(self) -> None:
+        reg = FakeAutostartRegistrar(enabled=False)
+        assert reg.is_enabled() is False
+        reg.enable()
+        assert reg.is_enabled() is True
+        reg.disable()
+        assert reg.is_enabled() is False
+
+    def test_records_call_counts(self) -> None:
+        reg = FakeAutostartRegistrar()
+        reg.enable()
+        reg.disable()
+        reg.disable()
+        assert reg.enable_calls == 1
+        assert reg.disable_calls == 2
 
 
 class TestFakeOverlayRenderer:

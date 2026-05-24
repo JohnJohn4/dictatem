@@ -4,6 +4,7 @@ Each fake is deterministic and records call history for assertions.
 """
 
 from tests.fakes.fake_audio import FakeAudioCapture
+from tests.fakes.fake_autostart import FakeAutostartRegistrar
 from tests.fakes.fake_clipboard import FakeClipboardIO
 from tests.fakes.fake_foreground import FakeForegroundTracker
 from tests.fakes.fake_hardware_probe import FakeHardwareProbe
@@ -16,6 +17,7 @@ from tests.fakes.fake_tray import FakeTrayRenderer
 
 __all__ = [
     "FakeAudioCapture",
+    "FakeAutostartRegistrar",
     "FakeClipboardIO",
     "FakeForegroundTracker",
     "FakeHardwareProbe",

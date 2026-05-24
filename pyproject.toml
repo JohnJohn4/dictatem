@@ -7,6 +7,12 @@ dependencies = [
     "numpy>=1.26",
 ]
 
+# A gui-scripts (NOT scripts) entry point so `uv tool install` generates a
+# Windows launcher on the GUI subsystem — launching `dictatem` pops no console
+# window (see ADR-0011). `python -m dictatem` keeps working; this is additive.
+[project.gui-scripts]
+dictatem = "dictatem.daemon:main"
+
 [project.optional-dependencies]
 runtime = [
     "faster-whisper>=1.1",
@@ -54,5 +60,5 @@ pythonPlatform = "All"
 venvPath = "."
 venv = ".venv"
 include = ["src"]
-exclude = ["src/dictatem/audio/sounddevice_capture.py", "src/dictatem/overlay/qt_widget.py", "src/dictatem/tray/qt_tray.py", "src/dictatem/hardware/nvidia_probe.py"]
+exclude = ["src/dictatem/audio/sounddevice_capture.py", "src/dictatem/overlay/qt_widget.py", "src/dictatem/tray/qt_tray.py", "src/dictatem/hardware/nvidia_probe.py", "src/dictatem/autostart/win32_registrar.py"]
 typeCheckingMode = "standard"
