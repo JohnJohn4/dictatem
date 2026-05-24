@@ -5,6 +5,20 @@ the code or in ADRs (`docs/adr/`), not here.
 
 ## Terms
 
+### Hardware Tier
+
+The category Dictatem places a machine in to pick sensible transcription
+defaults — a resolved `(whisper model, device, compute_type)` plus a
+tier-appropriate [Transform](#transform) (Ollama) model tag. Tiers run from a
+high-VRAM NVIDIA desktop (`large-v3-turbo` on `cuda`/`float16`) down to a
+CPU-only laptop (`base` on `cpu`/`int8`). The smallest auto-selected Whisper
+model is `base`; `tiny` is never auto-selected and models stay multilingual.
+
+The tier is resolved once, on first run, from a probe of the machine (CUDA
+presence and total VRAM) and the concrete values are written into the config;
+later launches read that config unchanged. See
+[ADR-0007](docs/adr/0007-hardware-tier-resolved-on-first-run.md).
+
 ### Tap
 
 A press-and-release of the hotkey combo (Alt+Win) whose total held

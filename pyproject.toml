@@ -14,6 +14,7 @@ runtime = [
     "PySide6>=6.7",
     "nvidia-cublas-cu12",
     "nvidia-cudnn-cu12",
+    "nvidia-ml-py>=12",
     "pywin32>=306; sys_platform == 'win32'",
 ]
 
@@ -49,5 +50,5 @@ pythonPlatform = "All"
 venvPath = "."
 venv = ".venv"
 include = ["src"]
-exclude = ["src/dictatem/audio/sounddevice_capture.py", "src/dictatem/overlay/qt_widget.py", "src/dictatem/tray/qt_tray.py"]
+exclude = ["src/dictatem/audio/sounddevice_capture.py", "src/dictatem/overlay/qt_widget.py", "src/dictatem/tray/qt_tray.py", "src/dictatem/hardware/nvidia_probe.py"]
 typeCheckingMode = "standard"
