@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
+from dictatem.assets import asset_path
 from dictatem.tray.state import IconVariant, MenuItem, TrayState
 
 if TYPE_CHECKING:
@@ -49,6 +50,15 @@ class QtTrayIcon:
     def __init__(self, app: QApplication) -> None:
         self._app = app
         self._parent = QWidget()
+
+        # Full-colour waveform brand as the application/window icon (taskbar,
+        # alt-tab, window chrome). The multi-resolution .ico lets Windows pick
+        # the crispest embedded size. Per ADR-0006 this is the *application*
+        # icon only; the state-driven tray icon below is unrelated and the
+        # theme-adaptive tray rendering is a separate slice (#38).
+        self._app_icon = QIcon(str(asset_path("app.ico")))
+        self._app.setWindowIcon(self._app_icon)
+        self._parent.setWindowIcon(self._app_icon)
 
         self._icons: dict[IconVariant, QIcon] = {
             variant: QIcon(_colored_pixmap(color))
