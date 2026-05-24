@@ -89,3 +89,53 @@ the Last Paste (post-normalisation) and pasting the Transform output. The
 Transform output then itself becomes the new [Last Paste](#last-paste),
 which allows trigger words to compose (e.g. running `"summarize"` twice
 further condenses the result).
+
+## UI surfaces
+
+### Overlay Pill
+
+The transient floating indicator shown in a corner of the active monitor
+while dictation is active. It carries the [Status Dot](#status-dot) and a
+live waveform. It is the user's primary at-a-glance feedback during a
+recording.
+
+### Status Dot
+
+The dot on the [Overlay Pill](#overlay-pill) that signals recording phase
+(red while recording, amber while transcribing) and recording mode (an
+outline dot for a push-to-talk [Hold](#hold), a filled dot for a toggle
+[Tap](#tap)). The Status Dot is where Dictatem communicates recording
+**state**.
+
+### Tray Icon
+
+The system notification-area (system tray) icon. It carries the app's brand
+identity and is **independent of the [Status Dot](#status-dot)**: it does not
+encode recording state. Swapping the Tray Icon has no effect on the Status
+Dot, and vice versa.
+
+## Hardware
+
+### Hardware Tier
+
+The capability-matched bundle of transcription model, compute device, and
+compute type Dictatem runs on a given machine — e.g. `large-v3-turbo` / CUDA /
+float16 on a 16 GB GPU, down to `base` / CPU / int8 on a modest laptop. A Tier
+is chosen from detected hardware; any value the user pins in config always
+overrides the chosen one. `base` is the smallest Tier ever chosen
+automatically; `tiny` is never auto-selected.
+
+The [Transform](#transform) (Ollama) model is **not** part of the Hardware
+Tier — Ollama is a separate, user-managed process that Dictatem only talks to,
+never selects or runs on the user's behalf.
+
+## Flagged ambiguities
+
+- "the icon that changes colour" was used to mean both the **Tray Icon** and
+  the **Status Dot**. Resolved: they are separate surfaces driven by separate
+  state. The **Status Dot** carries recording state; the **Tray Icon** is
+  static brand identity.
+- "use a smaller model for summarise" conflated two independent model axes: the
+  **Hardware Tier**'s Whisper model (transcription, bundled) and the
+  **Transform** model (Ollama, separate install). Resolved: they are selected
+  and managed separately.
