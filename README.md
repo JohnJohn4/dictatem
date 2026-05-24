@@ -20,6 +20,7 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 - Python 3.11+
 - NVIDIA GPU with CUDA support
 - [`uv`](https://docs.astral.sh/uv/) (fast Python package manager)
+- [Ollama](https://ollama.com) — optional, only for [Trigger Words](#trigger-words); see [Ollama / Transform setup](#ollama--transform-setup)
 
 ## Installation
 
@@ -146,11 +147,27 @@ timeout_s = 30                  # Per-request Ollama timeout
 last_paste_ttl_s = 300          # How long a Last Paste stays eligible for a Trigger Fire
 ```
 
+## Ollama / Transform setup
+
+[Trigger Words](#trigger-words) run a local [Ollama](https://ollama.com) model. **This feature is off until you set Ollama up yourself** — dictatem talks to a running Ollama but never installs it, starts it, or pulls models on your behalf (see [ADR-0008](docs/adr/0008-dictatem-does-not-manage-ollama-lifecycle.md)). The manual steps:
+
+1. **Install Ollama** — download it from [ollama.com](https://ollama.com) and run the installer.
+2. **Start the Ollama server** — `ollama serve` (the desktop app starts it for you). It listens on `http://localhost:11434` by default, matching `[transform].base_url`.
+3. **Pull the configured model** — `ollama pull gemma4:e4b` (or whatever you set in `[transform].model_name`). Confirm it's present with `ollama list`.
+
+Trigger Words are enabled by default in config (`[transform].enabled = true`), but they only fire once all three steps are done. Until then, firing a trigger leaves your document untouched and surfaces a message telling you which step is missing:
+
+| What's wrong | Message |
+|---|---|
+| Ollama not installed (no `ollama` on PATH) | Points you to this setup section |
+| Ollama installed but server not running | Start Ollama, then try again |
+| Server running but model not pulled | Run `ollama pull <model>` |
+
 ## Trigger Words
 
 A Trigger Word is a single utterance that rewrites the previously-pasted dictation in place instead of being pasted as-is. After any normal dictation paste, say one trigger (e.g. `"summarize"`) within the configured TTL — dictatem deletes the just-pasted text and replaces it with the output of a local [Ollama](https://ollama.com) model run with that trigger's prompt.
 
-Requires Ollama running locally with the configured model pulled (`ollama pull gemma4:e4b` by default). If Ollama is offline or the call fails, the document is left untouched and the overlay flashes an error.
+Requires Ollama running locally with the configured model pulled — see [Ollama / Transform setup](#ollama--transform-setup) above (`ollama pull gemma4:e4b` by default). If Ollama is offline or the call fails, the document is left untouched and the overlay flashes a message telling you which step is missing.
 
 ### Custom triggers
 
