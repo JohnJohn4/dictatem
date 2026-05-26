@@ -25,21 +25,25 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 
 ## Installation
 
-### One-line install (recommended)
+### Install (recommended)
 
-Run this in PowerShell — it installs [`uv`](https://docs.astral.sh/uv/) if needed, auto-detects whether you have an NVIDIA GPU (picking the CUDA or CPU-lean dependency set accordingly), installs Dictatem, and launches it:
+Run this in PowerShell. It installs [`uv`](https://docs.astral.sh/uv/) if needed, auto-detects whether you have an NVIDIA GPU (picking the CUDA or CPU-lean dependency set accordingly), installs Dictatem **pinned to the v0.2.0 release**, and launches it to the system tray:
 
 ```powershell
-irm https://raw.githubusercontent.com/JohnJohn4/dictatem/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.2.0/install.ps1 | iex
 ```
 
-To force the dependency set instead of auto-detecting, set `DICTATEM_GPU` first: `$env:DICTATEM_GPU='cpu'` (or `'gpu'`) before running the line.
+Piping a script from the internet into `iex` runs it immediately. If you'd rather read it first, open [that URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.2.0/install.ps1) in your browser and run it once you're satisfied.
 
-> The installer currently installs from `@main`. A future tagged release will pin this one-liner to a specific version (tracked in issue #60); until then you are installing the latest `main`.
+**Forcing CPU or GPU.** The script auto-detects an NVIDIA GPU; to override, set `DICTATEM_GPU` before running — `$env:DICTATEM_GPU='cpu'` (CPU-lean) or `$env:DICTATEM_GPU='gpu'` (CUDA). This only chooses the *dependency set*, not the runtime device. On a machine that has an NVIDIA GPU, Dictatem still transcribes on the GPU by default — so forcing `cpu` there installs the lean set but the daemon will still try CUDA and fail to load the model (the CUDA libraries aren't installed). Force `cpu` only on a genuinely GPU-less machine, or also set `device = "cpu"` in your config.
 
-The script never installs or starts Ollama and never downloads a Whisper model — the model lazy-downloads on first dictation, and [Trigger Words](#trigger-words) stay off until you set Ollama up yourself ([Ollama / Transform setup](#ollama--transform-setup)).
+**Updating.** Re-run the one-liner with a newer version tag in the URL (e.g. `.../v0.2.1/install.ps1`); see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest) for the current tag.
 
-### Manual install (development checkout)
+The script never installs or starts Ollama and never downloads a Whisper model. The model lazy-downloads on first dictation, so your **first dictation after launch** (or after the idle-unload timer frees VRAM) pauses a few seconds while the model loads — subsequent dictations are immediate. [Trigger Words](#trigger-words) stay off until you set Ollama up yourself ([Ollama / Transform setup](#ollama--transform-setup)).
+
+### Developer install (from a clone)
+
+For hacking on Dictatem, install from a checkout instead of the pinned release:
 
 ```powershell
 git clone https://github.com/JohnJohn4/dictatem
@@ -62,14 +66,14 @@ If you have an NVIDIA GPU and want the fastest transcription, use `runtime-gpu`.
 
 ### Uninstalling
 
-Dictatem owns its start-at-login entry, so removing it cleanly is a two-step process — a bare `uv tool uninstall` would orphan that entry:
+Dictatem owns its start-at-login entry, so removing it cleanly is a two-step process — a bare `uv tool uninstall` would orphan that entry. **Quit Dictatem from the tray first** (right-click the tray icon → Quit), then:
 
 ```powershell
-dictatem --uninstall      # step 1: removes the autostart entry
-uv tool uninstall dictatem # step 2: removes the tool itself
+dictatem --uninstall        # step 1: removes the autostart entry (a dialog confirms and shows step 2)
+uv tool uninstall dictatem  # step 2: removes the tool (dismiss the step 1 dialog first)
 ```
 
-`dictatem --uninstall` runs windowless, so it confirms step 1 and reminds you of step 2 in a small pop-up dialog (it can't print to the terminal). Run both lines to fully remove Dictatem; your config under `~/.dictatem` is left untouched.
+Quitting first matters: while the daemon is running its files are in use, so `uv tool uninstall` can otherwise fail with `Access is denied`. `dictatem --uninstall` runs windowless, so it confirms step 1 in a pop-up dialog rather than the terminal. Your config under `~/.dictatem` is left untouched. (A future release will stop the daemon automatically so this is just two lines — issue #69.)
 
 ## Verify the setup
 

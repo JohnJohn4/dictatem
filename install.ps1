@@ -2,7 +2,7 @@
 #
 # Run it piped, straight from raw GitHub:
 #
-#     irm https://raw.githubusercontent.com/JohnJohn4/dictatem/main/install.ps1 | iex
+#     irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.2.0/install.ps1 | iex
 #
 # It is a thin uv-tool provisioning script (ADR-0011): it installs `uv` if
 # absent, picks the CPU or GPU dependency set by auto-detecting an NVIDIA GPU,
@@ -13,9 +13,9 @@
 # and does NOT install, start, or pull Ollama (ADR-0008) — it only prints a
 # pointer to the README Ollama/Transform setup.
 #
-# DEVELOPMENT: this installs from `@main` (the line marked below). Issue #60
-# will cut the first tagged release and pin this to that tag for an auditable,
-# reproducible install — do not invent a tag here.
+# This installs Dictatem pinned to the v0.2.0 release tag (the line marked
+# below) for an auditable, reproducible install. When cutting a new release,
+# bump that tag and the README one-liner URL together.
 
 $ErrorActionPreference = 'Stop'
 
@@ -73,8 +73,9 @@ if ($useGpu) {
 }
 
 # --- 3. Install Dictatem from the GitHub repo ----------------------------
-# DEVELOPMENT PIN: installs from @main. Issue #60 pins this to a release tag.
-$source = 'git+https://github.com/JohnJohn4/dictatem@main'
+# Pinned to the v0.2.0 release for an auditable, reproducible install (#60).
+# When cutting a new release, bump this tag AND the README one-liner URL.
+$source = 'git+https://github.com/JohnJohn4/dictatem@v0.2.0'
 
 # A single PEP 508 direct-reference requirement: the extras and the git URL must
 # travel together on one argument. Splitting the URL into `--from` and the
