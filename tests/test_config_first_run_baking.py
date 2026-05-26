@@ -33,7 +33,7 @@ class TestFirstRunBakesResolvedValues:
         assert cfg.model.name == "base"
         assert cfg.model.device == "cpu"
         assert cfg.model.compute_type == "int8"
-        assert cfg.transform.model_name == "llama3.2:1b"
+        assert cfg.transform.model_name == "gemma4:e2b"
 
     def test_gpu_high_machine_bakes_high_tier(self, tmp_path: Path) -> None:
         probe = FakeHardwareProbe(GPU_HIGH_PROFILE)
@@ -65,7 +65,7 @@ class TestFirstRunBakesResolvedValues:
         assert cfg.model.name == "small"
         assert cfg.model.device == "cuda"
         assert cfg.model.compute_type == "int8_float16"
-        assert cfg.transform.model_name == "llama3.2:1b"
+        assert cfg.transform.model_name == "gemma4:e2b"
 
 
 class TestExistingFileNotReprobed:

@@ -34,7 +34,7 @@ class TestGpuMidTier:
         assert resolved.model == "small"
         assert resolved.device == "cuda"
         assert resolved.compute_type == "int8_float16"
-        assert resolved.transform_model == "llama3.2:1b"
+        assert resolved.transform_model == "gemma4:e2b"
 
 
 class TestGpuLowTier:
@@ -47,7 +47,7 @@ class TestGpuLowTier:
         assert resolved.model == "base"
         assert resolved.device == "cuda"
         assert resolved.compute_type == "int8_float16"
-        assert resolved.transform_model == "llama3.2:1b"
+        assert resolved.transform_model == "gemma4:e2b"
 
 
 class TestCpuTier:
@@ -60,7 +60,7 @@ class TestCpuTier:
         assert resolved.model == "base"
         assert resolved.device == "cpu"
         assert resolved.compute_type == "int8"
-        assert resolved.transform_model == "llama3.2:1b"
+        assert resolved.transform_model == "gemma4:e2b"
 
     def test_cpu_even_when_vram_reported(self) -> None:
         # A profile could in principle carry VRAM with cuda_available False;
