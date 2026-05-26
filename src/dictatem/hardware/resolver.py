@@ -20,7 +20,7 @@ CPU           no CUDA                base             cpu      int8
 
 ``base`` is the smallest auto-selected model; ``tiny`` is never auto-selected.
 Models stay multilingual (no ``.en`` suffix). The capable tier ships the
-``gemma4:e4b`` Transform tag; weaker tiers use a small ``llama3.2:1b`` tag.
+``gemma4:e4b`` Transform tag; weaker tiers use the smaller ``gemma4:e2b`` tag.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ VRAM_MID_MB = 3 * 1024  # >= this (and < HIGH) -> GPU-mid
 # Transform (Ollama) tags by capability. The capable tag is `gemma4:e4b`
 # (deliberately NOT "corrected" to gemma3:4b); weaker machines get a small tag.
 _TRANSFORM_CAPABLE = "gemma4:e4b"
-_TRANSFORM_SMALL = "llama3.2:1b"
+_TRANSFORM_SMALL = "gemma4:e2b"
 
 # Resolved settings keyed by tier name. The resolver's only job is to pick a
 # key; this keeps the GPU-mid and GPU-unknown rows identical-by-construction.
