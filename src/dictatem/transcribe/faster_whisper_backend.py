@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import os
+import sys
 from typing import TYPE_CHECKING
 
 from dictatem.exceptions import GPUOutOfMemoryError
@@ -11,6 +14,48 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from dictatem.types import AudioChunk, TranscriptionResult
+
+logger = logging.getLogger(__name__)
+
+
+def _register_cuda_dll_directories() -> None:
+    """Make the pip-installed NVIDIA CUDA runtime DLLs loadable on Windows.
+
+    CTranslate2 (under faster-whisper) loads cuBLAS and cuDNN lazily at
+    transcription time. The ``nvidia-*-cu12`` wheels ship those DLLs under
+    ``site-packages/nvidia/<lib>/bin``, but unlike Linux that directory is not
+    on the Windows DLL search path — so the load fails at the first GPU op with
+    e.g. "Library cublas64_12.dll is not found or cannot be loaded" even though
+    the model itself loaded fine.
+
+    CTranslate2 loads these DLLs from its own C++ code via ``LoadLibrary``,
+    which searches ``PATH`` but NOT the ``os.add_dll_directory()`` list — so we
+    prepend each nvidia ``bin`` dir to ``PATH`` (and also register it, which is
+    harmless and helps any ctypes/Python-loaded deps). No-op off Windows or
+    when the nvidia packages are absent (CPU-only installs).
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import nvidia  # type: ignore[import-not-found]
+    except ImportError:
+        return
+    bin_dirs: list[str] = []
+    for base in nvidia.__path__:
+        try:
+            entries = os.listdir(base)
+        except OSError:
+            continue
+        for entry in entries:
+            bin_dir = os.path.join(base, entry, "bin")
+            if os.path.isdir(bin_dir):
+                bin_dirs.append(bin_dir)
+    if not bin_dirs:
+        return
+    for bin_dir in bin_dirs:
+        os.add_dll_directory(bin_dir)
+    os.environ["PATH"] = os.pathsep.join([*bin_dirs, os.environ.get("PATH", "")])
+    logger.debug("Added CUDA DLL directories to PATH: %s", bin_dirs)
 
 
 class FasterWhisperBackend:
@@ -37,6 +82,7 @@ class FasterWhisperBackend:
         self._progress_callback: Callable[[int, int], None] | None = None
 
     def load_model(self) -> None:
+        _register_cuda_dll_directories()
         from faster_whisper import WhisperModel  # type: ignore[import-not-found]
 
         self._model = WhisperModel(

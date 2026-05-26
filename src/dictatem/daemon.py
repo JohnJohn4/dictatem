@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import logging.handlers
+import os
 import queue
 import sys
 import threading
@@ -41,6 +43,66 @@ if TYPE_CHECKING:
     from dictatem.transform.lifecycle import TransformLifecycle
 
 logger = logging.getLogger(__name__)
+
+
+def _add_rotating_log_file() -> logging.handlers.TimedRotatingFileHandler | None:
+    """Attach a rotating file handler at %APPDATA%\\Dictatem\\logs\\daemon.log.
+
+    The daemon launches via a windowless gui-scripts entry point (ADR-0011),
+    which has no console — so stderr-only logging is lost. Without this the
+    "check the logs" error and the tray "Open log" menu both point at a file
+    that is never written. Returns the handler so the caller can align its
+    ``backupCount`` with ``config.logging.rotation_days`` once config loads,
+    or ``None`` if the log file could not be opened.
+    """
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return None
+    log_dir = os.path.join(appdata, "Dictatem", "logs")
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+        handler = logging.handlers.TimedRotatingFileHandler(
+            os.path.join(log_dir, "daemon.log"),
+            when="midnight",
+            backupCount=7,
+            encoding="utf-8",
+        )
+    except OSError:
+        logger.warning("Could not open log file under %s", log_dir, exc_info=True)
+        return None
+    handler.setFormatter(
+        logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+    )
+    logging.getLogger().addHandler(handler)
+    return handler
+
+
+def _attach_parent_console() -> None:
+    """Attach to the launching terminal so CLI output is visible on Windows.
+
+    The daemon ships as a windowless gui-scripts launcher (ADR-0011) on the
+    Windows GUI subsystem, which has no console — so ``print()`` and argparse
+    output (e.g. from ``--uninstall``, ``--help``, or a bad argument) is
+    otherwise discarded. When invoked from a terminal, attach to the parent
+    console and rebind stdout/stderr so that feedback reaches the user. No-op
+    when there is no parent console (autostart, Start menu, ``Start-Process``),
+    when one is already attached (e.g. ``python -m dictatem``), or off Windows.
+    """
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.AttachConsole.argtypes = [ctypes.c_uint]
+    kernel32.AttachConsole.restype = ctypes.c_bool
+    attach_parent_process = 0xFFFFFFFF  # ATTACH_PARENT_PROCESS = (DWORD)-1
+    if not kernel32.AttachConsole(attach_parent_process):
+        return
+    try:
+        sys.stdout = open("CONOUT$", "w", buffering=1)  # noqa: SIM115
+        sys.stderr = open("CONOUT$", "w", buffering=1)  # noqa: SIM115
+    except OSError:
+        pass
 
 
 class _OverlayAdapter:
@@ -761,6 +823,13 @@ def main(argv: list[str] | None = None) -> None:
     final ``uv tool uninstall dictatem`` step (see ADR-0011); a bare tool
     uninstall would otherwise orphan that entry.
     """
+    # CLI usage (--uninstall, --help, arg errors) needs a console; the
+    # gui-scripts launcher is windowless, so attach to the parent terminal
+    # before argparse writes anything. The bare daemon launch (no args) skips
+    # this and stays detached.
+    if sys.argv[1:] if argv is None else argv:
+        _attach_parent_console()
+
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -835,6 +904,9 @@ def _start_windows_daemon() -> None:
         level=logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",
     )
+    # Persist to a rotating file so the windowless launch leaves a trail (the
+    # console handler above goes nowhere when there is no console).
+    log_file_handler = _add_rotating_log_file()
     # Library chatter — model-download HTTP requests, hub probes, etc. — is
     # noisy at INFO. Our own load/unload lines tell the user what they need.
     for noisy in ("httpx", "huggingface_hub", "filelock", "urllib3"):
@@ -872,6 +944,8 @@ def _start_windows_daemon() -> None:
     logging.getLogger().setLevel(
         getattr(logging, config.logging.level.upper(), logging.INFO)
     )
+    if log_file_handler is not None:
+        log_file_handler.backupCount = config.logging.rotation_days
 
     # Reconcile the OS autostart entry to config.startup.autostart on launch
     # (#55 / ADR-0012). The daemon — not the installer — owns autostart, so the
