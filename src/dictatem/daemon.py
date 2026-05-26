@@ -77,32 +77,6 @@ def _add_rotating_log_file() -> logging.handlers.TimedRotatingFileHandler | None
     return handler
 
 
-def _attach_parent_console() -> None:
-    """Attach to the launching terminal so CLI output is visible on Windows.
-
-    The daemon ships as a windowless gui-scripts launcher (ADR-0011) on the
-    Windows GUI subsystem, which has no console — so ``print()`` and argparse
-    output (e.g. from ``--uninstall``, ``--help``, or a bad argument) is
-    otherwise discarded. When invoked from a terminal, attach to the parent
-    console and rebind stdout/stderr so that feedback reaches the user. No-op
-    when there is no parent console (autostart, Start menu, ``Start-Process``),
-    when one is already attached (e.g. ``python -m dictatem``), or off Windows.
-    """
-    if sys.platform != "win32":
-        return
-    import ctypes
-
-    kernel32 = ctypes.windll.kernel32
-    kernel32.AttachConsole.argtypes = [ctypes.c_uint]
-    kernel32.AttachConsole.restype = ctypes.c_bool
-    attach_parent_process = 0xFFFFFFFF  # ATTACH_PARENT_PROCESS = (DWORD)-1
-    if not kernel32.AttachConsole(attach_parent_process):
-        return
-    try:
-        sys.stdout = open("CONOUT$", "w", buffering=1)  # noqa: SIM115
-        sys.stderr = open("CONOUT$", "w", buffering=1)  # noqa: SIM115
-    except OSError:
-        pass
 
 
 class _OverlayAdapter:
@@ -823,13 +797,6 @@ def main(argv: list[str] | None = None) -> None:
     final ``uv tool uninstall dictatem`` step (see ADR-0011); a bare tool
     uninstall would otherwise orphan that entry.
     """
-    # CLI usage (--uninstall, --help, arg errors) needs a console; the
-    # gui-scripts launcher is windowless, so attach to the parent terminal
-    # before argparse writes anything. The bare daemon launch (no args) skips
-    # this and stays detached.
-    if sys.argv[1:] if argv is None else argv:
-        _attach_parent_console()
-
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -856,11 +823,35 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _run_uninstall() -> None:
-    """Wire the Windows registrar and run the uninstall cleanup (#58)."""
+    """Wire the Windows registrar and run the uninstall cleanup (#58).
+
+    The gui-scripts launcher is windowless (ADR-0011), so console output is
+    invisible — collect the cleanup's guidance and show it in a message box so
+    the user sees the remaining ``uv tool uninstall dictatem`` step. The README
+    also documents the two-step uninstall as the canonical reference.
+    """
     from dictatem.autostart.reconcile import run_uninstall
     from dictatem.autostart.win32_registrar import Win32AutostartRegistrar
 
-    run_uninstall(registrar=Win32AutostartRegistrar(), out=print)
+    lines: list[str] = []
+    run_uninstall(registrar=Win32AutostartRegistrar(), out=lines.append)
+    _show_uninstall_message("\n".join(lines))
+
+
+def _show_uninstall_message(message: str) -> None:
+    """Surface uninstall guidance in a dialog; print as a fallback off Windows.
+
+    A windowless launch has no console, so a message box is the only reliable
+    way to reach the user. The dialog text is selectable (Ctrl+C copies it),
+    and the full two-step uninstall also lives in the README.
+    """
+    if sys.platform != "win32":
+        print(message)
+        return
+    import ctypes
+
+    mb_ok_iconinfo = 0x40  # MB_OK | MB_ICONINFORMATION
+    ctypes.windll.user32.MessageBoxW(0, message, "Dictatem", mb_ok_iconinfo)
 
 
 def _start_windows_daemon() -> None:

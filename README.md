@@ -65,9 +65,11 @@ If you have an NVIDIA GPU and want the fastest transcription, use `runtime-gpu`.
 Dictatem owns its start-at-login entry, so removing it cleanly is a two-step process — a bare `uv tool uninstall` would orphan that entry:
 
 ```powershell
-dictatem --uninstall      # removes the autostart entry, then prints the next step
-uv tool uninstall dictatem
+dictatem --uninstall      # step 1: removes the autostart entry
+uv tool uninstall dictatem # step 2: removes the tool itself
 ```
+
+`dictatem --uninstall` runs windowless, so it confirms step 1 and reminds you of step 2 in a small pop-up dialog (it can't print to the terminal). Run both lines to fully remove Dictatem; your config under `~/.dictatem` is left untouched.
 
 ## Verify the setup
 
