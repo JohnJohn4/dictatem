@@ -244,6 +244,7 @@ class DaemonCore:
         clipboard: ClipboardIO | None = None,
         keystroke: KeystrokeSender | None = None,
         foreground: ForegroundTracker | None = None,
+        restore_scheduler: Callable[[float, Callable[[], None]], None] | None = None,
         silence_timeout_s: float = 60.0,
         max_recording_s: float = 300.0,
         transform_lifecycle: TransformLifecycle | None = None,
@@ -265,6 +266,7 @@ class DaemonCore:
         self._clipboard = clipboard
         self._keystroke = keystroke
         self._foreground = foreground
+        self._restore_scheduler = restore_scheduler
         self._silence_timeout_s = silence_timeout_s
         self._max_recording_s = max_recording_s
         self._last_text: str | None = None
@@ -687,6 +689,7 @@ class DaemonCore:
                 keystroke=self._keystroke,
                 foreground=self._foreground,
                 replace_chars=replace,
+                schedule_restore=self._restore_scheduler,
             )
             normalized = normalize_pasted_text(self._last_text)
             self._last_paste = LastPaste(
@@ -999,6 +1002,14 @@ def _start_windows_daemon() -> None:
         config.startup.autostart = enabled
         write_config(config, config_path)
 
+    def _schedule_clipboard_restore(
+        delay_s: float, callback: Callable[[], None]
+    ) -> None:
+        # Defer the clipboard restore on the Qt event loop so the target window
+        # reads our pasted text before the user's clipboard is put back (#66).
+        # _do_paste runs on the Qt thread, so creating the timer here is safe.
+        QTimer.singleShot(int(delay_s * 1000), callback)
+
     daemon = DaemonCore(
         state_machine=sm,
         audio_capture=audio_capture,
@@ -1009,6 +1020,7 @@ def _start_windows_daemon() -> None:
         clipboard=clipboard,
         keystroke=keystroke,
         foreground=foreground,
+        restore_scheduler=_schedule_clipboard_restore,
         silence_timeout_s=float(config.behaviour.silence_timeout_s),
         max_recording_s=float(config.behaviour.max_recording_seconds),
         transform_lifecycle=transform_lifecycle,

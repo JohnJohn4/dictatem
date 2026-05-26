@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING
 from dictatem.exceptions import ClipboardContentionError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from dictatem.interfaces import ClipboardIO, ForegroundTracker, KeystrokeSender
+
+    # Runs ``callback`` after ``delay_s`` seconds without blocking the caller
+    # (the daemon backs this with a Qt single-shot timer).
+    RestoreScheduler = Callable[[float, Callable[[], None]], None]
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +26,12 @@ _RETRY_DELAY_S = 0.010
 # restore the saved clipboard too soon, the target reads the *old* contents
 # and the paste silently fails.
 _POST_PASTE_SETTLE_S = 0.100
+# When the caller provides a restore scheduler, defer the clipboard restore by
+# this much instead — long enough that the target has processed the async
+# Ctrl+V and read our text before we put the user's clipboard back, even on
+# slow or security-hooked machines where the 100 ms settle loses the race and
+# pastes the OLD clipboard (#66). The synchronous settle is the fallback only.
+_RESTORE_DELAY_S = 1.5
 
 
 def normalize_pasted_text(text: str) -> str:
@@ -52,6 +64,7 @@ def paste(
     keystroke: KeystrokeSender,
     foreground: ForegroundTracker,
     replace_chars: int = 0,
+    schedule_restore: RestoreScheduler | None = None,
 ) -> None:
     """Paste *text* into the focused window.
 
@@ -62,6 +75,12 @@ def paste(
     clipboard entirely. Typing avoids the race between the daemon's
     clipboard-restore and the target window's paste handler (see #23) and
     leaves the user's clipboard untouched as a bonus.
+
+    *schedule_restore*, when given, defers the clipboard restore off-thread by
+    ``_RESTORE_DELAY_S`` so the target reads our text before the user's
+    clipboard is put back (#66). Without it, the restore runs synchronously
+    after a short settle — the legacy path, which can lose that race on slow or
+    security-hooked machines.
     """
     normalized = normalize_pasted_text(text)
     hwnd = foreground.capture()
@@ -82,22 +101,19 @@ def paste(
 
     # Regular dictation path: clipboard + Ctrl+V.
     saved = clipboard.save()
-    try:
-        _open_with_retry(clipboard)
-        clipboard.set_text(normalized)
-        clipboard.close()
-        logger.info("Paste: clipboard set, restoring foreground and sending Ctrl+V")
+    _open_with_retry(clipboard)
+    clipboard.set_text(normalized)
+    clipboard.close()
+    logger.info("Paste: clipboard set, restoring foreground and sending Ctrl+V")
+    foreground.restore(hwnd)
+    keystroke.send_paste()
 
-        foreground.restore(hwnd)
-        keystroke.send_paste()
-        time.sleep(_POST_PASTE_SETTLE_S)
-        logger.info("Paste: complete")
-    finally:
+    def _restore() -> None:
         # restore() can race the target window's Ctrl+V handler — both call
         # OpenClipboard. Swallow the resulting Access-denied; losing the race
-        # is the correct outcome (target reads the new text we just put on
-        # the clipboard). Retrying would put the old text back before the
-        # target reads it. See #23.
+        # is the correct outcome (target reads the new text we just put on the
+        # clipboard). Retrying would put the old text back before the target
+        # reads it. See #23.
         try:
             clipboard.restore(saved)
         except OSError as exc:
@@ -106,3 +122,14 @@ def paste(
                 "(%s); user's original clipboard not restored",
                 exc,
             )
+
+    if schedule_restore is None:
+        # Legacy fallback (tests/headless): restore synchronously after a short
+        # settle. Can lose the race on slow/secured machines — see #66.
+        time.sleep(_POST_PASTE_SETTLE_S)
+        logger.info("Paste: complete")
+        _restore()
+    else:
+        # Defer the restore so the target reads our text first (#66).
+        schedule_restore(_RESTORE_DELAY_S, _restore)
+        logger.info("Paste: sent; clipboard restore deferred %.1fs", _RESTORE_DELAY_S)

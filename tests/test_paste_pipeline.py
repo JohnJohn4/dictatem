@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import importlib
 import sys
+from typing import TYPE_CHECKING
 
 import pytest
 
 from dictatem.exceptions import ClipboardContentionError
 from dictatem.paste.pipeline import paste
 from tests.fakes import FakeClipboardIO, FakeForegroundTracker, FakeKeystrokeSender
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class TestPasteCallSequence:
@@ -154,6 +158,65 @@ class TestClipboardRestore:
         paste("text", clipboard=clip, keystroke=ks, foreground=fg)
 
         assert clip.calls[-1] == ("restore", "saved")
+
+
+class TestDeferredRestore:
+    """With a scheduler, the clipboard restore is deferred off-thread (#66).
+
+    The synchronous settle restores before the target's async Ctrl+V lands on
+    slow/secured machines, pasting the OLD clipboard. Deferring the restore
+    lets the target read our text first.
+    """
+
+    def test_restore_deferred_until_scheduled_callback_fires(self) -> None:
+        clip = FakeClipboardIO()
+        clip._content = "precious"
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker()
+        scheduled: list[tuple[float, Callable[[], None]]] = []
+
+        paste(
+            "new",
+            clipboard=clip,
+            keystroke=ks,
+            foreground=fg,
+            schedule_restore=lambda d, c: scheduled.append((d, c)),
+        )
+
+        # Ctrl+V was sent, but the restore is deferred — our text is still on
+        # the clipboard for the target to read.
+        assert ks.paste_count == 1
+        assert clip._content == "new "
+        assert ("restore", "precious") not in clip.calls
+        assert len(scheduled) == 1
+        delay_s, callback = scheduled[0]
+        assert delay_s > 0
+
+        # Firing the scheduled callback performs the restore.
+        callback()
+        assert clip._content == "precious"
+        assert clip.calls[-1] == ("restore", "precious")
+
+    def test_typed_path_ignores_scheduler(self) -> None:
+        clip = FakeClipboardIO()
+        clip._content = "precious"
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker()
+        scheduled: list[tuple[float, Callable[[], None]]] = []
+
+        paste(
+            "new",
+            clipboard=clip,
+            keystroke=ks,
+            foreground=fg,
+            replace_chars=4,
+            schedule_restore=lambda d, c: scheduled.append((d, c)),
+        )
+
+        # The typed path never touches the clipboard, so nothing is scheduled.
+        assert clip.calls == []
+        assert scheduled == []
+        assert ks.typed_texts == ["new "]
 
 
 class TestContentionRetry:
