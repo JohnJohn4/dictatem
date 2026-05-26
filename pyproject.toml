@@ -1,6 +1,6 @@
 [project]
 name = "dictatem"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local GPU-powered voice dictation daemon for Windows"
 requires-python = ">=3.11"
 dependencies = [
