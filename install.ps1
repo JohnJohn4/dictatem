@@ -67,17 +67,29 @@ if ($override -eq 'gpu') {
 }
 
 if ($useGpu) {
-    $extra = 'dictatem[runtime-gpu]'
+    $extras = 'runtime-gpu'
 } else {
-    $extra = 'dictatem[runtime]'
+    $extras = 'runtime'
 }
 
 # --- 3. Install Dictatem from the GitHub repo ----------------------------
 # DEVELOPMENT PIN: installs from @main. Issue #60 pins this to a release tag.
 $source = 'git+https://github.com/JohnJohn4/dictatem@main'
 
-Write-Host "Installing $extra from $source ..."
-uv tool install --from $source $extra
+# A single PEP 508 direct-reference requirement: the extras and the git URL must
+# travel together on one argument. Splitting the URL into `--from` and the
+# `dictatem[extras]` into a positional makes uv treat them as two conflicting
+# requirements for the same package and abort.
+$requirement = "dictatem[$extras] @ $source"
+
+Write-Host "Installing dictatem[$extras] from $source ..."
+uv tool install $requirement
+# $ErrorActionPreference='Stop' does NOT halt on a native exe's non-zero exit,
+# so guard explicitly — otherwise a failed install falls through to the launch
+# below and surfaces as a misleading "cannot find the file" error.
+if ($LASTEXITCODE -ne 0) {
+    throw "uv tool install failed (exit code $LASTEXITCODE). See the error above; Dictatem was not installed."
+}
 
 # Make the freshly installed `dictatem` launcher usable in THIS session — uv
 # only updates PATH for new sessions. `uv tool update-shell` ensures the tool
