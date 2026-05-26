@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import os
+import sys
 from typing import TYPE_CHECKING
 
 from dictatem.exceptions import GPUOutOfMemoryError
@@ -11,6 +14,38 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from dictatem.types import AudioChunk, TranscriptionResult
+
+logger = logging.getLogger(__name__)
+
+
+def _register_cuda_dll_directories() -> None:
+    """Make the pip-installed NVIDIA CUDA runtime DLLs loadable on Windows.
+
+    CTranslate2 (under faster-whisper) loads cuBLAS and cuDNN lazily at
+    transcription time. The ``nvidia-*-cu12`` wheels ship those DLLs under
+    ``site-packages/nvidia/<lib>/bin``, but unlike Linux that directory is not
+    on the Windows DLL search path — so the load fails at the first GPU op with
+    e.g. "Library cublas64_12.dll is not found or cannot be loaded" even though
+    the model itself loaded fine. Register each nvidia ``bin`` dir so Windows
+    can resolve them. No-op off Windows or when the nvidia packages are absent
+    (CPU-only installs).
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import nvidia  # type: ignore[import-not-found]
+    except ImportError:
+        return
+    for base in nvidia.__path__:
+        try:
+            entries = os.listdir(base)
+        except OSError:
+            continue
+        for entry in entries:
+            bin_dir = os.path.join(base, entry, "bin")
+            if os.path.isdir(bin_dir):
+                os.add_dll_directory(bin_dir)
+                logger.debug("Registered CUDA DLL directory %s", bin_dir)
 
 
 class FasterWhisperBackend:
@@ -37,6 +72,7 @@ class FasterWhisperBackend:
         self._progress_callback: Callable[[int, int], None] | None = None
 
     def load_model(self) -> None:
+        _register_cuda_dll_directories()
         from faster_whisper import WhisperModel  # type: ignore[import-not-found]
 
         self._model = WhisperModel(
