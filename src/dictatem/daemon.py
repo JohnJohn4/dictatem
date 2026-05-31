@@ -257,6 +257,7 @@ class DaemonCore:
         last_paste_ttl_s: float = 300.0,
         transform_model_name: str = "",
         transform_base_url: str = "",
+        llm_keep_alive_s: float = 1800.0,
         latency_monitor: LatencyMonitor | None = None,
         autostart_registrar: AutostartRegistrar | None = None,
         persist_autostart: Callable[[bool], None] | None = None,
@@ -284,6 +285,10 @@ class DaemonCore:
         self._last_paste_ttl_s = last_paste_ttl_s
         self._transform_model_name = transform_model_name
         self._transform_base_url = transform_base_url
+        # How long the LLM is presumed resident after a transform/warm — matches
+        # the Ollama keep_alive window — so a follow-up trigger reads as
+        # "computing" rather than "loading" (#74).
+        self._llm_keep_alive_ms = int(llm_keep_alive_s * 1000)
         self._last_paste: LastPaste | None = None
         self._pending_replace_chars: int = 0
         self._transform_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -298,6 +303,8 @@ class DaemonCore:
         self._preload_pill_active: bool = False
         self._llm_warming: bool = False
         self._llm_warm_thread: threading.Thread | None = None
+        # Monotonic-ms deadline until which the LLM is presumed warm (#74).
+        self._llm_warm_until_ms: int = 0
         # --- Latency tip (one-shot, see ADR-0007) ---
         self._latency_monitor = latency_monitor
         # --- Autostart toggle (see ADR-0012) ---
@@ -600,10 +607,13 @@ class DaemonCore:
             "Trigger Fire: starting Transform on %d-char Last Paste",
             captured.char_count,
         )
-        # The Transform model may be cold (a ~50 s load on first use); show the
-        # loading pill so the wait reads as progress rather than a hang (#74).
-        # keep_alive keeps it warm, so this is brief after the first trigger.
-        self._overlay.show_loading("Loading LLM Model")
+        # Within the keep_alive window the model is already resident, so the
+        # work is generation ("computing"), not a load. Only call it "loading"
+        # the first time or after it has gone idle and unloaded (#74).
+        if now_ms < self._llm_warm_until_ms:
+            self._overlay.show_loading("LLM Model Computing")
+        else:
+            self._overlay.show_loading("Loading LLM Model")
 
         def _worker() -> None:
             try:
@@ -645,6 +655,9 @@ class DaemonCore:
                 )
                 self._last_text = text
                 self._pending_replace_chars = replace_chars
+                # The model just generated, so it is resident: a follow-up
+                # trigger within keep_alive is "computing", not "loading" (#74).
+                self._llm_warm_until_ms = now_ms + self._llm_keep_alive_ms
                 commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
                 self._execute_commands(commands, now_ms=now_ms)
             else:
@@ -1128,6 +1141,7 @@ def _start_windows_daemon() -> None:
         last_paste_ttl_s=float(config.transform.last_paste_ttl_s),
         transform_model_name=config.transform.model_name,
         transform_base_url=config.transform.base_url,
+        llm_keep_alive_s=float(config.model.idle_unload_minutes * 60),
         latency_monitor=latency_monitor,
         autostart_registrar=autostart_registrar,
         persist_autostart=_persist_autostart,

@@ -12,8 +12,10 @@ bug that prompted this, #74).
 **Model-Loading** state — a caption naming what is loading ("Loading Dict.
 Model", "Loading LLM Model", or "Preloading Models") with dots cycling 1→2→3→1 —
 shown whenever a model is loading: the first-tap Whisper load, the first Trigger
-Word's LLM load, and tray **Preload**. It is a new `OverlayPhase.LOADING` on the
-pure `OverlayState`; the daemon flips it to the
+Word's LLM load, and tray **Preload**. Once the LLM is already resident (within
+its keep_alive window) a Trigger Word instead reads "LLM Model Computing", so a
+warm-but-slow generation isn't mislabelled as a reload. It is a new
+`OverlayPhase.LOADING` on the pure `OverlayState`; the daemon flips it to the
 [Status Dot](../../CONTEXT.md#status-dot) once the model is resident, or hides it
 when Preload finishes.
 
