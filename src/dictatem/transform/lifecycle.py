@@ -32,3 +32,13 @@ class TransformLifecycle:
         ``FLASH_ERROR`` path.
         """
         return self._backend.transform(text, system_prompt)
+
+    def warm(self) -> bool:
+        """Best-effort preload of the LLM into memory. Never raises; see
+        ``TransformBackend.warm``."""
+        return self._backend.warm()
+
+    def is_model_available(self) -> bool:
+        """Best-effort check that the configured model is pulled. Never raises;
+        see ``TransformBackend.is_model_available``."""
+        return self._backend.is_model_available()

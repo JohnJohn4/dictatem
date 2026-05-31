@@ -21,7 +21,7 @@ class TestGpuHighTier:
         assert resolved.model == "large-v3-turbo"
         assert resolved.device == "cuda"
         assert resolved.compute_type == "float16"
-        assert resolved.transform_model == "gemma4:e4b"
+        assert resolved.transform_model == "gemma4:e2b"
 
 
 class TestGpuMidTier:

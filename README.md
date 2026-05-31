@@ -182,6 +182,8 @@ sample_rate = 16000
 [behaviour]
 silence_timeout_s = 60          # Auto-stop toggle recording after this much silence
 max_recording_seconds = 300     # Hard cap on recording length regardless of audio activity
+model_timeout_s = 120           # Shared model-readiness timeout: the Ollama request limit AND
+                                #   the threshold for the "Model Loading" pill (covers cold loads)
 
 [overlay]
 position = "bottom-right"
@@ -197,10 +199,10 @@ level = "info"
 
 [transform]
 enabled = true                  # Master switch for Trigger Words (local-LLM rewrites)
-model_name = "gemma4:e4b"       # Ollama model tag; must match `ollama list`
+model_name = "gemma4:e2b"       # Ollama model tag; must match `ollama list`
 base_url = "http://localhost:11434"
-timeout_s = 30                  # Per-request Ollama timeout
 last_paste_ttl_s = 300          # How long a Last Paste stays eligible for a Trigger Fire
+                                # (the Ollama request timeout is [behaviour].model_timeout_s)
 ```
 
 ## Ollama / Transform setup
@@ -209,7 +211,7 @@ last_paste_ttl_s = 300          # How long a Last Paste stays eligible for a Tri
 
 1. **Install Ollama** — download it from [ollama.com](https://ollama.com) and run the installer.
 2. **Start the Ollama server** — `ollama serve` (the desktop app starts it for you). It listens on `http://localhost:11434` by default, matching `[transform].base_url`.
-3. **Pull the configured model** — `ollama pull gemma4:e4b` (or whatever you set in `[transform].model_name`). Confirm it's present with `ollama list`.
+3. **Pull the configured model** — `ollama pull gemma4:e2b` (or whatever you set in `[transform].model_name`). Confirm it's present with `ollama list`.
 
 Trigger Words are enabled by default in config (`[transform].enabled = true`), but they only fire once all three steps are done. Until then, firing a trigger leaves your document untouched and surfaces a message telling you what's wrong:
 
@@ -224,7 +226,7 @@ dictatem diagnoses this from the network response, not from a local `ollama` bin
 
 A Trigger Word is a single utterance that rewrites the previously-pasted dictation in place instead of being pasted as-is. After any normal dictation paste, say one trigger (e.g. `"summarize"`) within the configured TTL — dictatem deletes the just-pasted text and replaces it with the output of a local [Ollama](https://ollama.com) model run with that trigger's prompt.
 
-Requires Ollama running locally with the configured model pulled — see [Ollama / Transform setup](#ollama--transform-setup) above (`ollama pull gemma4:e4b` by default). If Ollama is offline or the call fails, the document is left untouched and the overlay flashes a message telling you which step is missing.
+Requires Ollama running locally with the configured model pulled — see [Ollama / Transform setup](#ollama--transform-setup) above (`ollama pull gemma4:e2b` by default). If Ollama is offline or the call fails, the document is left untouched and the overlay flashes a message telling you which step is missing.
 
 ### Custom triggers
 

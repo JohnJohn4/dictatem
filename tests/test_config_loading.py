@@ -82,14 +82,14 @@ class TestConfigSubDataclasses:
         cfg = Config()
         assert isinstance(cfg.behaviour, BehaviourConfig)
         assert cfg.behaviour.silence_timeout_s == 60
+        assert cfg.behaviour.model_timeout_s == 120
 
     def test_transform_section(self) -> None:
         cfg = Config()
         assert isinstance(cfg.transform, TransformConfig)
         assert cfg.transform.enabled is True
-        assert cfg.transform.model_name == "gemma4:e4b"
+        assert cfg.transform.model_name == "gemma4:e2b"
         assert cfg.transform.base_url == "http://localhost:11434"
-        assert cfg.transform.timeout_s == 30
         assert cfg.transform.last_paste_ttl_s == 300
 
 
@@ -398,7 +398,8 @@ class TestTransformKillSwitch:
 
 
 class TestTransformOllamaKnobs:
-    """[transform] exposes model/url/timeout/ttl knobs (#22)."""
+    """[transform] exposes model/url/ttl knobs (#22). The request timeout moved
+    to the shared [behaviour].model_timeout_s in #74 (see TestModelTimeout)."""
 
     def test_full_section_round_trips(self, tmp_path: Path) -> None:
         path = tmp_path / "config.toml"
@@ -407,14 +408,12 @@ class TestTransformOllamaKnobs:
             enabled = true
             model_name = "llama3.2:3b"
             base_url = "http://remote:11434"
-            timeout_s = 60
             last_paste_ttl_s = 120
         """))
         cfg = load_config(path)
         assert cfg.transform.enabled is True
         assert cfg.transform.model_name == "llama3.2:3b"
         assert cfg.transform.base_url == "http://remote:11434"
-        assert cfg.transform.timeout_s == 60
         assert cfg.transform.last_paste_ttl_s == 120
 
     def test_first_write_emits_full_section(self, tmp_path: Path) -> None:
@@ -425,33 +424,7 @@ class TestTransformOllamaKnobs:
         assert "enabled" in content
         assert "model_name" in content
         assert "base_url" in content
-        assert "timeout_s" in content
         assert "last_paste_ttl_s" in content
-
-    def test_zero_timeout_falls_back_to_default(
-        self, tmp_path: Path, caplog: logging.LogCaptureFixture
-    ) -> None:
-        path = tmp_path / "config.toml"
-        path.write_text(dedent("""\
-            [transform]
-            timeout_s = 0
-        """))
-        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
-            cfg = load_config(path)
-        assert cfg.transform.timeout_s == 30
-        assert any(
-            "timeout_s" in r.message and r.levelname == "WARNING"
-            for r in caplog.records
-        )
-
-    def test_negative_timeout_falls_back_to_default(self, tmp_path: Path) -> None:
-        path = tmp_path / "config.toml"
-        path.write_text(dedent("""\
-            [transform]
-            timeout_s = -1
-        """))
-        cfg = load_config(path)
-        assert cfg.transform.timeout_s == 30
 
     def test_zero_ttl_falls_back_to_default(
         self, tmp_path: Path, caplog: logging.LogCaptureFixture
@@ -475,12 +448,70 @@ class TestTransformOllamaKnobs:
             enabled=False,
             model_name="qwen2.5:7b",
             base_url="http://192.168.1.10:11434",
-            timeout_s=45,
             last_paste_ttl_s=600,
         ))
         write_config(cfg, path)
         cfg2 = load_config(path)
         assert cfg2.transform == cfg.transform
+
+
+class TestModelTimeout:
+    """[behaviour].model_timeout_s is the one shared model-readiness timeout (#74):
+    the Ollama request timeout AND the transcription "still loading" threshold."""
+
+    def test_defaults_to_120(self, tmp_path: Path) -> None:
+        cfg = load_config(tmp_path / "config.toml")
+        assert cfg.behaviour.model_timeout_s == 120
+
+    def test_custom_value_loads(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text(dedent("""\
+            [behaviour]
+            model_timeout_s = 90
+        """))
+        cfg = load_config(path)
+        assert cfg.behaviour.model_timeout_s == 90
+
+    def test_zero_falls_back_to_default(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text(dedent("""\
+            [behaviour]
+            model_timeout_s = 0
+        """))
+        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert cfg.behaviour.model_timeout_s == 120
+        assert any(
+            "model_timeout_s" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        )
+
+    def test_negative_falls_back_to_default(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text(dedent("""\
+            [behaviour]
+            model_timeout_s = -5
+        """))
+        cfg = load_config(path)
+        assert cfg.behaviour.model_timeout_s == 120
+
+    def test_legacy_transform_timeout_is_ignored(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture
+    ) -> None:
+        """An upgraded config carrying the old [transform].timeout_s is
+        logged-and-ignored; the new shared default applies (#74)."""
+        path = tmp_path / "config.toml"
+        path.write_text(dedent("""\
+            [transform]
+            timeout_s = 30
+        """))
+        with caplog.at_level(logging.INFO, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert not hasattr(cfg.transform, "timeout_s")
+        assert cfg.behaviour.model_timeout_s == 120
+        assert any("timeout_s" in r.message for r in caplog.records)
 
 
 class TestHotkeyModifiersValidation:

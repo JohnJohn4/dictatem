@@ -26,11 +26,16 @@ class OllamaBackend:
         model_name: str,
         base_url: str,
         timeout_s: float,
+        keep_alive: str | int | None = None,
     ) -> None:
         self._model_name = model_name
         # Tolerate trailing slash in the configured URL.
         self._base_url = base_url.rstrip("/")
         self._timeout_s = timeout_s
+        # How long Ollama should keep the model resident after a request (e.g.
+        # "30m" or -1 for forever). Sent as a payload field, so a future Ollama
+        # that drops it simply ignores it — never an error (#74).
+        self._keep_alive = keep_alive
 
     def transform(self, text: str, system_prompt: str) -> str:
         payload: dict[str, Any] = {
@@ -40,6 +45,8 @@ class OllamaBackend:
             "stream": False,
             "options": {"temperature": 0.2},
         }
+        if self._keep_alive is not None:
+            payload["keep_alive"] = self._keep_alive
         body = json.dumps(payload).encode("utf-8")
         url = f"{self._base_url}/api/generate"
         req = urllib.request.Request(
@@ -105,3 +112,61 @@ class OllamaBackend:
                 failure=OllamaFailure.malformed(),
             )
         return result
+
+    def warm(self) -> bool:
+        """Best-effort: load the model into Ollama's memory so the next
+        Transform pays no cold-load.
+
+        POSTs to ``/api/generate`` with no prompt — Ollama loads the model and
+        returns immediately — carrying ``keep_alive`` so it stays resident.
+        Returns ``True`` on a 200; on ANY failure (Ollama down, model not
+        pulled, unexpected response) it logs and returns ``False`` — it never
+        raises, so a Preload that can't reach Ollama just skips the LLM and
+        leaves Whisper preloading untouched (#74).
+        """
+        payload: dict[str, Any] = {"model": self._model_name}
+        if self._keep_alive is not None:
+            payload["keep_alive"] = self._keep_alive
+        body = json.dumps(payload).encode("utf-8")
+        url = f"{self._base_url}/api/generate"
+        req = urllib.request.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout_s) as resp:
+                return resp.status == 200
+        except Exception as exc:
+            logger.warning("Ollama warm() failed for %s: %s", self._model_name, exc)
+            return False
+
+    def is_model_available(self) -> bool:
+        """Best-effort check that the configured model is pulled in Ollama.
+
+        GETs ``/api/tags`` and looks for the configured tag. Returns ``False``
+        (logged) when Ollama is unreachable or the tag isn't present. Used only
+        to gate the LLM Preload — never to fail a Transform.
+        """
+        url = f"{self._base_url}/api/tags"
+        req = urllib.request.Request(url, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout_s) as resp:
+                if resp.status != 200:
+                    return False
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            logger.warning("Ollama is_model_available() check failed: %s", exc)
+            return False
+
+        models = data.get("models", []) if isinstance(data, dict) else []
+        names = {m.get("name") for m in models if isinstance(m, dict)}
+        return (
+            self._model_name in names
+            or f"{self._model_name}:latest" in names
+            or any(
+                isinstance(n, str) and n.startswith(f"{self._model_name}:")
+                for n in names
+            )
+        )

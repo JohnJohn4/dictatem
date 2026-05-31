@@ -15,6 +15,7 @@ from dictatem.types import RecordingMode
 class OverlayPhase(enum.Enum):
     HIDDEN = "hidden"
     FADING_IN = "fading_in"
+    LOADING = "loading"
     RECORDING = "recording"
     TRANSCRIBING = "transcribing"
     ERROR_FLASH = "error_flash"
@@ -54,6 +55,10 @@ PILL_WIDTH: int = 200
 PILL_HEIGHT: int = 40
 PILL_MARGIN: int = 16
 
+# How long each dot in the "Model Loading" animation holds before the next
+# appears; the count cycles 1 -> 2 -> 3 -> 1 so the pill reads as live.
+LOADING_DOT_INTERVAL_S: float = 0.4
+
 
 class OverlayState:
     """Pure state machine for the recording overlay pill.
@@ -77,6 +82,8 @@ class OverlayState:
         self._phase = OverlayPhase.HIDDEN
         self._mode: RecordingMode | None = None
         self._transition_start: float = 0.0
+        self._loading_label: str = "Model Loading"
+        self._loading_start: float = 0.0
 
     @property
     def phase(self) -> OverlayPhase:
@@ -89,6 +96,18 @@ class OverlayState:
 
     def show_transcribing(self) -> None:
         self._phase = OverlayPhase.TRANSCRIBING
+
+    def show_loading(self, label: str = "Model Loading") -> None:
+        self._loading_label = label
+        self._phase = OverlayPhase.LOADING
+        self._loading_start = self._clock()
+
+    def current_loading_text(self) -> str:
+        """The pill caption while a model loads, with dots cycling 1->2->3->1 so
+        it reads as live progress rather than a frozen string."""
+        elapsed = max(0.0, self._clock() - self._loading_start)
+        dots = int(elapsed / LOADING_DOT_INTERVAL_S) % 3 + 1
+        return f"{self._loading_label}{'.' * dots}"
 
     def flash_error(self) -> None:
         self._phase = OverlayPhase.ERROR_FLASH
@@ -119,7 +138,12 @@ class OverlayState:
         if self._phase == OverlayPhase.FADING_IN:
             elapsed = self._clock() - self._transition_start
             return min(elapsed / self._fade_in_s, 1.0)
-        if self._phase in (OverlayPhase.RECORDING, OverlayPhase.TRANSCRIBING, OverlayPhase.ERROR_FLASH):
+        if self._phase in (
+            OverlayPhase.LOADING,
+            OverlayPhase.RECORDING,
+            OverlayPhase.TRANSCRIBING,
+            OverlayPhase.ERROR_FLASH,
+        ):
             return 1.0
         if self._phase == OverlayPhase.FADING_OUT:
             elapsed = self._clock() - self._transition_start

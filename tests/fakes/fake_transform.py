@@ -9,6 +9,10 @@ class FakeTransformBackend:
         self.calls: list[tuple[str, str]] = []
         self._results: list[str] = []
         self._errors: list[Exception] = []
+        self.warm_calls: int = 0
+        self.availability_checks: int = 0
+        self._warm_result: bool = True
+        self._available: bool = True
 
     def transform(self, text: str, system_prompt: str) -> str:
         self.calls.append((text, system_prompt))
@@ -18,7 +22,23 @@ class FakeTransformBackend:
             return self._results.pop(0)
         return self._default_result
 
+    def warm(self) -> bool:
+        self.warm_calls += 1
+        return self._warm_result
+
+    def is_model_available(self) -> bool:
+        self.availability_checks += 1
+        return self._available
+
     # --- Test helpers ---
+
+    def set_warm_result(self, ok: bool) -> None:
+        """Control what warm() returns on the next call."""
+        self._warm_result = ok
+
+    def set_available(self, available: bool) -> None:
+        """Control what is_model_available() returns on the next call."""
+        self._available = available
 
     def queue_result(self, result: str) -> None:
         """Queue a result to return on the next transform() call."""

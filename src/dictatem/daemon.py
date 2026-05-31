@@ -90,6 +90,10 @@ class _OverlayAdapter:
         self._state.show_recording(mode)
         self._widget.show_pill()  # type: ignore[attr-defined]
 
+    def show_loading(self, label: str = "Model Loading") -> None:
+        self._state.show_loading(label)
+        self._widget.show_pill()  # type: ignore[attr-defined]
+
     def update_level(self, level: float) -> None:
         self._widget.update_level(level)  # type: ignore[attr-defined]
 
@@ -253,6 +257,7 @@ class DaemonCore:
         last_paste_ttl_s: float = 300.0,
         transform_model_name: str = "",
         transform_base_url: str = "",
+        llm_keep_alive_s: float = 1800.0,
         latency_monitor: LatencyMonitor | None = None,
         autostart_registrar: AutostartRegistrar | None = None,
         persist_autostart: Callable[[bool], None] | None = None,
@@ -280,11 +285,26 @@ class DaemonCore:
         self._last_paste_ttl_s = last_paste_ttl_s
         self._transform_model_name = transform_model_name
         self._transform_base_url = transform_base_url
+        # How long the LLM is presumed resident after a transform/warm — matches
+        # the Ollama keep_alive window — so a follow-up trigger reads as
+        # "computing" rather than "loading" (#74).
+        self._llm_keep_alive_ms = int(llm_keep_alive_s * 1000)
         self._last_paste: LastPaste | None = None
         self._pending_replace_chars: int = 0
         self._transform_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._transform_active: bool = False
         self._transform_thread: threading.Thread | None = None
+        # --- Model-loading overlay state (#74) ---
+        # _loading_for_transcribe: a first-tap cold load is showing the "Model
+        # Loading" pill, to be flipped to the transcribing dot once resident.
+        # _preload_pill_active / _llm_warming: a tray Preload pill is up until
+        # both Whisper and the (best-effort) LLM warm finish.
+        self._loading_for_transcribe: bool = False
+        self._preload_pill_active: bool = False
+        self._llm_warming: bool = False
+        self._llm_warm_thread: threading.Thread | None = None
+        # Monotonic-ms deadline until which the LLM is presumed warm (#74).
+        self._llm_warm_until_ms: int = 0
         # --- Latency tip (one-shot, see ADR-0007) ---
         self._latency_monitor = latency_monitor
         # --- Autostart toggle (see ADR-0012) ---
@@ -408,7 +428,15 @@ class DaemonCore:
         except Exception:
             audio = None
 
-        self._overlay.show_transcribing()
+        # Cold model load? Show the animated "Model Loading" pill and flip to
+        # the amber transcribing dot once the model is resident (#74). A warm
+        # model goes straight to transcribing.
+        if self._lifecycle.is_loaded:
+            self._overlay.show_transcribing()
+            self._loading_for_transcribe = False
+        else:
+            self._overlay.show_loading("Loading Dict. Model")
+            self._loading_for_transcribe = True
 
         if audio is None:
             self._recover_to_idle()
@@ -579,6 +607,13 @@ class DaemonCore:
             "Trigger Fire: starting Transform on %d-char Last Paste",
             captured.char_count,
         )
+        # Within the keep_alive window the model is already resident, so the
+        # work is generation ("computing"), not a load. Only call it "loading"
+        # the first time or after it has gone idle and unloaded (#74).
+        if now_ms < self._llm_warm_until_ms:
+            self._overlay.show_loading("LLM Model Computing")
+        else:
+            self._overlay.show_loading("Loading LLM Model")
 
         def _worker() -> None:
             try:
@@ -620,6 +655,9 @@ class DaemonCore:
                 )
                 self._last_text = text
                 self._pending_replace_chars = replace_chars
+                # The model just generated, so it is resident: a follow-up
+                # trigger within keep_alive is "computing", not "loading" (#74).
+                self._llm_warm_until_ms = now_ms + self._llm_keep_alive_ms
                 commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
                 self._execute_commands(commands, now_ms=now_ms)
             else:
@@ -671,6 +709,9 @@ class DaemonCore:
         """
         if self._transcription_thread is not None:
             self._transcription_thread.join(timeout=5.0)
+        # Mirror the production tick: flip the loading pill to transcribing once
+        # the model is resident, before the result is processed (#74).
+        self.check_loading_overlay(now_ms=now_ms)
         self.check_transcription_result(now_ms=now_ms)
         if self._transform_thread is not None:
             self._transform_thread.join(timeout=5.0)
@@ -725,10 +766,56 @@ class DaemonCore:
 
     def on_tray_preload(self) -> None:
         try:
+            both = self._transform_enabled and self._transform_lifecycle is not None
+            self._overlay.show_loading(
+                "Preloading Models" if both else "Loading Dict. Model"
+            )
+            self._preload_pill_active = True
             self._lifecycle.preload()
+            self._start_llm_warm()
         except Exception:
             logger.error("Error preloading model", exc_info=True)
         self.sync_model_loaded()
+
+    def _start_llm_warm(self) -> None:
+        """Best-effort: warm the Transform LLM in the background during Preload.
+
+        Skips (logged) when the Transform is disabled, Ollama is unreachable, or
+        the model isn't pulled — Whisper preload is never affected, and nothing
+        here can raise into the daemon (#74). The network probe and load run off
+        the GUI thread.
+        """
+        if not self._transform_enabled or self._transform_lifecycle is None:
+            return
+        if self._llm_warming:
+            return
+        self._llm_warming = True
+        lifecycle = self._transform_lifecycle
+
+        def _worker() -> None:
+            try:
+                if not lifecycle.is_model_available():
+                    logger.info(
+                        "LLM preload skipped: %s unavailable in Ollama",
+                        self._transform_model_name,
+                    )
+                    return
+                if lifecycle.warm():
+                    logger.info("LLM %s warmed", self._transform_model_name)
+                else:
+                    logger.warning(
+                        "LLM warm did not complete for %s",
+                        self._transform_model_name,
+                    )
+            except Exception:
+                logger.error("Error warming LLM", exc_info=True)
+            finally:
+                self._llm_warming = False
+
+        self._llm_warm_thread = threading.Thread(
+            target=_worker, daemon=True, name="llm-warm"
+        )
+        self._llm_warm_thread.start()
 
     def on_tray_unload(self) -> None:
         try:
@@ -760,6 +847,28 @@ class DaemonCore:
             self._lifecycle.check_idle()
         except Exception:
             logger.error("Error during idle check", exc_info=True)
+
+    def check_loading_overlay(self, *, now_ms: int = 0) -> None:
+        """Drive the "Model Loading" pill from background load state (#74).
+
+        Runs on the fast tick: flips the first-tap loading pill to the amber
+        transcribing dot once the transcription model is resident, and dismisses
+        the Preload loading pill once both Whisper and the LLM warm finish.
+        """
+        try:
+            if self._loading_for_transcribe and self._lifecycle.is_loaded:
+                self._loading_for_transcribe = False
+                if self._transcription_active:
+                    self._overlay.show_transcribing()
+            if (
+                self._preload_pill_active
+                and not self._lifecycle.is_loading
+                and not self._llm_warming
+            ):
+                self._preload_pill_active = False
+                self._overlay.hide()
+        except Exception:
+            logger.error("Error updating loading overlay", exc_info=True)
 
     def on_tray_start_recording(self) -> None:
         if self._sm.state is not State.IDLE:
@@ -974,7 +1083,10 @@ def _start_windows_daemon() -> None:
     transform_backend = OllamaBackend(
         model_name=config.transform.model_name,
         base_url=config.transform.base_url,
-        timeout_s=float(config.transform.timeout_s),
+        timeout_s=float(config.behaviour.model_timeout_s),
+        # Keep the LLM resident for the same idle window as Whisper so repeat
+        # Trigger Words don't re-pay the ~50 s cold load (#74).
+        keep_alive=f"{config.model.idle_unload_minutes}m",
     )
     transform_lifecycle = TransformLifecycle(backend=transform_backend)
     prompts_dir = Path.home() / ".dictatem" / "prompts"
@@ -1029,6 +1141,7 @@ def _start_windows_daemon() -> None:
         last_paste_ttl_s=float(config.transform.last_paste_ttl_s),
         transform_model_name=config.transform.model_name,
         transform_base_url=config.transform.base_url,
+        llm_keep_alive_s=float(config.model.idle_unload_minutes * 60),
         latency_monitor=latency_monitor,
         autostart_registrar=autostart_registrar,
         persist_autostart=_persist_autostart,
@@ -1070,6 +1183,7 @@ def _start_windows_daemon() -> None:
         now = int(time.monotonic() * 1000)
         bridge.tick(now)
         overlay.update_level(audio_capture._buffer.current_level())
+        daemon.check_loading_overlay(now_ms=now)
         daemon.check_transcription_result(now_ms=now)
         daemon.check_transform_result(now_ms=now)
 

@@ -171,6 +171,19 @@ class TransformBackend(Protocol):
         """
         ...
 
+    def warm(self) -> bool:
+        """Best-effort: load the model into memory so the next transform is
+        instant. Returns False (not raises) on any failure, so a Preload that
+        can't reach the backend simply skips it (see ``CONTEXT.md#transform``).
+        """
+        ...
+
+    def is_model_available(self) -> bool:
+        """Best-effort: whether the configured model is ready to serve. Returns
+        False (not raises) when the backend is unreachable or the model is
+        missing — used only to gate Preload."""
+        ...
+
 
 @runtime_checkable
 class AutostartRegistrar(Protocol):
@@ -203,6 +216,13 @@ class OverlayRenderer(Protocol):
 
     def show(self, mode: RecordingMode) -> None:
         """Show the overlay in the given recording mode."""
+        ...
+
+    def show_loading(self, label: str = "Model Loading") -> None:
+        """Show the overlay in the 'model loading' state — a "*label*…" pill with
+        animated dots, shown while a transcription or Transform model loads, and
+        during tray Preload. *label* names what is loading, e.g. "Loading Dict.
+        Model", "Loading LLM Model", or "Preloading Models"."""
         ...
 
     def update_level(self, level: float) -> None:

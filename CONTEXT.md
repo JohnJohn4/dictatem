@@ -99,6 +99,15 @@ while dictation is active. It carries the [Status Dot](#status-dot) and a
 live waveform. It is the user's primary at-a-glance feedback during a
 recording.
 
+While a model is still loading — the first dictation's Whisper load, the first
+[Trigger Word](#trigger-word)'s LLM load, or a tray **Preload** — the pill
+instead shows a loading caption naming what is loading ("Loading Dict. Model",
+"Loading LLM Model", or "Preloading Models") with dots cycling 1→2→3 and no
+waveform, flipping to the [Status Dot](#status-dot) once the model is resident.
+When the LLM is already resident, a [Trigger Word](#trigger-word) instead shows
+"LLM Model Computing" while it generates — the same pill with an accurate verb.
+See [ADR-0016](docs/adr/0016-overlay-pill-model-loading-state.md).
+
 ### Status Dot
 
 The dot on the [Overlay Pill](#overlay-pill) that signals recording phase
