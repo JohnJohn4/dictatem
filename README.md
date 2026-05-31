@@ -27,13 +27,13 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 
 ### Install (recommended)
 
-Run this in PowerShell. It installs [`uv`](https://docs.astral.sh/uv/) if needed, auto-detects whether you have an NVIDIA GPU (picking the CUDA or CPU-lean dependency set accordingly), installs Dictatem **pinned to the v0.2.0 release**, and launches it to the system tray:
+Run this in PowerShell. It installs [`uv`](https://docs.astral.sh/uv/) if needed, auto-detects whether you have an NVIDIA GPU (picking the CUDA or CPU-lean dependency set accordingly), installs Dictatem **pinned to the v0.2.1 release**, and launches it to the system tray:
 
 ```powershell
-irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.2.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.2.1/install.ps1 | iex
 ```
 
-Piping a script from the internet into `iex` runs it immediately. If you'd rather read it first, open [that URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.2.0/install.ps1) in your browser and run it once you're satisfied.
+Piping a script from the internet into `iex` runs it immediately. If you'd rather read it first, open [that URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.2.1/install.ps1) in your browser and run it once you're satisfied.
 
 **Forcing CPU or GPU.** The script auto-detects an NVIDIA GPU; to override, set `DICTATEM_GPU` before running — `$env:DICTATEM_GPU='cpu'` (CPU-lean) or `$env:DICTATEM_GPU='gpu'` (CUDA). This only chooses the *dependency set*, not the runtime device. On a machine that has an NVIDIA GPU, Dictatem still transcribes on the GPU by default — so forcing `cpu` there installs the lean set but the daemon will still try CUDA and fail to load the model (the CUDA libraries aren't installed). Force `cpu` only on a genuinely GPU-less machine, or also set `device = "cpu"` in your config.
 
