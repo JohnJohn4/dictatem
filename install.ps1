@@ -2,7 +2,7 @@
 #
 # Run it piped, straight from raw GitHub:
 #
-#     irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.2.2/install.ps1 | iex
+#     irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.3.0/install.ps1 | iex
 #
 # It is a thin uv-tool provisioning script (ADR-0011): it installs `uv` if
 # absent, picks the CPU or GPU dependency set by auto-detecting an NVIDIA GPU,
@@ -13,7 +13,7 @@
 # and does NOT install, start, or pull Ollama (ADR-0008) — it only prints a
 # pointer to the README Ollama/Transform setup.
 #
-# This installs Dictatem pinned to the v0.2.2 release (the line marked below)
+# This installs Dictatem pinned to the v0.3.0 release (the line marked below)
 # for an auditable, reproducible install. It installs from the release *tarball*
 # over HTTPS, NOT a git+ URL, so the user does NOT need `git` on their machine
 # (#71). When cutting a new release, bump that tag and the README one-liner URL
@@ -74,15 +74,41 @@ if ($useGpu) {
     $extras = 'runtime'
 }
 
+# --- 2.5 Windows on ARM: install under an x64 CPython (Prism emulation) ---
+# On Windows on ARM (ARM64 / Snapdragon-class), `uv` installs a NATIVE ARM64
+# CPython by default. The transcription engine `ctranslate2` (pulled by
+# faster-whisper) ships NO win_arm64 wheel and is wheel-only (no sdist), so a
+# native-ARM64 environment cannot provide a working engine. Every dependency
+# does, however, run under Windows' built-in x64 emulation (Prism): pinned to an
+# x64 interpreter, `ctranslate2`, `faster-whisper`, `sounddevice` (which then
+# correctly loads the x64 PortAudio binary — its own arch check reports AMD64)
+# and PySide6 all resolve and run. So on ARM64 we pin an x64 CPython for the tool
+# environment. The hardware-tier logic is left untouched (a Snapdragon has no
+# NVIDIA GPU, so it resolves to a CPU tier on its own). `--force` overwrites any
+# stale launcher a prior failed native-ARM64 attempt may have left behind.
+$pythonArgs = @()
+$forceArgs = @()
+if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') {
+    Write-Host 'Windows on ARM detected — installing under x64 CPython (runs via Prism emulation).'
+    Write-Host 'Native ARM64 is not yet supported: the transcription engine (ctranslate2) ships no win_arm64 wheel.'
+    $x64Python = 'cpython-3.11-windows-x86_64'
+    uv python install $x64Python
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to provision an x64 Python ($x64Python) for emulation (exit code $LASTEXITCODE)."
+    }
+    $pythonArgs = @('--python', $x64Python)
+    $forceArgs = @('--force')
+}
+
 # --- 3. Install Dictatem from the GitHub release tarball -----------------
 # Install from the tag's source tarball over HTTPS, NOT a git+ URL: `uv tool
 # install` resolves git+ URLs by shelling out to the `git` executable, so a git+
 # install fails on machines without git (#71, ADR-0015). uv fetches the tarball
 # with its own HTTP client and builds it with hatchling; Dictatem is pure-Python,
-# so no git and no compiler are needed. Pinned to the v0.2.2 release for an
+# so no git and no compiler are needed. Pinned to the v0.3.0 release for an
 # auditable, reproducible install; when cutting a new release, bump this tag AND
 # the README one-liner URL.
-$source = 'https://github.com/JohnJohn4/dictatem/archive/refs/tags/v0.2.2.tar.gz'
+$source = 'https://github.com/JohnJohn4/dictatem/archive/refs/tags/v0.3.0.tar.gz'
 
 # A single PEP 508 direct-reference requirement: the extras and the source URL
 # must travel together on one argument. Splitting the URL into `--from` and the
@@ -91,7 +117,9 @@ $source = 'https://github.com/JohnJohn4/dictatem/archive/refs/tags/v0.2.2.tar.gz
 $requirement = "dictatem[$extras] @ $source"
 
 Write-Host "Installing dictatem[$extras] from $source ..."
-uv tool install $requirement
+# @forceArgs / @pythonArgs are empty on x64 (no behaviour change there); on ARM64
+# they expand to `--force --python cpython-3.11-windows-x86_64` (see step 2.5).
+uv tool install @forceArgs @pythonArgs $requirement
 # $ErrorActionPreference='Stop' does NOT halt on a native exe's non-zero exit,
 # so guard explicitly — otherwise a failed install falls through to the launch
 # below and surfaces as a misleading "cannot find the file" error.
