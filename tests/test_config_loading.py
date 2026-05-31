@@ -88,7 +88,7 @@ class TestConfigSubDataclasses:
         cfg = Config()
         assert isinstance(cfg.transform, TransformConfig)
         assert cfg.transform.enabled is True
-        assert cfg.transform.model_name == "gemma4:e4b"
+        assert cfg.transform.model_name == "gemma4:e2b"
         assert cfg.transform.base_url == "http://localhost:11434"
         assert cfg.transform.last_paste_ttl_s == 300
 

@@ -19,8 +19,10 @@ CPU           no CUDA                base             cpu      int8
 ============  =====================  ===============  =======  ==============
 
 ``base`` is the smallest auto-selected model; ``tiny`` is never auto-selected.
-Models stay multilingual (no ``.en`` suffix). The capable tier ships the
-``gemma4:e4b`` Transform tag; weaker tiers use the smaller ``gemma4:e2b`` tag.
+Models stay multilingual (no ``.en`` suffix). All tiers default to the small
+``gemma4:e2b`` Transform tag: it runs on CPU-only laptops (a little slow but
+fine) and co-resides with any Whisper tier on modest GPUs. Users with a capable
+GPU can pin a larger tag (e.g. ``gemma4:e4b``) in config.
 """
 
 from __future__ import annotations
@@ -36,10 +38,11 @@ if TYPE_CHECKING:
 VRAM_HIGH_MB = 6 * 1024  # >= this -> GPU-high
 VRAM_MID_MB = 3 * 1024  # >= this (and < HIGH) -> GPU-mid
 
-# Transform (Ollama) tags by capability. The capable tag is `gemma4:e4b`
-# (deliberately NOT "corrected" to gemma3:4b); weaker machines get a small tag.
-_TRANSFORM_CAPABLE = "gemma4:e4b"
-_TRANSFORM_SMALL = "gemma4:e2b"
+# The default Transform (Ollama) tag for every tier. `gemma4:e2b` is small enough
+# to run on CPU-only laptops and to co-reside with any Whisper tier on modest
+# GPUs; users on a capable GPU can pin a larger tag (e.g. `gemma4:e4b`) in config.
+# `gemma4:e2b` is deliberately NOT "corrected" to a standard gemma3 tag.
+_TRANSFORM_MODEL = "gemma4:e2b"
 
 # Resolved settings keyed by tier name. The resolver's only job is to pick a
 # key; this keeps the GPU-mid and GPU-unknown rows identical-by-construction.
@@ -49,35 +52,35 @@ _TIER_TABLE: dict[str, ResolvedHardware] = {
         model="large-v3-turbo",
         device="cuda",
         compute_type="float16",
-        transform_model=_TRANSFORM_CAPABLE,
+        transform_model=_TRANSFORM_MODEL,
     ),
     "GPU-mid": ResolvedHardware(
         tier="GPU-mid",
         model="small",
         device="cuda",
         compute_type="int8_float16",
-        transform_model=_TRANSFORM_SMALL,
+        transform_model=_TRANSFORM_MODEL,
     ),
     "GPU-low": ResolvedHardware(
         tier="GPU-low",
         model="base",
         device="cuda",
         compute_type="int8_float16",
-        transform_model=_TRANSFORM_SMALL,
+        transform_model=_TRANSFORM_MODEL,
     ),
     "GPU-unknown": ResolvedHardware(
         tier="GPU-unknown",
         model="small",
         device="cuda",
         compute_type="int8_float16",
-        transform_model=_TRANSFORM_SMALL,
+        transform_model=_TRANSFORM_MODEL,
     ),
     "CPU": ResolvedHardware(
         tier="CPU",
         model="base",
         device="cpu",
         compute_type="int8",
-        transform_model=_TRANSFORM_SMALL,
+        transform_model=_TRANSFORM_MODEL,
     ),
 }
 

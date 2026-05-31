@@ -103,7 +103,7 @@ class BehaviourConfig:
 @dataclass
 class TransformConfig:
     enabled: bool = True
-    model_name: str = "gemma4:e4b"
+    model_name: str = "gemma4:e2b"
     base_url: str = "http://localhost:11434"
     last_paste_ttl_s: int = 300
 

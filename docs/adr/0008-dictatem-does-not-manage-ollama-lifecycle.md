@@ -52,7 +52,8 @@ installed*.
   re-probing the network.
 - Dictatem's network surface is unchanged: it only ever POSTs to a user-run
   Ollama; no processes are spawned, no downloads triggered.
-- The fresh-config default Transform model is tier-appropriate (a small tag on
-  weak machines, `gemma4:e4b` on capable ones), but the user must still pull it.
+- The fresh-config default Transform model is `gemma4:e2b` on every tier — small
+  enough for CPU-only laptops and to co-reside with any Whisper tier — but the
+  user must still pull it (capable-GPU users can pin a larger tag in config).
 - Any future "set up Ollama for me" affordance must be explicit and
   user-initiated — this ADR rules out doing it implicitly on the failure path.

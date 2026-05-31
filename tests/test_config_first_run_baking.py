@@ -41,7 +41,7 @@ class TestFirstRunBakesResolvedValues:
         assert cfg.model.name == "large-v3-turbo"
         assert cfg.model.device == "cuda"
         assert cfg.model.compute_type == "float16"
-        assert cfg.transform.model_name == "gemma4:e4b"
+        assert cfg.transform.model_name == "gemma4:e2b"
 
     def test_probe_consulted_exactly_once(self, tmp_path: Path) -> None:
         probe = FakeHardwareProbe(GPU_MID_PROFILE)

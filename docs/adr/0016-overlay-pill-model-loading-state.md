@@ -2,8 +2,8 @@
 
 The first dictation of a session pays a cold model load — Whisper into VRAM
 (seconds) and, on the first [Trigger Word](../../CONTEXT.md#trigger-word), the
-Ollama [Transform](../../CONTEXT.md#transform) model (an 8B `gemma4:e4b` is
-~50 s to load on a 4080). Until now that wait showed either the static amber
+Ollama [Transform](../../CONTEXT.md#transform) model (a large tag like the former
+`gemma4:e4b` default is ~50 s to load on a 4080). Until now that wait showed either the static amber
 "transcribing" dot or nothing, and the Transform's default 30 s request timeout
 was *below* the cold-load time — so the first Trigger Word failed outright (the
 bug that prompted this, #74).
@@ -23,7 +23,7 @@ another piece of recording-adjacent state the user needs *at the moment they
 act*, so it belongs on the same surface — not the
 [Tray Icon](../../CONTEXT.md#tray-icon), which stays static brand identity.
 
-Two supporting decisions ship with it (#74):
+Supporting decisions that ship with it (#74):
 
 - **One shared model timeout.** `[behaviour].model_timeout_s` (default 120 s)
   replaces `[transform].timeout_s` (30 s). It is the Ollama request timeout *and*
@@ -35,6 +35,11 @@ Two supporting decisions ship with it (#74):
   idle-unload window (`[model].idle_unload_minutes`), and tray Preload warms the
   LLM too (when present) — so the ~50 s cold load is paid at most once per idle
   window, not per Trigger Word.
+- **A CPU-friendly default Transform model.** All Hardware Tiers default to the
+  small `gemma4:e2b` tag (previously `gemma4:e4b` on capable tiers): it runs on
+  CPU-only laptops (a little slow but fine) and co-resides with any Whisper tier
+  on a modest GPU, so the headline Trigger Word feature works out of the box
+  everywhere. Capable-GPU users can pin a larger tag in config (see ADR-0007).
 
 ## Considered options
 
