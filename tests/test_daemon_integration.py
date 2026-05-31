@@ -147,6 +147,33 @@ class TestOverlayRecordingDisplay:
         assert overlay.state == "hidden"
 
 
+class TestModelLoadingOverlay:
+    """First-tap cold load shows the "Model Loading" pill, then flips to the
+    transcribing dot once the model is resident; a warm model skips it (#74)."""
+
+    def test_cold_first_tap_shows_loading_then_transcribing(
+        self, core: DaemonCore, overlay: FakeOverlayRenderer
+    ) -> None:
+        # backend starts unloaded, so the first transcription is a cold load.
+        _do_ptt_cycle(core)
+        names = [c[0] for c in overlay.calls]
+        assert "show_loading" in names
+        assert "show_transcribing" in names
+        assert names.index("show_loading") < names.index("show_transcribing")
+
+    def test_warm_model_skips_loading_pill(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        overlay: FakeOverlayRenderer,
+    ) -> None:
+        backend._loaded = True  # already resident → no cold load
+        _do_ptt_cycle(core)
+        names = [c[0] for c in overlay.calls]
+        assert "show_loading" not in names
+        assert "show_transcribing" in names
+
+
 # ── Tray icon state updates ──────────────────────────────────────────
 
 

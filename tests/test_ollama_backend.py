@@ -321,3 +321,115 @@ class TestStructuredFailureSignal:
         with pytest.raises(TransformFailedError) as exc_info:
             backend.transform("x", "y")
         assert exc_info.value.failure.kind is FailureKind.TIMEOUT
+
+
+class _FakeResp:
+    """Minimal urlopen() context-manager stand-in for mocked HTTP responses."""
+
+    def __init__(self, status: int, body: bytes = b"") -> None:
+        self.status = status
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _FakeResp:
+        return self
+
+    def __exit__(self, *_exc: Any) -> bool:
+        return False
+
+
+_URLOPEN = "dictatem.transform.ollama_backend.urllib.request.urlopen"
+
+
+class TestKeepAlive:
+    """keep_alive (#74) rides along in the request payload when configured, and
+    is omitted otherwise so older behaviour is unchanged."""
+
+    def test_keep_alive_included_when_set(
+        self,
+        server: tuple[str, list[dict[str, Any]], dict[str, ServerBehaviour]],
+    ) -> None:
+        url, captured, _state = server
+        backend = OllamaBackend(
+            model_name="m", base_url=url, timeout_s=5.0, keep_alive="30m"
+        )
+        backend.transform("hello", "sys")
+        assert captured[0]["keep_alive"] == "30m"
+
+    def test_keep_alive_omitted_when_none(
+        self,
+        server: tuple[str, list[dict[str, Any]], dict[str, ServerBehaviour]],
+    ) -> None:
+        url, captured, _state = server
+        backend = OllamaBackend(model_name="m", base_url=url, timeout_s=5.0)
+        backend.transform("hello", "sys")
+        assert "keep_alive" not in captured[0]
+
+
+class TestWarm:
+    """warm() best-effort loads the model; it never raises (#74)."""
+
+    def test_warm_posts_model_and_keep_alive_without_prompt(
+        self,
+        server: tuple[str, list[dict[str, Any]], dict[str, ServerBehaviour]],
+    ) -> None:
+        url, captured, _state = server
+        backend = OllamaBackend(
+            model_name="gemma4:e4b", base_url=url, timeout_s=5.0, keep_alive="30m"
+        )
+        assert backend.warm() is True
+        payload = captured[0]
+        assert payload["model"] == "gemma4:e4b"
+        assert payload["keep_alive"] == "30m"
+        assert "prompt" not in payload
+
+    def test_warm_returns_false_on_unreachable_without_raising(
+        self, mocker: Any
+    ) -> None:
+        mocker.patch(
+            _URLOPEN,
+            side_effect=urllib.error.URLError(ConnectionRefusedError()),
+        )
+        backend = OllamaBackend(model_name="m", base_url="http://127.0.0.1:1", timeout_s=2.0)
+        assert backend.warm() is False  # logged, not raised
+
+    def test_warm_returns_false_on_non_200(self, mocker: Any) -> None:
+        mocker.patch(_URLOPEN, return_value=_FakeResp(500))
+        backend = OllamaBackend(model_name="m", base_url="http://x", timeout_s=2.0)
+        assert backend.warm() is False
+
+
+class TestModelAvailability:
+    """is_model_available() gates LLM preload; it never raises (#74)."""
+
+    def _tags(self, *names: str) -> bytes:
+        return json.dumps(
+            {"models": [{"name": n} for n in names]}
+        ).encode("utf-8")
+
+    def test_true_when_exact_tag_present(self, mocker: Any) -> None:
+        mocker.patch(
+            _URLOPEN,
+            return_value=_FakeResp(200, self._tags("gemma4:e4b", "other:latest")),
+        )
+        backend = OllamaBackend(model_name="gemma4:e4b", base_url="http://x", timeout_s=2.0)
+        assert backend.is_model_available() is True
+
+    def test_true_when_only_latest_tag_present(self, mocker: Any) -> None:
+        mocker.patch(_URLOPEN, return_value=_FakeResp(200, self._tags("mistral:latest")))
+        backend = OllamaBackend(model_name="mistral", base_url="http://x", timeout_s=2.0)
+        assert backend.is_model_available() is True
+
+    def test_false_when_absent(self, mocker: Any) -> None:
+        mocker.patch(_URLOPEN, return_value=_FakeResp(200, self._tags("other:latest")))
+        backend = OllamaBackend(model_name="gemma4:e4b", base_url="http://x", timeout_s=2.0)
+        assert backend.is_model_available() is False
+
+    def test_false_when_unreachable_without_raising(self, mocker: Any) -> None:
+        mocker.patch(
+            _URLOPEN, side_effect=urllib.error.URLError("Name or service not known")
+        )
+        backend = OllamaBackend(model_name="m", base_url="http://nope.invalid", timeout_s=2.0)
+        assert backend.is_model_available() is False

@@ -136,6 +136,37 @@ def _set_texts(clipboard: FakeClipboardIO) -> list[str]:
     return [c[1] for c in clipboard.calls if c[0] == "set_text"]
 
 
+class TestPreloadWarmsLLM:
+    """Tray Preload also warms the Transform LLM in one click — gated on the
+    model being available, never blocking Whisper preload (#74)."""
+
+    def test_preload_warms_llm_when_available(
+        self,
+        core: DaemonCore,
+        transform_backend: FakeTransformBackend,
+        overlay: FakeOverlayRenderer,
+    ) -> None:
+        transform_backend.set_available(True)
+        core.on_tray_preload()
+        if core._llm_warm_thread is not None:
+            core._llm_warm_thread.join(timeout=5.0)
+        assert transform_backend.availability_checks == 1
+        assert transform_backend.warm_calls == 1
+        assert any(c[0] == "show_loading" for c in overlay.calls)
+
+    def test_preload_skips_llm_when_model_unavailable(
+        self,
+        core: DaemonCore,
+        transform_backend: FakeTransformBackend,
+    ) -> None:
+        transform_backend.set_available(False)
+        core.on_tray_preload()
+        if core._llm_warm_thread is not None:
+            core._llm_warm_thread.join(timeout=5.0)
+        assert transform_backend.availability_checks == 1
+        assert transform_backend.warm_calls == 0  # gated: model not pulled
+
+
 # ── Happy path ───────────────────────────────────────────────────────
 
 

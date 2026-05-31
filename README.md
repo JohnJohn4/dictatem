@@ -182,6 +182,8 @@ sample_rate = 16000
 [behaviour]
 silence_timeout_s = 60          # Auto-stop toggle recording after this much silence
 max_recording_seconds = 300     # Hard cap on recording length regardless of audio activity
+model_timeout_s = 120           # Shared model-readiness timeout: the Ollama request limit AND
+                                #   the threshold for the "Model Loading" pill (covers cold loads)
 
 [overlay]
 position = "bottom-right"
@@ -199,8 +201,8 @@ level = "info"
 enabled = true                  # Master switch for Trigger Words (local-LLM rewrites)
 model_name = "gemma4:e4b"       # Ollama model tag; must match `ollama list`
 base_url = "http://localhost:11434"
-timeout_s = 30                  # Per-request Ollama timeout
 last_paste_ttl_s = 300          # How long a Last Paste stays eligible for a Trigger Fire
+                                # (the Ollama request timeout is [behaviour].model_timeout_s)
 ```
 
 ## Ollama / Transform setup

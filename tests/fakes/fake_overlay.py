@@ -22,6 +22,11 @@ class FakeOverlayRenderer:
         self.state = "recording"
         self.calls.append(("show", mode.value))
 
+    def show_loading(self) -> None:
+        self.visible = True
+        self.state = "loading"
+        self.calls.append(("show_loading",))
+
     def update_level(self, level: float) -> None:
         self.level = level
         self.calls.append(("update_level", str(level)))

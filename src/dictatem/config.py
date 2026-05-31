@@ -32,8 +32,8 @@ _POSITIVE_INT_FIELDS: dict[str, set[str]] = {
     "overlay": {"fade_in_ms", "fade_out_ms", "waveform_fps"},
     "audio": {"sample_rate"},
     "logging": {"rotation_days"},
-    "behaviour": {"silence_timeout_s", "max_recording_seconds"},
-    "transform": {"timeout_s", "last_paste_ttl_s"},
+    "behaviour": {"silence_timeout_s", "max_recording_seconds", "model_timeout_s"},
+    "transform": {"last_paste_ttl_s"},
 }
 
 
@@ -93,6 +93,11 @@ class LoggingConfig:
 class BehaviourConfig:
     silence_timeout_s: int = 60
     max_recording_seconds: int = 300
+    # One shared patience for model readiness (#74): the hard timeout for the
+    # Ollama Transform request AND the threshold past which transcription shows
+    # the "Model Loading" pill. A single knob keeps transcription and the LLM
+    # consistent. Replaces the old [transform].timeout_s (default 30 -> 120).
+    model_timeout_s: int = 120
 
 
 @dataclass
@@ -100,7 +105,6 @@ class TransformConfig:
     enabled: bool = True
     model_name: str = "gemma4:e4b"
     base_url: str = "http://localhost:11434"
-    timeout_s: int = 30
     last_paste_ttl_s: int = 300
 
 

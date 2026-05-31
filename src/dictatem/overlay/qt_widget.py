@@ -99,6 +99,21 @@ class QtOverlayWidget(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(self.rect(), 8, 8)
 
+        # While a model loads, the pill is a single animated caption — no dot or
+        # waveform (there is no recording yet to visualise).
+        if self._state.phase == OverlayPhase.LOADING:
+            painter.setPen(QColor(235, 235, 235, 235))
+            font = painter.font()
+            font.setPointSize(11)
+            painter.setFont(font)
+            painter.drawText(
+                self.rect().adjusted(14, 0, -10, 0),
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+                self._state.current_loading_text(),
+            )
+            painter.end()
+            return
+
         dot_color = self._state.current_dot_color()
         dot_qcolor = QColor("red") if dot_color == Color.RED else QColor(255, 191, 0)
 

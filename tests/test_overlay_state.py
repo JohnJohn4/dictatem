@@ -265,6 +265,50 @@ class TestTranscribing:
         assert state.current_opacity() == 1.0
 
 
+class TestLoading:
+    """show_loading() drives the animated "Model Loading" pill (#74)."""
+
+    def test_show_loading_enters_loading_phase(self, state: OverlayState) -> None:
+        state.show_loading()
+        assert state.phase == OverlayPhase.LOADING
+
+    def test_opacity_one_during_loading(self, state: OverlayState) -> None:
+        state.show_loading()
+        assert state.current_opacity() == 1.0
+
+    def test_loading_is_held_across_ticks(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        # Unlike the fade/flash phases, LOADING never auto-transitions: the
+        # daemon flips it to transcribing or hides it once the load resolves.
+        state.show_loading()
+        clock.advance_ms(5000)
+        state.tick()
+        assert state.phase == OverlayPhase.LOADING
+
+    def test_dots_cycle_one_two_three(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_loading()
+        assert state.current_loading_text() == "Model Loading."
+        clock.advance_ms(400)
+        assert state.current_loading_text() == "Model Loading.."
+        clock.advance_ms(400)
+        assert state.current_loading_text() == "Model Loading..."
+        clock.advance_ms(400)
+        assert state.current_loading_text() == "Model Loading."  # wraps to one
+
+    def test_show_transcribing_leaves_loading(self, state: OverlayState) -> None:
+        state.show_loading()
+        state.show_transcribing()
+        assert state.phase == OverlayPhase.TRANSCRIBING
+
+    def test_hide_leaves_loading(self, state: OverlayState) -> None:
+        state.show_loading()
+        state.hide()
+        assert state.phase == OverlayPhase.FADING_OUT
+
+
 class TestFlashError:
     """flash_error() → ERROR_FLASH for ~300ms → FADING_OUT → HIDDEN."""
 
