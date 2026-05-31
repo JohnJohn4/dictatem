@@ -2,7 +2,7 @@
 #
 # Run it piped, straight from raw GitHub:
 #
-#     irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.2.0/install.ps1 | iex
+#     irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.2.1/install.ps1 | iex
 #
 # It is a thin uv-tool provisioning script (ADR-0011): it installs `uv` if
 # absent, picks the CPU or GPU dependency set by auto-detecting an NVIDIA GPU,
@@ -13,9 +13,11 @@
 # and does NOT install, start, or pull Ollama (ADR-0008) — it only prints a
 # pointer to the README Ollama/Transform setup.
 #
-# This installs Dictatem pinned to the v0.2.0 release tag (the line marked
-# below) for an auditable, reproducible install. When cutting a new release,
-# bump that tag and the README one-liner URL together.
+# This installs Dictatem pinned to the v0.2.1 release (the line marked below)
+# for an auditable, reproducible install. It installs from the release *tarball*
+# over HTTPS, NOT a git+ URL, so the user does NOT need `git` on their machine
+# (#71). When cutting a new release, bump that tag and the README one-liner URL
+# together.
 
 $ErrorActionPreference = 'Stop'
 
@@ -72,13 +74,18 @@ if ($useGpu) {
     $extras = 'runtime'
 }
 
-# --- 3. Install Dictatem from the GitHub repo ----------------------------
-# Pinned to the v0.2.0 release for an auditable, reproducible install (#60).
-# When cutting a new release, bump this tag AND the README one-liner URL.
-$source = 'git+https://github.com/JohnJohn4/dictatem@v0.2.0'
+# --- 3. Install Dictatem from the GitHub release tarball -----------------
+# Install from the tag's source tarball over HTTPS, NOT a git+ URL: `uv tool
+# install` resolves git+ URLs by shelling out to the `git` executable, so a git+
+# install fails on machines without git (#71, ADR-0015). uv fetches the tarball
+# with its own HTTP client and builds it with hatchling; Dictatem is pure-Python,
+# so no git and no compiler are needed. Pinned to the v0.2.1 release for an
+# auditable, reproducible install; when cutting a new release, bump this tag AND
+# the README one-liner URL.
+$source = 'https://github.com/JohnJohn4/dictatem/archive/refs/tags/v0.2.1.tar.gz'
 
-# A single PEP 508 direct-reference requirement: the extras and the git URL must
-# travel together on one argument. Splitting the URL into `--from` and the
+# A single PEP 508 direct-reference requirement: the extras and the source URL
+# must travel together on one argument. Splitting the URL into `--from` and the
 # `dictatem[extras]` into a positional makes uv treat them as two conflicting
 # requirements for the same package and abort.
 $requirement = "dictatem[$extras] @ $source"
