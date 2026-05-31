@@ -14,6 +14,7 @@ class FakeOverlayRenderer:
         self.mode: RecordingMode | None = None
         self.level: float = 0.0
         self.state: str = "hidden"
+        self.loading_label: str | None = None
         self.calls: list[tuple[str, ...]] = []
 
     def show(self, mode: RecordingMode) -> None:
@@ -22,10 +23,11 @@ class FakeOverlayRenderer:
         self.state = "recording"
         self.calls.append(("show", mode.value))
 
-    def show_loading(self) -> None:
+    def show_loading(self, label: str = "Model Loading") -> None:
         self.visible = True
         self.state = "loading"
-        self.calls.append(("show_loading",))
+        self.loading_label = label
+        self.calls.append(("show_loading", label))
 
     def update_level(self, level: float) -> None:
         self.level = level

@@ -218,10 +218,11 @@ class OverlayRenderer(Protocol):
         """Show the overlay in the given recording mode."""
         ...
 
-    def show_loading(self) -> None:
-        """Show the overlay in the 'model loading' state — a "Model Loading…"
-        pill with animated dots, shown while a transcription or Transform model
-        loads, and during tray Preload."""
+    def show_loading(self, label: str = "Model Loading") -> None:
+        """Show the overlay in the 'model loading' state — a "*label*…" pill with
+        animated dots, shown while a transcription or Transform model loads, and
+        during tray Preload. *label* names what is loading, e.g. "Loading Dict.
+        Model", "Loading LLM Model", or "Preloading Models"."""
         ...
 
     def update_level(self, level: float) -> None:

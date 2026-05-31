@@ -9,10 +9,11 @@ was *below* the cold-load time — so the first Trigger Word failed outright (th
 bug that prompted this, #74).
 
 **Decision:** the [Overlay Pill](../../CONTEXT.md#overlay-pill) gains a
-**Model-Loading** state — a "Model Loading…" caption with dots cycling
-1→2→3→1 — shown whenever a model is loading: the first-tap Whisper load, the
-first Trigger Word's LLM load, and tray **Preload**. It is a new
-`OverlayPhase.LOADING` on the pure `OverlayState`; the daemon flips it to the
+**Model-Loading** state — a caption naming what is loading ("Loading Dict.
+Model", "Loading LLM Model", or "Preloading Models") with dots cycling 1→2→3→1 —
+shown whenever a model is loading: the first-tap Whisper load, the first Trigger
+Word's LLM load, and tray **Preload**. It is a new `OverlayPhase.LOADING` on the
+pure `OverlayState`; the daemon flips it to the
 [Status Dot](../../CONTEXT.md#status-dot) once the model is resident, or hides it
 when Preload finishes.
 

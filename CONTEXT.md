@@ -101,9 +101,10 @@ recording.
 
 While a model is still loading — the first dictation's Whisper load, the first
 [Trigger Word](#trigger-word)'s LLM load, or a tray **Preload** — the pill
-instead shows a **Model Loading…** caption (dots cycling 1→2→3) and no waveform,
-flipping to the [Status Dot](#status-dot) once the model is resident. See
-[ADR-0016](docs/adr/0016-overlay-pill-model-loading-state.md).
+instead shows a loading caption naming what is loading ("Loading Dict. Model",
+"Loading LLM Model", or "Preloading Models") with dots cycling 1→2→3 and no
+waveform, flipping to the [Status Dot](#status-dot) once the model is resident.
+See [ADR-0016](docs/adr/0016-overlay-pill-model-loading-state.md).
 
 ### Status Dot
 

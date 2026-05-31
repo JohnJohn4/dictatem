@@ -152,7 +152,8 @@ class TestPreloadWarmsLLM:
             core._llm_warm_thread.join(timeout=5.0)
         assert transform_backend.availability_checks == 1
         assert transform_backend.warm_calls == 1
-        assert any(c[0] == "show_loading" for c in overlay.calls)
+        loading = [c for c in overlay.calls if c[0] == "show_loading"]
+        assert any(c[1] == "Preloading Models" for c in loading)
 
     def test_preload_skips_llm_when_model_unavailable(
         self,
@@ -165,6 +166,23 @@ class TestPreloadWarmsLLM:
             core._llm_warm_thread.join(timeout=5.0)
         assert transform_backend.availability_checks == 1
         assert transform_backend.warm_calls == 0  # gated: model not pulled
+
+
+class TestTriggerLoadingLabel:
+    """A Trigger Fire labels the pill 'Loading LLM Model' (#74)."""
+
+    def test_trigger_fire_labels_llm_model(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        overlay: FakeOverlayRenderer,
+    ) -> None:
+        backend._result = "some verbose text to condense"
+        _cycle(core, start_ms=0, end_ms=1_000)  # dictation -> Last Paste
+        backend._result = "summarize"  # trigger word
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+        labels = [c[1] for c in overlay.calls if c[0] == "show_loading"]
+        assert "Loading LLM Model" in labels
 
 
 # ── Happy path ───────────────────────────────────────────────────────

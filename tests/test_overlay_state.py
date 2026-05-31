@@ -298,6 +298,10 @@ class TestLoading:
         clock.advance_ms(400)
         assert state.current_loading_text() == "Model Loading."  # wraps to one
 
+    def test_custom_label_is_used(self, state: OverlayState) -> None:
+        state.show_loading("Loading LLM Model")
+        assert state.current_loading_text() == "Loading LLM Model."
+
     def test_show_transcribing_leaves_loading(self, state: OverlayState) -> None:
         state.show_loading()
         state.show_transcribing()

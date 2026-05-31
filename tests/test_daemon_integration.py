@@ -160,6 +160,8 @@ class TestModelLoadingOverlay:
         assert "show_loading" in names
         assert "show_transcribing" in names
         assert names.index("show_loading") < names.index("show_transcribing")
+        loading = [c for c in overlay.calls if c[0] == "show_loading"]
+        assert loading[0][1] == "Loading Dict. Model"
 
     def test_warm_model_skips_loading_pill(
         self,

@@ -90,8 +90,8 @@ class _OverlayAdapter:
         self._state.show_recording(mode)
         self._widget.show_pill()  # type: ignore[attr-defined]
 
-    def show_loading(self) -> None:
-        self._state.show_loading()
+    def show_loading(self, label: str = "Model Loading") -> None:
+        self._state.show_loading(label)
         self._widget.show_pill()  # type: ignore[attr-defined]
 
     def update_level(self, level: float) -> None:
@@ -428,7 +428,7 @@ class DaemonCore:
             self._overlay.show_transcribing()
             self._loading_for_transcribe = False
         else:
-            self._overlay.show_loading()
+            self._overlay.show_loading("Loading Dict. Model")
             self._loading_for_transcribe = True
 
         if audio is None:
@@ -603,7 +603,7 @@ class DaemonCore:
         # The Transform model may be cold (a ~50 s load on first use); show the
         # loading pill so the wait reads as progress rather than a hang (#74).
         # keep_alive keeps it warm, so this is brief after the first trigger.
-        self._overlay.show_loading()
+        self._overlay.show_loading("Loading LLM Model")
 
         def _worker() -> None:
             try:
@@ -753,7 +753,10 @@ class DaemonCore:
 
     def on_tray_preload(self) -> None:
         try:
-            self._overlay.show_loading()
+            both = self._transform_enabled and self._transform_lifecycle is not None
+            self._overlay.show_loading(
+                "Preloading Models" if both else "Loading Dict. Model"
+            )
             self._preload_pill_active = True
             self._lifecycle.preload()
             self._start_llm_warm()
