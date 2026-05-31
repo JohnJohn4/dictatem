@@ -74,6 +74,32 @@ if ($useGpu) {
     $extras = 'runtime'
 }
 
+# --- 2.5 Windows on ARM: install under an x64 CPython (Prism emulation) ---
+# On Windows on ARM (ARM64 / Snapdragon-class), `uv` installs a NATIVE ARM64
+# CPython by default. The transcription engine `ctranslate2` (pulled by
+# faster-whisper) ships NO win_arm64 wheel and is wheel-only (no sdist), so a
+# native-ARM64 environment cannot provide a working engine. Every dependency
+# does, however, run under Windows' built-in x64 emulation (Prism): pinned to an
+# x64 interpreter, `ctranslate2`, `faster-whisper`, `sounddevice` (which then
+# correctly loads the x64 PortAudio binary — its own arch check reports AMD64)
+# and PySide6 all resolve and run. So on ARM64 we pin an x64 CPython for the tool
+# environment. The hardware-tier logic is left untouched (a Snapdragon has no
+# NVIDIA GPU, so it resolves to a CPU tier on its own). `--force` overwrites any
+# stale launcher a prior failed native-ARM64 attempt may have left behind.
+$pythonArgs = @()
+$forceArgs = @()
+if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') {
+    Write-Host 'Windows on ARM detected — installing under x64 CPython (runs via Prism emulation).'
+    Write-Host 'Native ARM64 is not yet supported: the transcription engine (ctranslate2) ships no win_arm64 wheel.'
+    $x64Python = 'cpython-3.11-windows-x86_64'
+    uv python install $x64Python
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to provision an x64 Python ($x64Python) for emulation (exit code $LASTEXITCODE)."
+    }
+    $pythonArgs = @('--python', $x64Python)
+    $forceArgs = @('--force')
+}
+
 # --- 3. Install Dictatem from the GitHub release tarball -----------------
 # Install from the tag's source tarball over HTTPS, NOT a git+ URL: `uv tool
 # install` resolves git+ URLs by shelling out to the `git` executable, so a git+
@@ -91,7 +117,9 @@ $source = 'https://github.com/JohnJohn4/dictatem/archive/refs/tags/v0.2.2.tar.gz
 $requirement = "dictatem[$extras] @ $source"
 
 Write-Host "Installing dictatem[$extras] from $source ..."
-uv tool install $requirement
+# @forceArgs / @pythonArgs are empty on x64 (no behaviour change there); on ARM64
+# they expand to `--force --python cpython-3.11-windows-x86_64` (see step 2.5).
+uv tool install @forceArgs @pythonArgs $requirement
 # $ErrorActionPreference='Stop' does NOT halt on a native exe's non-zero exit,
 # so guard explicitly — otherwise a failed install falls through to the launch
 # below and surfaces as a misleading "cannot find the file" error.
