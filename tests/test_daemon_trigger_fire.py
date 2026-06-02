@@ -70,7 +70,7 @@ def keystroke() -> FakeKeystrokeSender:
 
 @pytest.fixture
 def foreground() -> FakeForegroundTracker:
-    return FakeForegroundTracker(hwnd=42)
+    return FakeForegroundTracker(target_id=42)
 
 
 @pytest.fixture
@@ -387,7 +387,7 @@ class TestTriggerDoesNotFire:
 
 
 class TestRailsAbort:
-    def test_hwnd_change_aborts_trigger(
+    def test_target_id_change_aborts_trigger(
         self,
         core: DaemonCore,
         backend: FakeTranscriberBackend,
@@ -400,7 +400,7 @@ class TestRailsAbort:
         _cycle(core, start_ms=0, end_ms=1_000)
 
         # User alt-tabs; focus is now a different window.
-        foreground._hwnd = 999
+        foreground._target_id = 999
 
         backend._result = "summarize"
         transform_backend.queue_result("should not be used")

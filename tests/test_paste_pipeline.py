@@ -23,7 +23,7 @@ class TestPasteCallSequence:
         clip = FakeClipboardIO()
         clip._content = "original"
         ks = FakeKeystrokeSender()
-        fg = FakeForegroundTracker(hwnd=42)
+        fg = FakeForegroundTracker(target_id=42)
 
         paste("hello", clipboard=clip, keystroke=ks, foreground=fg)
 
@@ -39,7 +39,7 @@ class TestPasteCallSequence:
     def test_foreground_captured_before_clipboard(self) -> None:
         clip = FakeClipboardIO()
         ks = FakeKeystrokeSender()
-        fg = FakeForegroundTracker(hwnd=99)
+        fg = FakeForegroundTracker(target_id=99)
 
         paste("x", clipboard=clip, keystroke=ks, foreground=fg)
 
@@ -56,9 +56,9 @@ class TestPasteCallSequence:
         orig_restore = fg.restore
         orig_paste = ks.send_paste
 
-        def tracking_restore(hwnd: int) -> None:
+        def tracking_restore(target_id: int) -> None:
             order.append("restore_fg")
-            orig_restore(hwnd)
+            orig_restore(target_id)
 
         def tracking_paste() -> None:
             order.append("send_paste")
@@ -344,14 +344,14 @@ class TestReplaceChars:
         order: list[str] = []
         clip = FakeClipboardIO()
         ks = FakeKeystrokeSender()
-        fg = FakeForegroundTracker(hwnd=42)
+        fg = FakeForegroundTracker(target_id=42)
 
         orig_restore = fg.restore
         orig_back = ks.send_backspaces
 
-        def tracking_restore(hwnd: int) -> None:
+        def tracking_restore(target_id: int) -> None:
             order.append("restore_fg")
-            orig_restore(hwnd)
+            orig_restore(target_id)
 
         def tracking_back(n: int) -> None:
             order.append("backspaces")

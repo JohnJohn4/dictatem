@@ -83,17 +83,17 @@ def paste(
     security-hooked machines.
     """
     normalized = normalize_pasted_text(text)
-    hwnd = foreground.capture()
+    target_id = foreground.capture()
     logger.info(
-        "Paste: captured foreground hwnd=%s, text length=%d, replace_chars=%d",
-        hwnd,
+        "Paste: captured foreground target_id=%s, text length=%d, replace_chars=%d",
+        target_id,
         len(normalized),
         replace_chars,
     )
 
     if replace_chars > 0:
         # Typed-replacement path: no clipboard, no settle, no race.
-        foreground.restore(hwnd)
+        foreground.restore(target_id)
         keystroke.send_backspaces(replace_chars)
         keystroke.send_text(normalized)
         logger.info("Paste: typed-replacement complete")
@@ -105,7 +105,7 @@ def paste(
     clipboard.set_text(normalized)
     clipboard.close()
     logger.info("Paste: clipboard set, restoring foreground and sending Ctrl+V")
-    foreground.restore(hwnd)
+    foreground.restore(target_id)
     keystroke.send_paste()
 
     def _restore() -> None:

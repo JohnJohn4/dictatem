@@ -70,8 +70,8 @@ class TestFakeForegroundTracker:
     def test_satisfies_protocol(self) -> None:
         assert isinstance(FakeForegroundTracker(), ForegroundTracker)
 
-    def test_capture_returns_hwnd(self) -> None:
-        ft = FakeForegroundTracker(hwnd=42)
+    def test_capture_returns_target_id(self) -> None:
+        ft = FakeForegroundTracker(target_id=42)
         assert ft.capture() == 42
 
     def test_records_restores(self) -> None:
