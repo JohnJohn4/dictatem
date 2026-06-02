@@ -129,7 +129,8 @@ class TestEmptyResultSuppression:
 
 
 class TestGPUOOMDoubleFail:
-    """AC: Double OOM → daemon catches TranscriptionFailedError, tray notify, ERROR log, continue."""
+    """AC: Double OOM → daemon catches TranscriptionFailedError, tray notify,
+    ERROR log, continue."""
 
     def test_double_oom_notifies_and_logs(
         self,
@@ -209,11 +210,15 @@ class TestSilenceTimeout:
 
         assert sm.state is State.IDLE
         assert any(r.levelno == logging.INFO for r in caplog.records)
-        assert any("timeout" in r.message.lower() or "idle" in r.message.lower() for r in caplog.records)
+        assert any(
+            "timeout" in r.message.lower() or "idle" in r.message.lower()
+            for r in caplog.records
+        )
 
 
 class TestMaxRecordingDuration:
-    """AC: duration >= max_recording_seconds → transcribe the audio so far + tray notify, INFO log."""
+    """AC: duration >= max_recording_seconds → transcribe the audio so far +
+    tray notify, INFO log."""
 
     def test_max_duration_transcribes_recording(
         self,
@@ -252,7 +257,10 @@ class TestMaxRecordingDuration:
             core.check_silence(now_ms=10_200)
 
         assert sm.state is State.TRANSCRIBING
-        assert any("max" in r.message.lower() or "duration" in r.message.lower() for r in caplog.records)
+        assert any(
+            "max" in r.message.lower() or "duration" in r.message.lower()
+            for r in caplog.records
+        )
         assert any("max duration" in msg.lower() for _, msg in tray.notifications)
 
     def test_max_duration_not_triggered_below_cap(
@@ -293,7 +301,8 @@ class TestMaxRecordingDuration:
 
 
 class TestAudioCaptureError:
-    """AC: AudioCaptureError → tray notify with documented text, WARNING log, subsequent hotkeys work."""
+    """AC: AudioCaptureError → tray notify with documented text, WARNING log,
+    subsequent hotkeys work."""
 
     def test_audio_capture_error_notifies_and_logs(
         self,

@@ -11,22 +11,22 @@ import math
 from typing import TYPE_CHECKING
 
 from dictatem.overlay.state import (
+    PILL_HEIGHT,
+    PILL_WIDTH,
     Color,
     DotStyle,
     OverlayPhase,
-    PILL_HEIGHT,
-    PILL_WIDTH,
     Point,
 )
 
 if TYPE_CHECKING:
     from dictatem.overlay.state import OverlayState
 
-from dictatem.overlay.state import MonitorRect
-
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
+
+from dictatem.overlay.state import MonitorRect
 
 
 class QtOverlayWidget(QWidget):

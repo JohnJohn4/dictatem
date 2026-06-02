@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # A macos-latest runner is a real Apple-Silicon Mac: it can resolve the
+    # darwin-gated dependency set, import every PyObjC adapter, and run the pure
+    # unit tests. That makes CI the verification surface for the macOS track
+    # (ADR-0018) — only interactive GUI/TCC behavior still needs a human Mac.
+    name: ${{ matrix.os }} · py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      # Resolves the runtime extra (faster-whisper/ctranslate2, sounddevice,
+      # PySide6, nvidia-ml-py) plus the platform-gated adapters: pywin32 on
+      # Windows, the PyObjC frameworks on macOS. A failure here IS the signal
+      # ADR-0013 wanted CI to catch — the darwin wheel/ABI set not resolving.
+      - name: Sync (runtime extra + dev group)
+        run: uv sync --extra runtime
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Type-check (pyright)
+        run: uv run pyright
+
+      # Pure cores run everywhere; native adapters are exercised only for
+      # import-safety. Windows-only tests skip themselves off-Windows
+      # (allow_module_level), so the same suite is green on both OSes.
+      - name: Test (pytest)
+        run: uv run pytest -q
