@@ -1,5 +1,10 @@
 # Hotkey modifiers are configurable and honoured by the classifier
 
+> Refined by [ADR-0018](0018-cross-platform-input-and-foreground-neutral-identities.md):
+> the classifier now resolves modifier names to platform-neutral `Key`
+> identities (not Windows VK groups), and `meta` is added as the canonical OS-key
+> name with `win` kept as an alias.
+
 `[hotkey].modifiers` in `config.toml` was parsed and round-tripped correctly
 but **never wired into the classifier** — the daemon always triggered on
 Win+Alt regardless of what was configured. This ADR records the fix.

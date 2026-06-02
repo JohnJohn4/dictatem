@@ -7,7 +7,7 @@ the code or in ADRs (`docs/adr/`), not here.
 
 ### Tap
 
-A press-and-release of the hotkey combo (Alt+Win) whose total held
+A press-and-release of the [Hotkey Combo](#hotkey-combo) whose total held
 duration is shorter than the **tap threshold** (default 200 ms, configurable
 via `[hotkey].tap_threshold_ms`). A Tap toggles recording on and off:
 the first Tap starts recording, the next Tap stops it and transcribes.
@@ -18,15 +18,42 @@ in the hotkey pipeline come from the same clock; see
 
 ### Hold
 
-A press of the hotkey combo (Alt+Win) held continuously for at least
+A press of the [Hotkey Combo](#hotkey-combo) held continuously for at least
 the **tap threshold**. While the combo is held, recording runs in
 push-to-talk mode and stops on release.
+
+### Hotkey Combo
+
+The set of modifier keys that, pressed together, arm dictation. Configured by
+name via `[hotkey].modifiers` (default `["win", "alt"]`) and matched against
+**platform-neutral modifier identities**, so the same configuration means the
+same thing on every OS while each platform maps its own physical keys:
+
+| Modifier name | Identity | Windows key | macOS key |
+| --- | --- | --- | --- |
+| `meta` (alias `win`) | Meta | Windows key | Command (⌘) |
+| `alt` | Alt | Alt | Option (⌥) |
+| `ctrl` | Ctrl | Ctrl | Control |
+| `shift` | Shift | Shift | Shift |
+
+`meta` is the canonical cross-platform name for the OS key; `win` is a
+permanent alias kept for existing Windows configs. The default combo is
+therefore Win+Alt on Windows and Option+Command on macOS. The keyboard hook on
+each platform translates native key codes into these identities; the
+[Tap](#tap)/[Hold](#hold) classifier reasons only about identities and never
+sees a raw OS key code. See
+[ADR-0010](docs/adr/0010-hotkey-modifiers-are-configurable.md).
 
 ### Last Paste
 
 The snapshot of the text most recently pasted by Dictatem into the user's
-focused window, together with the foreground window handle (HWND) at the
-time of the paste and a monotonic timestamp.
+focused window, together with the **foreground identity** (`target_id`) at the
+time of the paste and a monotonic timestamp. The `target_id` is an opaque
+integer the [Trigger Fire](#trigger-fire) rail compares for equality — a window
+handle (HWND) on Windows, the frontmost-app process id (PID) on macOS. It is
+therefore window-granular on Windows but **app-granular on macOS**: a Trigger
+Fire after switching to a different window of the *same* macOS app still passes
+the same-target rail.
 
 The **Last Paste** is the operand for [Trigger Words](#trigger-word). It is
 updated after every paste — both from regular dictation and from a Trigger
@@ -79,10 +106,12 @@ The act of running a [Transform](#transform) on the [Last Paste](#last-paste)
 and replacing the previously-pasted text with the result.
 
 A Trigger Fire only proceeds if both safety rails hold: the foreground
-window still has the same HWND as when the Last Paste was made, and the
-Last Paste is younger than its TTL (default 5 min, configurable via
-`[transform].last_paste_ttl_s`). Otherwise the trigger is discarded with
-an error flash on the overlay.
+identity (`target_id`) still matches the one captured when the
+[Last Paste](#last-paste) was made, and the Last Paste is younger than its TTL
+(default 5 min, configurable via `[transform].last_paste_ttl_s`). The match is
+window-granular on Windows and app-granular on macOS (see
+[Last Paste](#last-paste)). Otherwise the trigger is discarded with an error
+flash on the overlay.
 
 Replacement is done by sending backspaces equal to the character length of
 the Last Paste (post-normalisation) and pasting the Transform output. The
