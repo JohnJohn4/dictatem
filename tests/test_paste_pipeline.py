@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from dictatem.exceptions import ClipboardContentionError
-from dictatem.paste.pipeline import paste
+from dictatem.paste.pipeline import _RETRY_DELAY_S, paste
 from tests.fakes import FakeClipboardIO, FakeForegroundTracker, FakeKeystrokeSender
 
 if TYPE_CHECKING:
@@ -23,7 +23,7 @@ class TestPasteCallSequence:
         clip = FakeClipboardIO()
         clip._content = "original"
         ks = FakeKeystrokeSender()
-        fg = FakeForegroundTracker(hwnd=42)
+        fg = FakeForegroundTracker(target_id=42)
 
         paste("hello", clipboard=clip, keystroke=ks, foreground=fg)
 
@@ -39,7 +39,7 @@ class TestPasteCallSequence:
     def test_foreground_captured_before_clipboard(self) -> None:
         clip = FakeClipboardIO()
         ks = FakeKeystrokeSender()
-        fg = FakeForegroundTracker(hwnd=99)
+        fg = FakeForegroundTracker(target_id=99)
 
         paste("x", clipboard=clip, keystroke=ks, foreground=fg)
 
@@ -56,9 +56,9 @@ class TestPasteCallSequence:
         orig_restore = fg.restore
         orig_paste = ks.send_paste
 
-        def tracking_restore(hwnd: int) -> None:
+        def tracking_restore(target_id: int) -> None:
             order.append("restore_fg")
-            orig_restore(hwnd)
+            orig_restore(target_id)
 
         def tracking_paste() -> None:
             order.append("send_paste")
@@ -236,12 +236,15 @@ class TestContentionRetry:
         clip = FakeClipboardIO(open_failures=4)
         ks = FakeKeystrokeSender()
         fg = FakeForegroundTracker()
+        delays: list[float] = []
 
-        paste("hello", clipboard=clip, keystroke=ks, foreground=fg)
+        paste("hello", clipboard=clip, keystroke=ks, foreground=fg, sleep=delays.append)
 
-        for i in range(1, len(clip.open_timestamps)):
-            gap = clip.open_timestamps[i] - clip.open_timestamps[i - 1]
-            assert gap >= 0.008, f"Backoff gap {i} was {gap:.4f}s, expected >= 0.008s"
+        # 4 failed opens before success → 4 backoff sleeps, each the configured
+        # delay. Asserting the *requested* delays (not measured wall-clock gaps)
+        # keeps this deterministic on coarse CI timers — the previous wall-clock
+        # assertion flaked on Windows runners where the gap rounded to 0.0s.
+        assert delays == [_RETRY_DELAY_S] * 4
 
     def test_raises_after_5_failures(self) -> None:
         clip = FakeClipboardIO(open_failures=5)
@@ -344,14 +347,14 @@ class TestReplaceChars:
         order: list[str] = []
         clip = FakeClipboardIO()
         ks = FakeKeystrokeSender()
-        fg = FakeForegroundTracker(hwnd=42)
+        fg = FakeForegroundTracker(target_id=42)
 
         orig_restore = fg.restore
         orig_back = ks.send_backspaces
 
-        def tracking_restore(hwnd: int) -> None:
+        def tracking_restore(target_id: int) -> None:
             order.append("restore_fg")
-            orig_restore(hwnd)
+            orig_restore(target_id)
 
         def tracking_back(n: int) -> None:
             order.append("backspaces")

@@ -29,7 +29,10 @@ class TranscriptionFailedError(Exception):
 
 
 class ModelLoadError(Exception):
-    """Raised when the transcription model fails to load (corrupt download, missing CUDA libs, etc.)."""
+    """Raised when the transcription model fails to load.
+
+    Corrupt download, missing CUDA libs, etc.
+    """
 
 
 class TransformFailedError(Exception):

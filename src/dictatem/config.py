@@ -18,7 +18,10 @@ VALID_OVERLAY_POSITIONS = frozenset({
     "top-left", "top-right", "bottom-left", "bottom-right",
 })
 
-VALID_MODIFIER_NAMES = frozenset({"win", "alt", "ctrl", "shift"})
+# "meta" is the canonical cross-platform name for the OS key (Windows key on
+# Windows, Command on macOS); "win" is a permanent alias for it. See ADR-0010,
+# ADR-0018, and CONTEXT.md#hotkey-combo.
+VALID_MODIFIER_NAMES = frozenset({"meta", "win", "alt", "ctrl", "shift"})
 
 VALID_LOG_LEVELS = frozenset({
     "debug", "info", "warning", "error", "critical",

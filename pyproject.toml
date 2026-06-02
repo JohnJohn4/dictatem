@@ -50,9 +50,16 @@ pythonpath = ["src"]
 [tool.ruff]
 src = ["src", "tests"]
 line-length = 99
+# Agent worktrees and Claude Code config are not project sources.
+extend-exclude = [".claude"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "TCH"]
+select = ["E", "F", "I", "UP", "B", "SIM", "TC"]
+
+[tool.ruff.lint.per-file-ignores]
+# Platform-only native modules guard with `if sys.platform != ...: raise`, so
+# their OS-binding imports legitimately sit after that runtime check (E402).
+"src/dictatem/hotkey/wh_keyboard_ll.py" = ["E402"]
 
 [tool.pyright]
 pythonVersion = "3.11"

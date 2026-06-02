@@ -18,16 +18,17 @@ import pytest
 if sys.platform != "win32":
     pytest.skip("wh_keyboard_ll is Windows-only", allow_module_level=True)
 
-from dictatem.hotkey.classifier import KeyAction
+from dictatem.hotkey.classifier import Key, KeyAction
 from dictatem.hotkey.wh_keyboard_ll import (
+    _LPARAM,
+    _WPARAM,
     KBDLLHOOKSTRUCT,
     WM_KEYDOWN,
     WM_KEYUP,
     WM_SYSKEYDOWN,
     WHKeyboardLLHook,
-    _LPARAM,
-    _WPARAM,
 )
+from dictatem.hotkey.win32_keymap import vk_to_key
 
 VK_A = 0x41
 VK_LCONTROL = 0xA2
@@ -60,7 +61,7 @@ def _make_callback(handler):  # type: ignore[no-untyped-def]
                     is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
                     action = KeyAction.KEY_DOWN if is_down else KeyAction.KEY_UP
                     timestamp_ms = kb.time
-                    handler(vk, action, timestamp_ms)
+                    handler(vk_to_key(vk), action, timestamp_ms)
             except Exception:
                 pass
             from dictatem.hotkey import wh_keyboard_ll as _mod
@@ -140,14 +141,14 @@ def test_syskeydown_treated_as_keydown() -> None:
     def handler(vk: int, action: KeyAction, ts: int) -> None:
         received.append((vk, action, ts))
 
-    struct = _make_struct(VK_A, time=1234)
+    struct = _make_struct(VK_LWIN, time=1234)
 
     with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
         mock_u32.CallNextHookEx.return_value = 0
         cb, _ = _make_callback(handler)
         cb(0, WM_SYSKEYDOWN, ctypes.addressof(struct))
 
-    assert received == [(VK_A, KeyAction.KEY_DOWN, 1234)]
+    assert received == [(Key.LEFT_META, KeyAction.KEY_DOWN, 1234)]
 
 
 def test_negative_ncode_skips_processing_and_calls_next() -> None:

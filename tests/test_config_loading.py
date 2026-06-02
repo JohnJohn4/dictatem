@@ -523,6 +523,13 @@ class TestHotkeyModifiersValidation:
         cfg = load_config(path)
         assert cfg.hotkey.modifiers == ("ctrl", "win")
 
+    def test_meta_modifier_accepted(self, tmp_path: Path) -> None:
+        """`meta` is the canonical cross-platform OS-key name (ADR-0018)."""
+        path = tmp_path / "config.toml"
+        path.write_text('[hotkey]\nmodifiers = ["meta", "alt"]\n')
+        cfg = load_config(path)
+        assert cfg.hotkey.modifiers == ("meta", "alt")
+
     def test_unknown_modifier_names_fall_back_to_default(
         self, tmp_path: Path, caplog: logging.LogCaptureFixture
     ) -> None:

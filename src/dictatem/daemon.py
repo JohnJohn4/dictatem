@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from dictatem.audio.buffer import AudioBuffer
-    from dictatem.hotkey.classifier import HotkeyClassifier, HotkeyEvent, KeyAction
+    from dictatem.hotkey.classifier import HotkeyClassifier, HotkeyEvent, Key, KeyAction
     from dictatem.interfaces import (
         AudioCapture,
         AutostartRegistrar,
@@ -126,16 +126,16 @@ class _HotkeyBridge:
         self._classifier = classifier
         self._callback = callback
         self._combo_active = False
-        self._queue: queue.Queue[tuple[int, KeyAction, int]] = queue.Queue()
+        self._queue: queue.Queue[tuple[Key, KeyAction, int]] = queue.Queue()
 
     def enqueue_key_event(
-        self, vk: int, action: KeyAction, timestamp_ms: int
+        self, key: Key, action: KeyAction, timestamp_ms: int
     ) -> None:
         """Thread-safe entry point invoked from the keyboard hook thread."""
-        self._queue.put((vk, action, timestamp_ms))
+        self._queue.put((key, action, timestamp_ms))
 
-    def on_key_event(self, vk: int, action: KeyAction, timestamp_ms: int) -> object:
-        decision, event = self._classifier.process_event(vk, action, timestamp_ms)
+    def on_key_event(self, key: Key, action: KeyAction, timestamp_ms: int) -> object:
+        decision, event = self._classifier.process_event(key, action, timestamp_ms)
         is_combo = self._classifier.combo_held
 
         if not self._combo_active and is_combo:
@@ -153,10 +153,10 @@ class _HotkeyBridge:
     def tick(self, timestamp_ms: int) -> None:
         while True:
             try:
-                vk, action, ev_ts = self._queue.get_nowait()
+                key, action, ev_ts = self._queue.get_nowait()
             except queue.Empty:
                 break
-            self.on_key_event(vk, action, ev_ts)
+            self.on_key_event(key, action, ev_ts)
 
         event = self._classifier.tick(timestamp_ms)
         if event is not None:
@@ -418,7 +418,7 @@ class DaemonCore:
                 "(Settings → Privacy & security → Microphone)",
             )
             self._recover_to_idle()
-            raise _AbortCommandChain
+            raise _AbortCommandChain from None
         self._overlay.show(RecordingMode.PTT)
         self._tray.set_recording()
 
@@ -573,24 +573,26 @@ class DaemonCore:
     def _handle_trigger_fire(self, prompt: str, *, now_ms: int) -> None:
         """Run a Transform on the Last Paste; defer the SM event until it returns.
 
-        Safety rails (HWND + TTL) gate the call. On rail failure the
-        transcription leg is closed with EMPTY_RESULT so the existing
+        Safety rails (foreground target + TTL) gate the call. On rail failure
+        the transcription leg is closed with EMPTY_RESULT so the existing
         FLASH_ERROR path runs; the document is untouched.
         """
         assert self._last_paste is not None
         assert self._transform_lifecycle is not None
 
-        current_hwnd = self._foreground.capture() if self._foreground is not None else 0
+        current_target_id = (
+            self._foreground.capture() if self._foreground is not None else 0
+        )
         if not self._last_paste.rails_ok(
-            current_hwnd=current_hwnd,
+            current_target_id=current_target_id,
             now_ms=now_ms,
             ttl_s=self._last_paste_ttl_s,
         ):
             logger.info(
                 "Trigger Fire aborted: rails failed "
-                "(hwnd_now=%s, hwnd_paste=%s, age_ms=%d, ttl_s=%.0f)",
-                current_hwnd,
-                self._last_paste.hwnd,
+                "(target_now=%s, target_paste=%s, age_ms=%d, ttl_s=%.0f)",
+                current_target_id,
+                self._last_paste.target_id,
                 now_ms - self._last_paste.pasted_at_ms,
                 self._last_paste_ttl_s,
             )
@@ -736,7 +738,7 @@ class DaemonCore:
             self._last_paste = LastPaste(
                 text=normalized,
                 char_count=len(normalized),
-                hwnd=self._foreground.capture(),
+                target_id=self._foreground.capture(),
                 pasted_at_ms=now_ms,
             )
         else:

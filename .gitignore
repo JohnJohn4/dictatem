@@ -49,6 +49,8 @@ $RECYCLE.BIN/
 
 # Claude Code local settings (machine-specific permission allowlists)
 .claude/settings.local.json
+# Agent worktrees — transient scratch checkouts, never source
+.claude/worktrees/
 
 # IDE
 .vscode/

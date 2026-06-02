@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dictatem.transform.detector import TriggerDetector
 
-
 SUMMARIZE = "summarize prompt body"
 EXPAND = "expand prompt body"
 

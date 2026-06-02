@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from textwrap import dedent
+from typing import TYPE_CHECKING
 
 from dictatem.transform.prompts import (
     bootstrap_prompts,
@@ -12,6 +12,9 @@ from dictatem.transform.prompts import (
     load_prompts_dir,
     parse_prompt_file,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestParsePromptFile:

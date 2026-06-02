@@ -18,11 +18,11 @@ class LastPaste:
 
     text: str
     char_count: int
-    hwnd: int
+    target_id: int
     pasted_at_ms: int
 
-    def rails_ok(self, current_hwnd: int, now_ms: int, ttl_s: float) -> bool:
-        if current_hwnd != self.hwnd:
+    def rails_ok(self, current_target_id: int, now_ms: int, ttl_s: float) -> bool:
+        if current_target_id != self.target_id:
             return False
         age_ms = now_ms - self.pasted_at_ms
         return age_ms < int(ttl_s * 1000)

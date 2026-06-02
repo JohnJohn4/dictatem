@@ -4,14 +4,14 @@ from __future__ import annotations
 
 
 class FakeForegroundTracker:
-    def __init__(self, hwnd: int = 1234) -> None:
-        self._hwnd: int = hwnd
+    def __init__(self, target_id: int = 1234) -> None:
+        self._target_id: int = target_id
         self.captured: list[int] = []
         self.restored: list[int] = []
 
     def capture(self) -> int:
-        self.captured.append(self._hwnd)
-        return self._hwnd
+        self.captured.append(self._target_id)
+        return self._target_id
 
-    def restore(self, hwnd: int) -> None:
-        self.restored.append(hwnd)
+    def restore(self, target_id: int) -> None:
+        self.restored.append(target_id)

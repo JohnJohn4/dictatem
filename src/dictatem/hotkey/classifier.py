@@ -1,36 +1,57 @@
-"""Pure-logic hotkey classifier — no OS dependencies."""
+"""Pure-logic hotkey classifier — no OS dependencies.
+
+Reasons about platform-neutral key identities (``Key``), never raw OS key
+codes: each platform's keyboard hook translates its native codes to ``Key``
+before feeding this classifier, and modifier names from config resolve to
+``Key`` groups here. See ADR-0018 and ``CONTEXT.md#hotkey-combo``.
+"""
 
 from __future__ import annotations
 
 import enum
 
-# Windows virtual-key codes (subset needed by the classifier)
-VK_LWIN = 0x5B
-VK_RWIN = 0x5C
-VK_LMENU = 0xA4
-VK_RMENU = 0xA5
-VK_LCONTROL = 0xA2
-VK_RCONTROL = 0xA3
-VK_LSHIFT = 0xA0
-VK_RSHIFT = 0xA1
-VK_ESCAPE = 0x1B
-VK_LEFT = 0x25
-VK_UP = 0x26
-VK_RIGHT = 0x27
-VK_DOWN = 0x28
 
-WIN_VKS = frozenset({VK_LWIN, VK_RWIN})
-ALT_VKS = frozenset({VK_LMENU, VK_RMENU})
-CTRL_VKS = frozenset({VK_LCONTROL, VK_RCONTROL})
-SHIFT_VKS = frozenset({VK_LSHIFT, VK_RSHIFT})
-ARROW_VKS = frozenset({VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN})
+class Key(enum.Enum):
+    """A platform-neutral key identity the classifier reasons about.
 
-# Map modifier name → VK group
-_MODIFIER_MAP: dict[str, frozenset[int]] = {
-    "win": WIN_VKS,
-    "alt": ALT_VKS,
-    "ctrl": CTRL_VKS,
-    "shift": SHIFT_VKS,
+    Each OS keyboard-hook adapter maps its native key codes onto these values
+    (e.g. Windows ``0x5B`` and macOS Command both → ``LEFT_META``); unrecognised
+    keys map to ``OTHER`` (tracked but inert). Left/right modifier variants are
+    kept distinct so that holding either side sustains a combo — matching the
+    per-side OS codes — while both belong to the same modifier group.
+    """
+
+    LEFT_META = "left_meta"
+    RIGHT_META = "right_meta"
+    LEFT_ALT = "left_alt"
+    RIGHT_ALT = "right_alt"
+    LEFT_CTRL = "left_ctrl"
+    RIGHT_CTRL = "right_ctrl"
+    LEFT_SHIFT = "left_shift"
+    RIGHT_SHIFT = "right_shift"
+    ESCAPE = "escape"
+    LEFT = "left"
+    UP = "up"
+    RIGHT = "right"
+    DOWN = "down"
+    OTHER = "other"
+
+
+META_KEYS = frozenset({Key.LEFT_META, Key.RIGHT_META})
+ALT_KEYS = frozenset({Key.LEFT_ALT, Key.RIGHT_ALT})
+CTRL_KEYS = frozenset({Key.LEFT_CTRL, Key.RIGHT_CTRL})
+SHIFT_KEYS = frozenset({Key.LEFT_SHIFT, Key.RIGHT_SHIFT})
+ARROW_KEYS = frozenset({Key.LEFT, Key.UP, Key.RIGHT, Key.DOWN})
+
+# Modifier name → neutral Key group. ``meta`` is the canonical name for the OS
+# key (Windows key / Command); ``win`` is a permanent alias for it. See
+# ADR-0010, ADR-0018, and ``CONTEXT.md#hotkey-combo``.
+_MODIFIER_MAP: dict[str, frozenset[Key]] = {
+    "meta": META_KEYS,
+    "win": META_KEYS,
+    "alt": ALT_KEYS,
+    "ctrl": CTRL_KEYS,
+    "shift": SHIFT_KEYS,
 }
 
 
@@ -58,10 +79,10 @@ class HotkeyClassifier:
         modifiers: tuple[str, ...] = ("win", "alt"),
     ) -> None:
         self._tap_threshold_ms = tap_threshold_ms
-        self._modifier_groups: list[frozenset[int]] = [
+        self._modifier_groups: list[frozenset[Key]] = [
             _MODIFIER_MAP[name] for name in modifiers if name in _MODIFIER_MAP
         ]
-        self._keys_down: set[int] = set()
+        self._keys_down: set[Key] = set()
         self._active = False
         self._combo_pressed_at: int | None = None
         self._hold_emitted = False
@@ -76,11 +97,11 @@ class HotkeyClassifier:
         return all(bool(self._keys_down & group) for group in self._modifier_groups)
 
     def process_event(
-        self, vk: int, action: KeyAction, timestamp_ms: int
+        self, key: Key, action: KeyAction, timestamp_ms: int
     ) -> tuple[HookDecision, HotkeyEvent | None]:
         if action is KeyAction.KEY_DOWN:
-            return self._on_key_down(vk, timestamp_ms)
-        return self._on_key_up(vk, timestamp_ms)
+            return self._on_key_down(key, timestamp_ms)
+        return self._on_key_up(key, timestamp_ms)
 
     def tick(self, timestamp_ms: int) -> HotkeyEvent | None:
         if (
@@ -93,32 +114,36 @@ class HotkeyClassifier:
             return HotkeyEvent.HOLD_START
         return None
 
-    def _on_key_down(self, vk: int, timestamp_ms: int) -> tuple[HookDecision, HotkeyEvent | None]:
-        if vk in self._keys_down:
+    def _on_key_down(
+        self, key: Key, timestamp_ms: int
+    ) -> tuple[HookDecision, HotkeyEvent | None]:
+        if key in self._keys_down:
             return HookDecision.PASS_THROUGH, None
 
         was_combo = self.combo_held
-        self._keys_down.add(vk)
+        self._keys_down.add(key)
         is_combo = self.combo_held
 
         if not was_combo and is_combo:
             self._combo_pressed_at = timestamp_ms
             self._hold_emitted = False
 
-        if is_combo and vk in ARROW_VKS:
+        if is_combo and key in ARROW_KEYS:
             return HookDecision.SUPPRESS, None
 
-        if vk == VK_ESCAPE and self._active:
+        if key is Key.ESCAPE and self._active:
             return HookDecision.PASS_THROUGH, HotkeyEvent.ESC
 
         return HookDecision.PASS_THROUGH, None
 
-    def _on_key_up(self, vk: int, timestamp_ms: int) -> tuple[HookDecision, HotkeyEvent | None]:
-        if vk not in self._keys_down:
+    def _on_key_up(
+        self, key: Key, timestamp_ms: int
+    ) -> tuple[HookDecision, HotkeyEvent | None]:
+        if key not in self._keys_down:
             return HookDecision.PASS_THROUGH, None
 
         was_combo = self.combo_held
-        self._keys_down.discard(vk)
+        self._keys_down.discard(key)
         is_combo = self.combo_held
 
         if was_combo and not is_combo and self._combo_pressed_at is not None:

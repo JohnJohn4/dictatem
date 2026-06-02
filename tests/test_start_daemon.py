@@ -186,13 +186,13 @@ class _EventCollector:
 
 
 def _combo_down(bridge: _HotkeyBridge, ts: int = 0) -> None:
-    bridge.on_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_DOWN, ts)
-    bridge.on_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_DOWN, ts)
+    bridge.on_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_DOWN, ts)
+    bridge.on_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_DOWN, ts)
 
 
 def _combo_up(bridge: _HotkeyBridge, ts: int = 0) -> None:
-    bridge.on_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_UP, ts)
-    bridge.on_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_UP, ts)
+    bridge.on_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_UP, ts)
+    bridge.on_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_UP, ts)
 
 
 class TestHotkeyBridge:
@@ -238,7 +238,7 @@ class TestHotkeyBridge:
         bridge = _HotkeyBridge(classifier=classifier, callback=collector.on_hotkey_event)
 
         classifier.set_active(True)
-        bridge.on_key_event(_clf.VK_ESCAPE, _clf.KeyAction.KEY_DOWN, 0)
+        bridge.on_key_event(_clf.Key.ESCAPE, _clf.KeyAction.KEY_DOWN, 0)
 
         event_types = [e for e, _ in collector.events]
         assert Event.ESC in event_types
@@ -308,9 +308,9 @@ class TestHotkeyBridge:
         )
         bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
 
-        bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_DOWN, 0)
-        bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_DOWN, 0)
-        bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_UP, 100)
+        bridge.enqueue_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_DOWN, 0)
+        bridge.enqueue_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_DOWN, 0)
+        bridge.enqueue_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_UP, 100)
 
         assert sm.state == State.IDLE, "queue must not be drained until tick"
         bridge.tick(100)
@@ -369,11 +369,11 @@ class TestHotkeyBridge:
         # press at 1000, tick (between press and release) at 1010, release
         # at 1050, tick at 1060. With a unified clock the elapsed across the
         # tap stays under 200 ms.
-        bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_DOWN, 1000)
-        bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_DOWN, 1000)
+        bridge.enqueue_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_DOWN, 1000)
+        bridge.enqueue_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_DOWN, 1000)
         bridge.tick(1010)
-        bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_UP, 1050)
-        bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_UP, 1050)
+        bridge.enqueue_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_UP, 1050)
+        bridge.enqueue_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_UP, 1050)
         bridge.tick(1060)
 
         assert sm.state == State.TOGGLE_REC
@@ -402,20 +402,20 @@ class TestHotkeyBridge:
         for cycle in range(3):
             base = cycle * 10_000
             # Tap to start
-            bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_DOWN, base)
-            bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_DOWN, base)
+            bridge.enqueue_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_DOWN, base)
+            bridge.enqueue_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_DOWN, base)
             bridge.tick(base + 25)
-            bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_UP, base + 50)
-            bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_UP, base + 50)
+            bridge.enqueue_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_UP, base + 50)
+            bridge.enqueue_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_UP, base + 50)
             bridge.tick(base + 75)
             assert sm.state == State.TOGGLE_REC, f"cycle {cycle} start: {sm.state}"
 
             # Tap to stop
-            bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_DOWN, base + 5000)
-            bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_DOWN, base + 5000)
+            bridge.enqueue_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_DOWN, base + 5000)
+            bridge.enqueue_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_DOWN, base + 5000)
             bridge.tick(base + 5025)
-            bridge.enqueue_key_event(_clf.VK_LWIN, _clf.KeyAction.KEY_UP, base + 5050)
-            bridge.enqueue_key_event(_clf.VK_LMENU, _clf.KeyAction.KEY_UP, base + 5050)
+            bridge.enqueue_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_UP, base + 5050)
+            bridge.enqueue_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_UP, base + 5050)
             bridge.tick(base + 5075)
             daemon.drain_transcription_for_test(now_ms=base + 5075)
             assert sm.state == State.IDLE, f"cycle {cycle} end: {sm.state}"
