@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from dictatem.exceptions import ClipboardContentionError
-from dictatem.paste.pipeline import paste
+from dictatem.paste.pipeline import _RETRY_DELAY_S, paste
 from tests.fakes import FakeClipboardIO, FakeForegroundTracker, FakeKeystrokeSender
 
 if TYPE_CHECKING:
@@ -236,12 +236,15 @@ class TestContentionRetry:
         clip = FakeClipboardIO(open_failures=4)
         ks = FakeKeystrokeSender()
         fg = FakeForegroundTracker()
+        delays: list[float] = []
 
-        paste("hello", clipboard=clip, keystroke=ks, foreground=fg)
+        paste("hello", clipboard=clip, keystroke=ks, foreground=fg, sleep=delays.append)
 
-        for i in range(1, len(clip.open_timestamps)):
-            gap = clip.open_timestamps[i] - clip.open_timestamps[i - 1]
-            assert gap >= 0.008, f"Backoff gap {i} was {gap:.4f}s, expected >= 0.008s"
+        # 4 failed opens before success → 4 backoff sleeps, each the configured
+        # delay. Asserting the *requested* delays (not measured wall-clock gaps)
+        # keeps this deterministic on coarse CI timers — the previous wall-clock
+        # assertion flaked on Windows runners where the gap rounded to 0.0s.
+        assert delays == [_RETRY_DELAY_S] * 4
 
     def test_raises_after_5_failures(self) -> None:
         clip = FakeClipboardIO(open_failures=5)

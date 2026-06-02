@@ -46,7 +46,9 @@ def normalize_pasted_text(text: str) -> str:
     return text.strip() + " "
 
 
-def _open_with_retry(clipboard: ClipboardIO) -> None:
+def _open_with_retry(
+    clipboard: ClipboardIO, sleep: Callable[[float], None]
+) -> None:
     for attempt in range(_MAX_RETRIES):
         try:
             clipboard.open()
@@ -54,7 +56,7 @@ def _open_with_retry(clipboard: ClipboardIO) -> None:
         except OSError:
             if attempt == _MAX_RETRIES - 1:
                 raise ClipboardContentionError from None
-            time.sleep(_RETRY_DELAY_S)
+            sleep(_RETRY_DELAY_S)
 
 
 def paste(
@@ -65,6 +67,7 @@ def paste(
     foreground: ForegroundTracker,
     replace_chars: int = 0,
     schedule_restore: RestoreScheduler | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> None:
     """Paste *text* into the focused window.
 
@@ -101,7 +104,7 @@ def paste(
 
     # Regular dictation path: clipboard + Ctrl+V.
     saved = clipboard.save()
-    _open_with_retry(clipboard)
+    _open_with_retry(clipboard, sleep)
     clipboard.set_text(normalized)
     clipboard.close()
     logger.info("Paste: clipboard set, restoring foreground and sending Ctrl+V")
