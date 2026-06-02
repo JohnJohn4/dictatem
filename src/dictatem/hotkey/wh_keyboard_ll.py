@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from dictatem.hotkey.classifier import KeyAction
+    from dictatem.hotkey.classifier import Key, KeyAction
 
 if sys.platform != "win32":
     raise ImportError("wh_keyboard_ll requires Windows")
@@ -76,7 +76,7 @@ class WHKeyboardLLHook:
     """Low-level keyboard hook that forwards events to a thread-safe handler."""
 
     def __init__(
-        self, on_key_event: Callable[[int, KeyAction, int], None]
+        self, on_key_event: Callable[[Key, KeyAction, int], None]
     ) -> None:
         self._on_key_event = on_key_event
         self._hook_handle: int | None = None
@@ -94,6 +94,7 @@ class WHKeyboardLLHook:
 
     def _run_hook(self) -> None:
         from dictatem.hotkey.classifier import KeyAction
+        from dictatem.hotkey.win32_keymap import vk_to_key
 
         def _ll_callback(
             n_code: int, w_param: int, l_param: int
@@ -114,7 +115,7 @@ class WHKeyboardLLHook:
                     # clocks have a non-zero offset, a single tap fires a
                     # spurious HOLD_START → PTT_REC → instant stop.
                     timestamp_ms = int(time.monotonic() * 1000)
-                    self._on_key_event(vk, action, timestamp_ms)
+                    self._on_key_event(vk_to_key(vk), action, timestamp_ms)
             except Exception:
                 logger.error("Error in keyboard hook callback", exc_info=True)
 

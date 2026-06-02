@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from dictatem.hotkey.classifier import Key
     from dictatem.types import (
         AudioChunk,
         HardwareProfile,
@@ -73,23 +74,33 @@ class KeystrokeSender(Protocol):
 
 @runtime_checkable
 class ForegroundTracker(Protocol):
-    """Track and restore the foreground window."""
+    """Track and restore the foreground identity (``target_id``).
+
+    ``target_id`` is an opaque integer the Trigger Fire rail compares for
+    equality — a window handle (HWND) on Windows, the frontmost-app PID on
+    macOS (see ADR-0018 and ``CONTEXT.md#last-paste``).
+    """
 
     def capture(self) -> int:
-        """Return a handle to the current foreground window."""
+        """Return the current foreground identity (``target_id``)."""
         ...
 
-    def restore(self, hwnd: int) -> None:
-        """Bring the window identified by *hwnd* to the foreground."""
+    def restore(self, target_id: int) -> None:
+        """Restore focus to the foreground identified by *target_id*."""
         ...
 
 
 @runtime_checkable
 class KeyboardHook(Protocol):
-    """Low-level keyboard hook for hotkey detection."""
+    """Low-level keyboard hook for hotkey detection.
 
-    def install(self, callback: Callable[[int, bool], None]) -> None:
-        """Install the hook. *callback(vk_code, is_down)* is called for each event."""
+    Adapters translate native OS key codes into platform-neutral ``Key``
+    identities (see ``dictatem.hotkey.classifier.Key`` and ADR-0018) before
+    delivering them, so the hotkey classifier never sees a raw OS key code.
+    """
+
+    def install(self, callback: Callable[[Key, bool], None]) -> None:
+        """Install the hook. *callback(key, is_down)* is called for each event."""
         ...
 
     def uninstall(self) -> None:
