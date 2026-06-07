@@ -83,6 +83,23 @@ class TestInfoPlistMicrophonePrompt:
         assert description.strip()
 
 
+class TestInfoPlistVersion:
+    """Optional version keys for Finder's Get Info — cosmetic, never identity."""
+
+    def test_version_round_trips_into_both_keys(self) -> None:
+        rendered = render_info_plist(
+            executable="dictatem", icon_filename="app.icns", version="1.2.3"
+        )
+        info = plistlib.loads(rendered)
+        assert info["CFBundleShortVersionString"] == "1.2.3"
+        assert info["CFBundleVersion"] == "1.2.3"
+
+    def test_version_keys_absent_by_default(self) -> None:
+        info = _render()
+        assert "CFBundleShortVersionString" not in info
+        assert "CFBundleVersion" not in info
+
+
 class TestInfoPlistIsPure:
     """Same inputs -> identical bytes, so the renderer needs no I/O to test."""
 

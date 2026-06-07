@@ -9,6 +9,8 @@ of the four (desired × currently_enabled) combinations is covered.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from dictatem.autostart.reconcile import (
     AutostartAction,
     apply_autostart,
@@ -119,6 +121,16 @@ class TestRunUninstall:
         # disable is always called; the registrar swallows the absent case.
         assert reg.disable_calls == 1
 
+    def test_absent_entry_claims_nothing(self) -> None:
+        # macOS builds the registrar unconditionally for uninstall, so with
+        # no LaunchAgent on disk the output must not claim one was removed.
+        reg = FakeAutostartRegistrar(enabled=False)
+        lines: list[str] = []
+        run_uninstall(registrar=reg, out=lines.append)
+        joined = "\n".join(lines)
+        assert "Removed" not in joined
+        assert "uv tool uninstall dictatem" in joined
+
     def test_prints_uv_tool_uninstall_step(self) -> None:
         reg = FakeAutostartRegistrar(enabled=True)
         lines: list[str] = []
@@ -127,10 +139,46 @@ class TestRunUninstall:
         assert "uv tool uninstall dictatem" in joined
 
     def test_none_registrar_prints_guidance_only(self) -> None:
-        # Platforms with no autostart registrar yet (macOS until #61): there
-        # is no entry to remove, so claiming "Removed" would be false.
+        # Platforms with no autostart registrar (a macOS install whose .app
+        # was never generated): there is no entry to remove, so claiming
+        # "Removed" would be false.
         lines: list[str] = []
         run_uninstall(registrar=None, out=lines.append)
         joined = "\n".join(lines)
         assert "Removed" not in joined
         assert "uv tool uninstall dictatem" in joined
+
+
+class TestRunUninstallRemovesAppBundle:
+    """The macOS extra step (#61): the .app goes away before the uv tool —
+    after `uv tool uninstall` the .app's exec shim target no longer exists."""
+
+    def test_reports_the_removed_bundle_before_the_final_step(self) -> None:
+        reg = FakeAutostartRegistrar(enabled=True)
+        bundle = Path("/Users/me/Applications/Dictatem.app")
+        lines: list[str] = []
+        run_uninstall(
+            registrar=reg, out=lines.append, remove_app_bundle=lambda: bundle
+        )
+        joined = "\n".join(lines)
+        assert joined.index(f"Removed {bundle}.") < joined.index(
+            "uv tool uninstall dictatem"
+        )
+
+    def test_absent_bundle_claims_nothing(self) -> None:
+        # remove_app_bundle returns None when the .app was already gone —
+        # claiming "Removed" would be false.
+        lines: list[str] = []
+        run_uninstall(
+            registrar=None, out=lines.append, remove_app_bundle=lambda: None
+        )
+        joined = "\n".join(lines)
+        assert "Removed" not in joined
+        assert "uv tool uninstall dictatem" in joined
+
+    def test_default_is_no_bundle_step(self) -> None:
+        # Windows passes no remover; output is exactly the two-step guidance.
+        reg = FakeAutostartRegistrar(enabled=True)
+        lines: list[str] = []
+        run_uninstall(registrar=reg, out=lines.append)
+        assert "Dictatem.app" not in "\n".join(lines)

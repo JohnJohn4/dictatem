@@ -8,7 +8,9 @@ runs on every CI OS without starting a Qt event loop.
 
 from __future__ import annotations
 
+import plistlib
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -71,6 +73,78 @@ class TestMainUninstallFlag:
             daemon.main(argv=["--bogus"])
 
 
+class TestMainInstallMacosAppFlag:
+    def test_install_macos_app_runs_glue_not_daemon(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls: list[str] = []
+        monkeypatch.setattr(sys, "platform", "darwin")
+        monkeypatch.setattr(
+            daemon, "_run_install_macos_app", lambda: calls.append("install")
+        )
+        monkeypatch.setattr(
+            daemon, "_start_macos_daemon", lambda: calls.append("daemon")
+        )
+        daemon.main(argv=["--install-macos-app"])
+        assert calls == ["install"]
+
+    def test_errors_off_macos(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # parser.error → SystemExit(2): the flag generates a macOS-only
+        # artifact, so on Windows it must refuse rather than no-op.
+        monkeypatch.setattr(sys, "platform", "win32")
+        with pytest.raises(SystemExit):
+            daemon.main(argv=["--install-macos-app"])
+
+    def test_glue_generates_bundle_under_home(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # The glue itself is OS-independent file I/O (the darwin gate lives in
+        # main), so the whole flow runs against a monkeypatched home on any OS.
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        daemon._run_install_macos_app()
+
+        bundle = tmp_path / "Applications" / "Dictatem.app"
+        assert (bundle / "Contents" / "Info.plist").is_file()
+        assert (bundle / "Contents" / "MacOS" / "Dictatem").is_file()
+        assert (bundle / "Contents" / "Resources" / "app.icns").is_file()
+        out = capsys.readouterr().out
+        assert "Generated" in out
+        # No LaunchAgent existed, so none is created (ADR-0012: the daemon
+        # reconciles autostart; the installer never preempts the config).
+        assert not (
+            tmp_path / "Library" / "LaunchAgents" / "com.dictatem.daemon.plist"
+        ).exists()
+        assert "LaunchAgent" not in out
+
+    def test_glue_refreshes_an_existing_launch_agent(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # The stale-launch-command heal rides the upgrade path (PR #86 note):
+        # an existing plist is rewritten with the current launch command.
+        from dictatem.autostart.launch_agent import LaunchAgentRegistrar
+
+        monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        agents_dir = tmp_path / "Library" / "LaunchAgents"
+        LaunchAgentRegistrar(
+            agents_dir=agents_dir, program_arguments=["/stale/command"]
+        ).enable()
+
+        daemon._run_install_macos_app()
+
+        agent = plistlib.loads(
+            (agents_dir / "com.dictatem.daemon.plist").read_bytes()
+        )
+        bundle = tmp_path / "Applications" / "Dictatem.app"
+        assert agent["ProgramArguments"] == ["/usr/bin/open", "-g", bundle.as_posix()]
+        assert "Refreshed the start-at-login LaunchAgent" in capsys.readouterr().out
+
+
 class TestStarterAdapterSets:
     """Execute the real starter bodies with _run_daemon stubbed (#54).
 
@@ -80,14 +154,36 @@ class TestStarterAdapterSets:
     real launch.
     """
 
+    @staticmethod
+    def _patch_darwin_paths(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> tuple[Path, Path]:
+        """Point the starter's .app/LaunchAgents lookups at tmp_path.
+
+        Without this the assertions would depend on the machine's real
+        ~/Applications/Dictatem.app and LaunchAgent — red on any Mac where
+        Dictatem is actually installed (e.g. the QA box).
+        """
+        bundle = tmp_path / "Dictatem.app"
+        agents_dir = tmp_path / "LaunchAgents"
+        monkeypatch.setattr(
+            "dictatem.macapp.bundle.default_app_bundle_path", lambda: bundle
+        )
+        monkeypatch.setattr(
+            "dictatem.autostart.launch_agent.default_agents_dir",
+            lambda: agents_dir,
+        )
+        return bundle, agents_dir
+
     @pytest.mark.skipif(
         sys.platform != "darwin", reason="lazy-imports the PyObjC native adapters"
     )
     def test_macos_starter_builds_cpu_adapter_set(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         from dictatem.hardware.mac_probe import MacHardwareProbe
 
+        self._patch_darwin_paths(monkeypatch, tmp_path)
         captured: list[daemon._PlatformAdapters] = []
         monkeypatch.setattr(daemon, "_run_daemon", captured.append)
         daemon._start_macos_daemon()
@@ -97,9 +193,51 @@ class TestStarterAdapterSets:
         assert adapters.keystroke is not None
         assert adapters.foreground is not None
         assert adapters.install_keyboard_hook is not None
-        # The LaunchAgent registrar arrives with the .app (#61) — absent, not
-        # faked: the reconcile is skipped and the tray hides the toggle.
+        # The CGPreflight permission check (#57) — passed as a reference,
+        # never called here (this runs on a headless TCC-less runner).
+        assert adapters.check_permissions is not None
+        # No Dictatem.app and no LaunchAgent, so the registrar is guarded off
+        # (#61) — absent, not faked: the reconcile is skipped and the tray
+        # hides the toggle rather than registering a LaunchAgent that points
+        # at a missing bundle.
         assert adapters.autostart_registrar is None
+
+    @pytest.mark.skipif(
+        sys.platform != "darwin", reason="lazy-imports the PyObjC native adapters"
+    )
+    def test_macos_starter_wires_registrar_when_app_exists(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from dictatem.autostart.launch_agent import LaunchAgentRegistrar
+
+        bundle, _agents_dir = self._patch_darwin_paths(monkeypatch, tmp_path)
+        bundle.mkdir()
+        captured: list[daemon._PlatformAdapters] = []
+        monkeypatch.setattr(daemon, "_run_daemon", captured.append)
+        daemon._start_macos_daemon()
+        (adapters,) = captured
+        assert isinstance(adapters.autostart_registrar, LaunchAgentRegistrar)
+
+    @pytest.mark.skipif(
+        sys.platform != "darwin", reason="lazy-imports the PyObjC native adapters"
+    )
+    def test_macos_starter_keeps_registrar_for_stale_launch_agent(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # The .app was hand-deleted but its LaunchAgent is still registered:
+        # the registrar must stay wired so the reconcile (flag off) or the
+        # tray toggle can still remove the stale entry.
+        from dictatem.autostart.launch_agent import LaunchAgentRegistrar
+
+        _bundle, agents_dir = self._patch_darwin_paths(monkeypatch, tmp_path)
+        LaunchAgentRegistrar(
+            agents_dir=agents_dir, program_arguments=["/stale/command"]
+        ).enable()
+        captured: list[daemon._PlatformAdapters] = []
+        monkeypatch.setattr(daemon, "_run_daemon", captured.append)
+        daemon._start_macos_daemon()
+        (adapters,) = captured
+        assert isinstance(adapters.autostart_registrar, LaunchAgentRegistrar)
 
     @pytest.mark.skipif(
         sys.platform != "win32", reason="lazy-imports the win32 native adapters"
@@ -119,3 +257,6 @@ class TestStarterAdapterSets:
         assert adapters.foreground is not None
         assert adapters.autostart_registrar is not None
         assert adapters.install_keyboard_hook is not None
+        # Windows has no guided permission UX — the mic permission surfaces
+        # in-flow when capture fails.
+        assert adapters.check_permissions is None

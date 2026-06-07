@@ -69,6 +69,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "TC"]
 "src/dictatem/paste/mac_clipboard.py" = ["E402"]
 "src/dictatem/paste/mac_keystroke.py" = ["E402"]
 "src/dictatem/paste/mac_foreground.py" = ["E402"]
+"src/dictatem/permissions/mac_tcc.py" = ["E402"]
 
 [tool.pyright]
 pythonVersion = "3.11"
@@ -87,5 +88,7 @@ exclude = [
     "src/dictatem/paste/mac_clipboard.py",
     "src/dictatem/paste/mac_keystroke.py",
     "src/dictatem/paste/mac_foreground.py",
+    "src/dictatem/permissions/mac_tcc.py",
+    "src/dictatem/permissions/qt_dialog.py",
 ]
 typeCheckingMode = "standard"
