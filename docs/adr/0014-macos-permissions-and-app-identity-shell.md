@@ -92,3 +92,13 @@ with it both failure modes, impossible on the supported install path. A
 manually-run `--install-macos-app` against an arbitrary interpreter still gets
 the Rosetta guard, but framework-build identity theft remains out of scope:
 the supported answer is the pinned install.
+
+Rejected deeper fix: a tiny native Mach-O trampoline as `Contents/MacOS` would
+give LaunchServices a real architecture header, but compiling one at install
+time triggers the Xcode CLT prompt ADR-0015 exists to avoid, and shipping a
+prebuilt binary is the distributed-artifact posture ADR-0011 rejects (ad-hoc
+`codesign` on the script adds no arch header and fixes nothing here). The
+guard hardcodes `arch -arm64` because no truthful native-arch query exists
+from inside a translated process — `uname -m` and `hw.machine` both report
+x86_64 under Rosetta — and `proc_translated=1` today only ever means
+x86_64-on-arm64.

@@ -96,19 +96,21 @@ def render_exec_shim(launcher: Path) -> str:
     The ``proc_translated`` guard undoes a LaunchServices quirk found in
     real-Mac QA (#61, macOS 26): a bundle whose only executable is a shell
     script has no Mach-O header to declare architectures, and LS launches it
-    under Rosetta — ``LSRequiresNativeExecution``, ``LSArchitecturePriority``
-    and ``lsregister -f`` were all ignored. A translated shim would hand a
-    universal interpreter its x86_64 slice, which dies importing the
-    arm64-only wheels, so the shim re-execs itself natively via ``arch
-    -arm64`` first. On Intel Macs the sysctl key does not exist and the guard
-    is a no-op; ``exec`` keeps the PID either way.
+    under Rosetta (the plist-level overrides that were tried and ignored, and
+    the rejected Mach-O-trampoline alternative, are recorded in ADR-0014's
+    amendment). A translated shim would hand a universal interpreter its
+    x86_64 slice, which dies importing the arm64-only wheels, so the shim
+    re-execs itself natively via ``arch -arm64`` first. Absolute paths
+    throughout — launchd/LS launch with a bare PATH (the module docstring's
+    rationale). On Intel Macs the sysctl key does not exist and the guard is
+    a no-op; ``exec`` keeps the PID either way.
 
     ``as_posix()`` (identical to ``str()`` on macOS) keeps the rendering
     deterministic when the pure function is unit-tested on Windows.
     """
     return (
         "#!/bin/sh\n"
-        '[ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]'
+        '[ "$(/usr/sbin/sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]'
         ' && exec /usr/bin/arch -arm64 /bin/sh "$0" "$@"\n'
         f'exec "{launcher.as_posix()}" "$@"\n'
     )

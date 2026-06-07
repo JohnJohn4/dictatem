@@ -63,22 +63,26 @@ fi
 # requirements for the same package and abort.
 requirement="dictatem[runtime] @ ${source_url}"
 
-# Pin the tool environment to a uv-MANAGED CPython (CI-tested version) instead
-# of whatever Python the Mac happens to have. Real-Mac QA (#61) showed why
-# interpreter discovery is unsafe here: uv picked up a python.org "universal2"
-# framework build, LaunchServices launched the .app shim under Rosetta and the
-# universal interpreter ran as its x86_64 slice (crashing on the arm64-only
-# wheels), and TCC attributed permission grants to the framework's embedded
-# Python.app — the privacy panes listed "python3.14", not "Dictatem", defeating
-# ADR-0014's identity shell. uv-managed builds are plain single-arch binaries
-# with no embedded .app, so neither failure can occur. --managed-python needs a
-# reasonably recent uv; the uv this script installs when absent is always new
-# enough, only a stale pre-existing uv would need `uv self update` first.
-DICTATEM_PYTHON="3.12"
+# Pin the tool environment to a uv-MANAGED CPython instead of whatever Python
+# the Mac happens to have: real-Mac QA (#61) showed a discovered system Python
+# defeating the .app identity shell — Rosetta-mislaunched x86_64 slice, TCC
+# grants attributed to "python3.14" instead of "Dictatem". Full story in
+# ADR-0014's amendment. Keep the version inside CI's tested matrix; the env
+# override mirrors DICTATEM_REF for QA.
+DICTATEM_PYTHON="${DICTATEM_PYTHON:-3.12}"
 
 echo "Installing ${requirement} (on managed CPython ${DICTATEM_PYTHON}) ..."
 # $uv_flags is deliberately unquoted: empty by default, two words on override.
-uv tool install $uv_flags --managed-python --python "$DICTATEM_PYTHON" "$requirement"
+# The || block exists because --managed-python needs a recent uv: step 1 only
+# installs uv when ABSENT, and a stale pre-existing uv fails on the unknown
+# flag — a piped user never sees source comments, so print the remedy.
+uv tool install $uv_flags --managed-python --python "$DICTATEM_PYTHON" "$requirement" || {
+    echo ""
+    echo "uv tool install failed. If the error above calls '--managed-python'"
+    echo "unexpected, your pre-existing uv is too old: update it ('uv self update',"
+    echo "or 'brew upgrade uv' if it came from Homebrew) and re-run this installer."
+    exit 1
+}
 
 # Make the freshly installed `dictatem` launcher usable in THIS session — uv
 # only updates PATH for new sessions. `uv tool update-shell` ensures the tool

@@ -105,7 +105,7 @@ class TestRenderExecShim:
         # BEFORE handing a universal interpreter its x86_64 slice.
         shim = render_exec_shim(Path("/x/dictatem"))
         guard = (
-            '[ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]'
+            '[ "$(/usr/sbin/sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]'
             ' && exec /usr/bin/arch -arm64 /bin/sh "$0" "$@"'
         )
         assert guard in shim
