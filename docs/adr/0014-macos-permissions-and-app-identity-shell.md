@@ -61,3 +61,34 @@ relaunch. It never tries to grant on the user's behalf.
   TCC trusts), not the bare venv binary, so a login-started daemon keeps its
   granted permissions — via `/usr/bin/open -g` (see ADR-0012's consequences for
   the launch-mechanism rationale).
+
+## Amendment (2026-06, real-Mac QA of #61): the shell needs a pinned interpreter
+
+QA on macOS 26 (arm64) found two ways the identity shell silently loses to the
+interpreter underneath it when `uv tool install` discovers a *system* Python
+instead of provisioning its own:
+
+- **Rosetta mislaunch.** A bundle whose `Contents/MacOS` executable is a shell
+  script has no Mach-O header for LaunchServices to read architectures from,
+  and LS launched the bundle under Rosetta (x86_64). `LSRequiresNativeExecution`,
+  `LSArchitecturePriority` and `lsregister -f` re-registration were all ignored
+  for the script-only bundle. The discovered python.org interpreter was a
+  `universal2` binary, so the translated shim handed it its x86_64 slice and
+  the daemon died importing arm64-only wheels — before logging. The shim now
+  carries a `sysctl.proc_translated` guard that re-execs itself natively via
+  `arch -arm64` (a no-op on Intel Macs, same-PID `exec` throughout).
+- **Identity theft by the framework build.** python.org framework builds run
+  through their embedded `Python.app` stub, so even when launched *through*
+  `Dictatem.app`, the process TCC saw was the interpreter's own bundle: the
+  privacy panes seeded "python3.14" (generic icon), the guided dialog wore the
+  Python rocket, and a Dock tile appeared despite `LSUIElement` — the
+  interposed stub's plist won. No plist key in our bundle can prevent this.
+
+Both failures share one root: the shell only anchors identity if *the process
+it execs has no competing identity*. So `install.sh` pins the tool environment
+to a **uv-managed CPython** (`--managed-python --python <CI-tested version>`)
+— a plain, single-arch, stub-free binary — making interpreter discovery, and
+with it both failure modes, impossible on the supported install path. A
+manually-run `--install-macos-app` against an arbitrary interpreter still gets
+the Rosetta guard, but framework-build identity theft remains out of scope:
+the supported answer is the pinned install.

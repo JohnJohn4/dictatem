@@ -99,6 +99,18 @@ class TestRenderExecShim:
         shim = render_exec_shim(Path("/Users/me/My Tools/dictatem"))
         assert 'exec "/Users/me/My Tools/dictatem" "$@"' in shim
 
+    def test_reexecs_natively_before_the_launcher_when_translated(self) -> None:
+        # macOS 26 LaunchServices launches script-only bundles under Rosetta
+        # (#61): the shim must detect translation and re-exec itself arm64
+        # BEFORE handing a universal interpreter its x86_64 slice.
+        shim = render_exec_shim(Path("/x/dictatem"))
+        guard = (
+            '[ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]'
+            ' && exec /usr/bin/arch -arm64 /bin/sh "$0" "$@"'
+        )
+        assert guard in shim
+        assert shim.index(guard) < shim.index('exec "/x/dictatem"')
+
     def test_ends_with_a_newline(self) -> None:
         assert render_exec_shim(Path("/x/dictatem")).endswith("\n")
 

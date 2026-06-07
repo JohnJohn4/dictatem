@@ -41,8 +41,15 @@ def render_launch_agent_plist(*, label: str, program_arguments: Sequence[str]) -
     Pure: (label, argv) -> plist XML bytes via stdlib ``plistlib``. *label* is
     the launchd job identity — the canonical bundle id, so the LaunchAgent and
     the ``.app`` share one name in ``launchctl list`` and on disk.
+
+    ``AssociatedBundleIdentifiers`` reuses *label* in its third role: it tells
+    Login Items (macOS 13+) which app bundle this agent belongs to, so the
+    background item shows as "Dictatem" instead of its bare ``argv[0]``
+    executable — real-Mac QA (#61) saw macOS 26 list it as "open". Earlier
+    macOS ignores the key.
     """
     agent: dict[str, object] = {
+        "AssociatedBundleIdentifiers": [label],
         "Label": label,
         "ProgramArguments": list(program_arguments),
         "RunAtLoad": True,

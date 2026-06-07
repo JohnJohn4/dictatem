@@ -56,6 +56,15 @@ class TestRenderLaunchAgentPlist:
         agent = plistlib.loads(rendered)
         assert agent["RunAtLoad"] is True
 
+    def test_associates_the_label_bundle_for_login_items(self) -> None:
+        # macOS 13+ Login Items shows the owning app's name via this key;
+        # without it the entry surfaces as the bare argv[0] — "open" (#61).
+        rendered = render_launch_agent_plist(
+            label="com.example.job", program_arguments=["cmd"]
+        )
+        agent = plistlib.loads(rendered)
+        assert agent["AssociatedBundleIdentifiers"] == ["com.example.job"]
+
 
 class TestRegistrarProtocol:
     """The registrar satisfies the AutostartRegistrar Protocol."""
