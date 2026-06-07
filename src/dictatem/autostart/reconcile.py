@@ -62,7 +62,7 @@ def apply_autostart(
 
 
 def run_uninstall(
-    *, registrar: AutostartRegistrar, out: Callable[[str], None]
+    *, registrar: AutostartRegistrar | None, out: Callable[[str], None]
 ) -> None:
     """Run the ``dictatem --uninstall`` cleanup, then print the final step.
 
@@ -70,10 +70,13 @@ def run_uninstall(
     entry (ADR-0011), so uninstall first removes that entry via *registrar* (a
     no-op if already absent), then prints — via *out* — the ``uv tool uninstall
     dictatem`` command for the user to run, since a tool can't uninstall its own
-    running interpreter mid-process.
+    running interpreter mid-process. *registrar* is ``None`` on platforms with
+    no autostart registrar yet (macOS until #61): there is no entry to remove,
+    so only the guidance prints — claiming "Removed" would be false.
     """
-    registrar.disable()
-    out("Removed Dictatem autostart entry.")
-    out("")
+    if registrar is not None:
+        registrar.disable()
+        out("Removed Dictatem autostart entry.")
+        out("")
     out("To finish removing Dictatem, run:")
     out("    uv tool uninstall dictatem")
