@@ -41,6 +41,8 @@ DICTATEM_MODULES = [
     "dictatem.autostart.launch_agent",
     "dictatem.macapp",
     "dictatem.macapp.plist",
+    "dictatem.permissions",
+    "dictatem.permissions.mapper",
 ]
 
 
