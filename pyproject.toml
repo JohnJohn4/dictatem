@@ -65,6 +65,10 @@ select = ["E", "F", "I", "UP", "B", "SIM", "TC"]
 # Platform-only native modules guard with `if sys.platform != ...: raise`, so
 # their OS-binding imports legitimately sit after that runtime check (E402).
 "src/dictatem/hotkey/wh_keyboard_ll.py" = ["E402"]
+"src/dictatem/hotkey/mac_hook.py" = ["E402"]
+"src/dictatem/paste/mac_clipboard.py" = ["E402"]
+"src/dictatem/paste/mac_keystroke.py" = ["E402"]
+"src/dictatem/paste/mac_foreground.py" = ["E402"]
 
 [tool.pyright]
 pythonVersion = "3.11"
@@ -72,5 +76,16 @@ pythonPlatform = "All"
 venvPath = "."
 venv = ".venv"
 include = ["src"]
-exclude = ["src/dictatem/audio/sounddevice_capture.py", "src/dictatem/overlay/qt_widget.py", "src/dictatem/tray/qt_tray.py", "src/dictatem/hardware/nvidia_probe.py", "src/dictatem/autostart/win32_registrar.py"]
+exclude = [
+    "src/dictatem/audio/sounddevice_capture.py",
+    "src/dictatem/overlay/qt_widget.py",
+    "src/dictatem/tray/qt_tray.py",
+    "src/dictatem/hardware/nvidia_probe.py",
+    "src/dictatem/autostart/win32_registrar.py",
+    # macOS native adapters: the PyObjC bindings resolve only on macOS.
+    "src/dictatem/hotkey/mac_hook.py",
+    "src/dictatem/paste/mac_clipboard.py",
+    "src/dictatem/paste/mac_keystroke.py",
+    "src/dictatem/paste/mac_foreground.py",
+]
 typeCheckingMode = "standard"

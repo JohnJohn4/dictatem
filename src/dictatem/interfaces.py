@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from dictatem.hotkey.classifier import Key
     from dictatem.types import (
         AudioChunk,
         HardwareProfile,
@@ -97,10 +96,18 @@ class KeyboardHook(Protocol):
     Adapters translate native OS key codes into platform-neutral ``Key``
     identities (see ``dictatem.hotkey.classifier.Key`` and ADR-0018) before
     delivering them, so the hotkey classifier never sees a raw OS key code.
+
+    The key-event handler — a thread-safe ``Callable[[Key, KeyAction, int],
+    None]`` receiving ``(key, action, timestamp_ms)`` — is injected through
+    the adapter's constructor, not passed to ``install``: events arrive on a
+    hook thread the adapter owns, so the handler must exist before the OS
+    hook goes live. ``_PlatformAdapters.install_keyboard_hook`` in
+    ``dictatem.daemon`` is the wiring seam that builds the adapter around
+    the daemon's handler and installs it.
     """
 
-    def install(self, callback: Callable[[Key, bool], None]) -> None:
-        """Install the hook. *callback(key, is_down)* is called for each event."""
+    def install(self) -> None:
+        """Install the OS hook; events flow to the constructor-injected handler."""
         ...
 
     def uninstall(self) -> None:

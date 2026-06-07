@@ -31,6 +31,7 @@ DICTATEM_MODULES = [
     "dictatem.state",
     "dictatem.hardware.mac_probe",
     "dictatem.hotkey.classifier",
+    "dictatem.hotkey.mac_keymap",
     "dictatem.audio",
     "dictatem.audio.buffer",
     "dictatem.transcribe",

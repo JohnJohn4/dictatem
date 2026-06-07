@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from dictatem.hotkey.classifier import Key, KeyAction
 from dictatem.interfaces import (
     AudioCapture,
     AutostartRegistrar,
@@ -82,21 +83,24 @@ class TestFakeForegroundTracker:
 
 class TestFakeKeyboardHook:
     def test_satisfies_protocol(self) -> None:
-        assert isinstance(FakeKeyboardHook(), KeyboardHook)
+        assert isinstance(FakeKeyboardHook(lambda key, action, ts: None), KeyboardHook)
 
     def test_install_uninstall(self) -> None:
-        hook = FakeKeyboardHook()
-        hook.install(lambda vk, down: None)
+        hook = FakeKeyboardHook(lambda key, action, ts: None)
+        hook.install()
         assert hook.installed is True
         hook.uninstall()
         assert hook.installed is False
 
-    def test_simulate_event(self) -> None:
-        events: list[tuple[int, bool]] = []
-        hook = FakeKeyboardHook()
-        hook.install(lambda vk, down: events.append((vk, down)))
-        hook.simulate_event(65, True)
-        assert events == [(65, True)]
+    def test_simulate_event_delivers_to_constructor_handler(self) -> None:
+        events: list[tuple[Key, KeyAction, int]] = []
+        hook = FakeKeyboardHook(lambda key, action, ts: events.append((key, action, ts)))
+        # Nothing is delivered before install — a real OS hook isn't live yet.
+        hook.simulate_event(Key.LEFT_META, KeyAction.KEY_DOWN, 100)
+        assert events == []
+        hook.install()
+        hook.simulate_event(Key.LEFT_META, KeyAction.KEY_DOWN, 100)
+        assert events == [(Key.LEFT_META, KeyAction.KEY_DOWN, 100)]
 
 
 class TestFakeAudioCapture:

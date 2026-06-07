@@ -7,21 +7,28 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from dictatem.hotkey.classifier import Key, KeyAction
+
 
 class FakeKeyboardHook:
-    def __init__(self) -> None:
-        self._callback: Callable[[int, bool], None] | None = None
+    """In-memory ``KeyboardHook``: the key-event handler is constructor-injected,
+    matching the production hooks; ``simulate_event`` plays the hook thread."""
+
+    def __init__(self, on_key_event: Callable[[Key, KeyAction, int], None]) -> None:
+        self._on_key_event = on_key_event
         self.installed: bool = False
 
-    def install(self, callback: Callable[[int, bool], None]) -> None:
-        self._callback = callback
+    def install(self) -> None:
         self.installed = True
 
     def uninstall(self) -> None:
-        self._callback = None
         self.installed = False
 
-    def simulate_event(self, vk_code: int, is_down: bool) -> None:
-        """Test helper: inject a keyboard event."""
-        if self._callback is not None:
-            self._callback(vk_code, is_down)
+    def simulate_event(self, key: Key, action: KeyAction, timestamp_ms: int) -> None:
+        """Test helper: deliver a key event the way the hook thread would.
+
+        Silent unless installed — a real OS hook delivers nothing before
+        ``install`` or after ``uninstall``.
+        """
+        if self.installed:
+            self._on_key_event(key, action, timestamp_ms)

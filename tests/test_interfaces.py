@@ -47,6 +47,10 @@ class TestProtocolSignatures:
     def test_keyboard_hook_methods(self) -> None:
         assert callable(getattr(interfaces.KeyboardHook, "install", None))
         assert callable(getattr(interfaces.KeyboardHook, "uninstall", None))
+        # The key-event handler is constructor-injected (see the Protocol
+        # docstring), so install/uninstall take no arguments.
+        install_params = inspect.signature(interfaces.KeyboardHook.install).parameters
+        assert list(install_params) == ["self"]
 
     def test_audio_capture_methods(self) -> None:
         assert callable(getattr(interfaces.AudioCapture, "start", None))
