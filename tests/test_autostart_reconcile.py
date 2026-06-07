@@ -121,6 +121,16 @@ class TestRunUninstall:
         # disable is always called; the registrar swallows the absent case.
         assert reg.disable_calls == 1
 
+    def test_absent_entry_claims_nothing(self) -> None:
+        # macOS builds the registrar unconditionally for uninstall, so with
+        # no LaunchAgent on disk the output must not claim one was removed.
+        reg = FakeAutostartRegistrar(enabled=False)
+        lines: list[str] = []
+        run_uninstall(registrar=reg, out=lines.append)
+        joined = "\n".join(lines)
+        assert "Removed" not in joined
+        assert "uv tool uninstall dictatem" in joined
+
     def test_prints_uv_tool_uninstall_step(self) -> None:
         reg = FakeAutostartRegistrar(enabled=True)
         lines: list[str] = []

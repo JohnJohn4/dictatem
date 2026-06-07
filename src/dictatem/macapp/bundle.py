@@ -59,7 +59,10 @@ def resolve_launcher(which_result: str | None, *, home: Path) -> Path:
     *which_result* is ``shutil.which("dictatem")`` from the caller (injected so
     this stays pure). Falls back to ``~/.local/bin/dictatem`` — uv's documented
     tool-bin directory on macOS — when the launcher isn't on the generating
-    shell's PATH. Mirrors the win32 registrar's ``_launch_command``.
+    shell's PATH. Mirrors the win32 registrar's ``_launch_command`` preference
+    for the installed launcher; unlike its interpreter fallback, the fallback
+    path here may not exist yet, so the ``--install-macos-app`` glue warns
+    when it doesn't.
     """
     if which_result:
         return Path(which_result)
@@ -73,8 +76,9 @@ def launch_arguments(bundle_path: Path) -> list[str]:
     path as a Finder launch, so TCC attribution lands on the bundle identity,
     and LaunchServices will not start a second instance of an already-running
     app (a direct exec of the bundle binary could double-launch the daemon).
-    ``-g`` keeps the launch in the background. Used by both the LaunchAgent
-    ``ProgramArguments`` and the installer's first launch.
+    ``-g`` keeps the launch in the background. Used by the LaunchAgent
+    ``ProgramArguments`` (both wiring sites); install.sh's first launch
+    mirrors it in shell.
 
     ``as_posix()`` (identical to ``str()`` on macOS) keeps the rendering
     deterministic when the pure function is unit-tested on Windows.

@@ -45,7 +45,7 @@ The script never installs or starts Ollama and never downloads a Whisper model. 
 
 ### Install on macOS
 
-> **Note:** macOS support ships with the next tagged release — the pinned one-liner below currently installs a Windows-only build. To try it today, run the script with a ref override, e.g. `curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/main/install.sh | DICTATEM_REF=main sh`.
+> **Note:** macOS support ships with the next tagged release — the pinned one-liner below only goes live then (v0.3.0 predates `install.sh`, so its URL does not resolve yet). To try macOS support today, run the script from `main` with a ref override: `curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/main/install.sh | DICTATEM_REF=main sh`.
 
 Run this in Terminal. It installs [`uv`](https://docs.astral.sh/uv/) if needed, installs Dictatem **pinned to the v0.3.0 release** (the CPU dependency set — Macs have no CUDA), generates the `~/Applications/Dictatem.app` launcher, and starts it in the menu bar:
 

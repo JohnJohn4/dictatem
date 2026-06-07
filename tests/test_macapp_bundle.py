@@ -40,12 +40,18 @@ def icns(tmp_path: Path) -> Path:
     return source
 
 
-def _generate(tmp_path: Path, icns: Path, **overrides: Any) -> Path:
+def _generate(
+    tmp_path: Path,
+    icns: Path,
+    *,
+    launcher: Path = Path("/Users/me/.local/bin/dictatem"),
+    version: str | None = None,
+) -> Path:
     return generate_app_bundle(
         apps_dir=tmp_path / "Applications",
-        launcher=overrides.get("launcher", Path("/Users/me/.local/bin/dictatem")),
+        launcher=launcher,
         icns_source=icns,
-        version=overrides.get("version"),
+        version=version,
     )
 
 

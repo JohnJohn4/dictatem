@@ -10,8 +10,9 @@ tuple when nothing is missing, which means "show no dialog".
 
 This module is PURE: it imports nothing OS-specific, performs no I/O, and
 calls no native API — every branch is trivially unit-testable on any OS.
-The native half (the ``AXIsProcessTrusted()`` probe, tap-creation failure
-detection, and the dialog itself) is separate, macOS-only, manual-QA code.
+The native half (the ``CGPreflight*`` probes in ``permissions.mac_tcc``,
+tap-creation failure detection, and the dialog itself) is separate,
+macOS-only, manual-QA code.
 
 Microphone is deliberately NOT mapped here: macOS shows its standard
 automatic TCC prompt on first capture, so Dictatem never needs custom
@@ -98,7 +99,7 @@ def map_missing_permissions(
 ) -> tuple[PermissionGuidance, ...]:
     """Map *missing* onto per-permission guidance, one entry per permission.
 
-    ``missing`` is whatever the native probes (``AXIsProcessTrusted()``,
+    ``missing`` is whatever the native probes (the ``CGPreflight*`` pair,
     tap-creation failure) reported absent. The empty set is the explicit
     all-granted case and maps to the empty tuple — the caller shows no
     dialog (blind iteration naturally shows none). Guidance comes back in

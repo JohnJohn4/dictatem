@@ -27,9 +27,11 @@
 #
 # Pre-release/QA installs: set DICTATEM_REF to a branch, tag, or commit SHA
 # (e.g. DICTATEM_REF=main) to install from that ref's tarball instead. The
-# override also passes --force --no-cache to uv: a moving ref keeps the same
-# URL and version number, which uv would otherwise serve stale from its cache
-# or skip as already-installed.
+# override also passes --force --refresh-package dictatem to uv: a moving ref
+# keeps the same URL and version number, which uv would otherwise serve stale
+# from its cache or skip as already-installed. (--refresh-package, not
+# --no-cache: only the dictatem tarball is moving — the cached dependency
+# wheels, ~0.5 GB, stay valid across QA iterations.)
 
 set -eu
 
@@ -47,9 +49,9 @@ fi
 DICTATEM_TAG="v0.3.0"
 
 if [ -n "${DICTATEM_REF:-}" ]; then
-    echo "DICTATEM_REF=${DICTATEM_REF} — installing from that ref, bypassing uv's cache."
+    echo "DICTATEM_REF=${DICTATEM_REF} — installing from that ref, refreshing uv's copy of it."
     source_url="https://github.com/JohnJohn4/dictatem/archive/${DICTATEM_REF}.tar.gz"
-    uv_flags="--force --no-cache"
+    uv_flags="--force --refresh-package dictatem"
 else
     source_url="https://github.com/JohnJohn4/dictatem/archive/refs/tags/${DICTATEM_TAG}.tar.gz"
     uv_flags=""
@@ -68,7 +70,10 @@ uv tool install $uv_flags "$requirement"
 # Make the freshly installed `dictatem` launcher usable in THIS session — uv
 # only updates PATH for new sessions. `uv tool update-shell` ensures the tool
 # bin dir is on PATH persistently; prepend it here so the steps below work.
-uv tool update-shell
+# update-shell is best-effort (|| true): a pre-existing older uv without the
+# subcommand must not abort the install under set -e — the session PATH below
+# is what the remaining steps actually need.
+uv tool update-shell || true
 tool_bin="$(uv tool dir --bin 2>/dev/null || true)"
 if [ -n "$tool_bin" ]; then
     PATH="$tool_bin:$PATH"

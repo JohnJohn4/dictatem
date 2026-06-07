@@ -76,7 +76,8 @@ def run_uninstall(
     dictatem`` command for the user to run, since a tool can't uninstall its own
     running interpreter mid-process. *registrar* is ``None`` on platforms with
     no autostart registrar: there is no entry to remove, so only the guidance
-    prints — claiming "Removed" would be false.
+    prints. The "Removed" line is also gated on the entry actually existing
+    beforehand — claiming "Removed" when nothing was there would be false.
 
     *remove_app_bundle* is the macOS-only extra step (#61 / ADR-0014): a
     callable that removes ``~/Applications/Dictatem.app`` and returns the
@@ -86,9 +87,11 @@ def run_uninstall(
     exists.
     """
     if registrar is not None:
+        was_enabled = registrar.is_enabled()
         registrar.disable()
-        out("Removed Dictatem autostart entry.")
-        out("")
+        if was_enabled:
+            out("Removed Dictatem autostart entry.")
+            out("")
     if remove_app_bundle is not None:
         removed = remove_app_bundle()
         if removed is not None:

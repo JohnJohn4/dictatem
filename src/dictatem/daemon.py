@@ -984,11 +984,20 @@ def _run_uninstall() -> None:
         remove_app = partial(remove_app_bundle, default_app_bundle_path())
 
     lines: list[str] = []
-    run_uninstall(
-        registrar=_platform_autostart_registrar(),
-        out=lines.append,
-        remove_app_bundle=remove_app,
-    )
+    try:
+        run_uninstall(
+            registrar=_platform_autostart_registrar(),
+            out=lines.append,
+            remove_app_bundle=remove_app,
+        )
+    except Exception:
+        # A directory squatting on the plist path, a symlink where the .app
+        # should be — cleanup must degrade to guidance, never to a traceback
+        # that hides the remaining step.
+        logger.error("Error during uninstall cleanup", exc_info=True)
+        lines.append("Some cleanup failed — check the daemon log.")
+        lines.append("You can still finish removing Dictatem with:")
+        lines.append("    uv tool uninstall dictatem")
     _show_uninstall_message("\n".join(lines))
 
 
@@ -1028,6 +1037,16 @@ def _run_install_macos_app() -> None:
     )
     print(f"Generated {bundle}")
     print(f"It launches the dictatem daemon at: {launcher}")
+    if not launcher.exists():
+        # The which() miss fell back to uv's default tool-bin path (see
+        # resolve_launcher) — generation still succeeds, but be honest that
+        # the shim's target isn't there yet rather than claiming a working app.
+        print(
+            "WARNING: that launcher does not exist yet (dictatem was not "
+            "found on PATH). The app will not launch until the uv tool "
+            "install puts it there — install it, then re-run "
+            "`dictatem --install-macos-app`."
+        )
     if agent_refreshed:
         print("Refreshed the start-at-login LaunchAgent to launch it.")
     print(
@@ -1039,9 +1058,10 @@ def _run_install_macos_app() -> None:
 def _platform_autostart_registrar() -> AutostartRegistrar | None:
     """Build this platform's autostart registrar, or None where none exists.
 
-    The single platform→registrar construction point, shared by ``--uninstall``,
-    ``--install-macos-app`` (via ``install_app_bundle``'s refresh), and the
-    daemon starters so they cannot drift. On macOS the LaunchAgent launches the
+    The single platform→registrar construction point, shared by ``--uninstall``
+    and the daemon starters so they cannot drift (``--install-macos-app``'s
+    LaunchAgent refresh builds the same launch command through
+    ``macapp.bundle.launch_arguments``). On macOS the LaunchAgent launches the
     generated ``.app`` via ``/usr/bin/open`` (ADR-0012/0014). It is built
     unconditionally — uninstall must be able to remove the LaunchAgent even
     after the user hand-deleted the ``.app`` — and the darwin *starter* applies
@@ -1479,19 +1499,39 @@ def _start_macos_daemon() -> None:
         return hook
 
     # Autostart can only launch the generated .app — the identity TCC trusts
-    # (ADR-0014) — so without one the registrar stays absent (reconcile
-    # skipped, tray toggle hidden) rather than writing a LaunchAgent that
-    # points at a missing bundle. --uninstall deliberately skips this guard.
+    # (ADR-0014). With no .app the registrar is kept only when a LaunchAgent
+    # is already on disk, so a stale entry left behind after the user
+    # hand-deleted the .app can still be reconciled away (flag off) or
+    # toggled off — reconcile never ENABLEs over an existing plist, so this
+    # can never *register* an entry pointing at a missing bundle. With
+    # neither present the registrar stays absent (reconcile skipped, tray
+    # toggle hidden) rather than faked. --uninstall deliberately skips this
+    # guard.
     app_bundle = default_app_bundle_path()
-    if app_bundle.exists():
-        autostart_registrar = _platform_autostart_registrar()
-    else:
-        autostart_registrar = None
-        logger.info(
-            "No %s — run `dictatem --install-macos-app` to enable "
-            "start-at-login and give permission grants a stable identity",
-            app_bundle,
-        )
+    autostart_registrar: AutostartRegistrar | None = _platform_autostart_registrar()
+    if not app_bundle.exists():
+        try:
+            has_stale_agent = (
+                autostart_registrar is not None
+                and autostart_registrar.is_enabled()
+            )
+        except OSError:
+            has_stale_agent = False
+        if has_stale_agent:
+            logger.warning(
+                "%s is missing but its start-at-login LaunchAgent is still "
+                "registered — run `dictatem --install-macos-app` to "
+                "regenerate the app, or turn off Start at login to remove "
+                "the entry",
+                app_bundle,
+            )
+        else:
+            autostart_registrar = None
+            logger.info(
+                "No %s — run `dictatem --install-macos-app` to enable "
+                "start-at-login and give permission grants a stable identity",
+                app_bundle,
+            )
 
     _run_daemon(
         _PlatformAdapters(
