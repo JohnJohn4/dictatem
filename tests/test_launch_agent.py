@@ -136,24 +136,12 @@ class TestIsEnabled:
 
 
 class TestReconcileIntegration:
-    """The daemon drives this registrar through the pure reconcile decision —
-    the registrar adds no decision logic of its own."""
+    """One composition smoke test: the daemon drives this registrar through
+    the pure reconcile decision. The full ENABLE/NOOP/DISABLE table lives in
+    test_autostart_reconcile.py — never duplicated here."""
 
     def test_apply_autostart_enables_through_registrar(self, tmp_path: Path) -> None:
         registrar = _registrar(tmp_path)
         action = apply_autostart(desired=True, registrar=registrar)
         assert action is AutostartAction.ENABLE
         assert registrar.is_enabled() is True
-
-    def test_apply_autostart_noops_when_converged(self, tmp_path: Path) -> None:
-        registrar = _registrar(tmp_path)
-        registrar.enable()
-        action = apply_autostart(desired=True, registrar=registrar)
-        assert action is AutostartAction.NOOP
-
-    def test_apply_autostart_disables_through_registrar(self, tmp_path: Path) -> None:
-        registrar = _registrar(tmp_path)
-        registrar.enable()
-        action = apply_autostart(desired=False, registrar=registrar)
-        assert action is AutostartAction.DISABLE
-        assert registrar.is_enabled() is False

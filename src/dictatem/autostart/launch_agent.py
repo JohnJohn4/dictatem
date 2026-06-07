@@ -69,8 +69,13 @@ class LaunchAgentRegistrar:
 
     def enable(self) -> None:
         """Write the LaunchAgent plist. Idempotent — rewriting converges on the
-        same file, mirroring the Win32 adapter's unconditional ``SetValueEx``
-        (and refreshes a stale launch command as a bonus)."""
+        same file, mirroring the Win32 adapter's unconditional ``SetValueEx``.
+
+        Note that the reconcile driver (``apply_autostart``) only reaches this
+        when ``is_enabled()`` is False, and ``is_enabled()`` checks existence,
+        not content — an existing plist with a stale launch command is never
+        rewritten through reconcile (the Win32 adapter shares this property).
+        """
         self._agents_dir.mkdir(parents=True, exist_ok=True)
         self.plist_path.write_bytes(
             render_launch_agent_plist(

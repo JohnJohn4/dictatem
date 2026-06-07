@@ -2,7 +2,7 @@
 
 The mapper turns the set of permissions the native probes found missing
 into the exact System Settings deep links and user-facing copy for the
-guided dialog — or ``None`` (no dialog) when nothing is missing. It is
+guided dialog — or the empty tuple (no dialog) when nothing is missing. It is
 pure: no TCC probing, no AppKit, no I/O, so it runs on any OS. Microphone
 is deliberately unmapped (macOS auto-prompts for it). See ADR-0014 and
 issue #57.
@@ -30,17 +30,16 @@ _INPUT_MONITORING_URL = (
 
 def _single(missing: set[MacPermission]) -> PermissionGuidance:
     result = map_missing_permissions(missing)
-    assert result is not None
     assert len(result) == 1
     return result[0]
 
 
 class TestNothingMissing:
     def test_empty_set_signals_no_dialog(self) -> None:
-        assert map_missing_permissions(set()) is None
+        assert map_missing_permissions(set()) == ()
 
     def test_empty_frozenset_signals_no_dialog(self) -> None:
-        assert map_missing_permissions(frozenset()) is None
+        assert map_missing_permissions(frozenset()) == ()
 
 
 class TestAccessibilityOnly:
@@ -76,7 +75,6 @@ class TestBothMissing:
         result = map_missing_permissions(
             {MacPermission.INPUT_MONITORING, MacPermission.ACCESSIBILITY}
         )
-        assert result is not None
         assert [g.permission for g in result] == [
             MacPermission.ACCESSIBILITY,
             MacPermission.INPUT_MONITORING,
@@ -84,7 +82,6 @@ class TestBothMissing:
 
     def test_each_guidance_carries_its_own_deep_link(self) -> None:
         result = map_missing_permissions(set(MacPermission))
-        assert result is not None
         urls = {g.permission: g.settings_url for g in result}
         assert urls == {
             MacPermission.ACCESSIBILITY: _ACCESSIBILITY_URL,

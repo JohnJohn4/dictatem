@@ -5,8 +5,8 @@ grant manually in System Settings: **Accessibility** (synthetic keystrokes,
 backspaces, paste via CGEvent) and **Input Monitoring** (the global-hotkey
 CGEventTap). Given the set of permissions the native probes found missing,
 this returns one ``PermissionGuidance`` per missing permission — the System
-Settings deep link to open and the user-facing copy to show — or ``None``
-when nothing is missing, which means "show no dialog".
+Settings deep link to open and the user-facing copy to show — or the empty
+tuple when nothing is missing, which means "show no dialog".
 
 This module is PURE: it imports nothing OS-specific, performs no I/O, and
 calls no native API — every branch is trivially unit-testable on any OS.
@@ -95,15 +95,15 @@ _GUIDANCE: dict[MacPermission, PermissionGuidance] = {
 
 def map_missing_permissions(
     missing: AbstractSet[MacPermission],
-) -> tuple[PermissionGuidance, ...] | None:
-    """Map *missing* onto per-permission guidance, or ``None`` for no dialog.
+) -> tuple[PermissionGuidance, ...]:
+    """Map *missing* onto per-permission guidance, one entry per permission.
 
     ``missing`` is whatever the native probes (``AXIsProcessTrusted()``,
     tap-creation failure) reported absent. The empty set is the explicit
-    all-granted case and returns ``None`` — the caller shows no dialog.
-    Guidance comes back in stable ``MacPermission`` declaration order
-    regardless of the set's iteration order.
+    all-granted case and maps to the empty tuple — the caller shows no
+    dialog (blind iteration naturally shows none). Guidance comes back in
+    stable ``MacPermission`` declaration order regardless of the set's
+    iteration order. Always one uniform shape, mirroring
+    ``classify_transform_failure``.
     """
-    if not missing:
-        return None
     return tuple(_GUIDANCE[p] for p in MacPermission if p in missing)
