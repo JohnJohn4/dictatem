@@ -20,6 +20,11 @@ runtime = [
     "PySide6>=6.7",
     "nvidia-ml-py>=12",
     "pywin32>=306; sys_platform == 'win32'",
+    # macOS native adapters (#56/#59/#61): Cocoa for NSPasteboard/NSWorkspace,
+    # Quartz for CGEventTap/CGEvent. Darwin-gated so the macOS CI leg proves
+    # the arm64 wheel set resolves (ADR-0018) before the adapters land.
+    "pyobjc-framework-Cocoa>=10.3; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=10.3; sys_platform == 'darwin'",
 ]
 runtime-gpu = [
     "dictatem[runtime]",

@@ -1,9 +1,11 @@
-"""PySide6 system-tray adapter — Windows manual QA only."""
+"""PySide6 system-tray adapter — manual QA only (Windows taskbar / macOS menu bar)."""
 
 from __future__ import annotations
 
 import os
-import winreg
+import subprocess
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QRectF, Qt
@@ -11,6 +13,7 @@ from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
 from dictatem.assets import asset_path
+from dictatem.logpaths import daemon_log_path
 from dictatem.tray.glyph import waveform_bars
 from dictatem.tray.state import MenuItem, TrayState, glyph_tint_rgba
 
@@ -41,18 +44,23 @@ def _is_dark_taskbar() -> bool:
     ``SystemUsesLightTheme`` (0 = dark taskbar, 1 = light). This is independent
     of the *app* theme — Windows commonly runs light apps with a dark taskbar —
     so we must read the taskbar value, not Qt's ``colorScheme``. On a non-Windows
-    host or if the key is unreadable, fall back to Qt's app colour scheme.
+    host (``winreg`` is Windows-only, hence the lazy import) or if the key is
+    unreadable, fall back to Qt's app colour scheme.
     """
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER,
-            r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
-        ) as key:
-            uses_light, _ = winreg.QueryValueEx(key, "SystemUsesLightTheme")
-        return int(uses_light) == 0
-    except OSError:
-        scheme = QApplication.styleHints().colorScheme()
-        return scheme == Qt.ColorScheme.Dark
+    if sys.platform == "win32":
+        import winreg
+
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            ) as key:
+                uses_light, _ = winreg.QueryValueEx(key, "SystemUsesLightTheme")
+            return int(uses_light) == 0
+        except OSError:
+            pass
+    scheme = QApplication.styleHints().colorScheme()
+    return scheme == Qt.ColorScheme.Dark
 
 
 def _themed_glyph_pixmap(is_dark_background: bool, size: int) -> QPixmap:
@@ -185,8 +193,10 @@ class QtTrayIcon:
         if self.on_show_log is not None:
             self.on_show_log()
             return
-        log_path = os.path.join(
-            os.environ.get("APPDATA", ""), "Dictatem", "logs", "daemon.log"
-        )
-        if os.path.exists(log_path):
-            os.startfile(log_path)  # type: ignore[attr-defined]  # Windows only
+        log_path = daemon_log_path(sys.platform, os.environ, Path.home())
+        if log_path is None or not log_path.exists():
+            return
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(log_path)])
+        else:
+            os.startfile(str(log_path))  # type: ignore[attr-defined]  # Windows only

@@ -1,4 +1,4 @@
-"""Daemon core — command dispatcher, error handling, and platform gate."""
+"""Daemon core — command dispatcher, error handling, and platform dispatch."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import os
 import queue
 import sys
 import threading
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from dictatem.exceptions import (
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
         AutostartRegistrar,
         ClipboardIO,
         ForegroundTracker,
+        HardwareProbe,
         KeystrokeSender,
         OverlayRenderer,
         TrayRenderer,
@@ -46,29 +48,35 @@ logger = logging.getLogger(__name__)
 
 
 def _add_rotating_log_file() -> logging.handlers.TimedRotatingFileHandler | None:
-    """Attach a rotating file handler at %APPDATA%\\Dictatem\\logs\\daemon.log.
+    """Attach a rotating file handler at the platform's daemon.log path.
 
     The daemon launches via a windowless gui-scripts entry point (ADR-0011),
     which has no console — so stderr-only logging is lost. Without this the
     "check the logs" error and the tray "Open log" menu both point at a file
     that is never written. Returns the handler so the caller can align its
     ``backupCount`` with ``config.logging.rotation_days`` once config loads,
-    or ``None`` if the log file could not be opened.
+    or ``None`` if the platform has no log path or the file could not be
+    opened. Per-OS locations live in :func:`dictatem.logpaths.daemon_log_path`.
     """
-    appdata = os.environ.get("APPDATA")
-    if not appdata:
+    from pathlib import Path
+
+    from dictatem.logpaths import daemon_log_path
+
+    log_path = daemon_log_path(sys.platform, os.environ, Path.home())
+    if log_path is None:
         return None
-    log_dir = os.path.join(appdata, "Dictatem", "logs")
     try:
-        os.makedirs(log_dir, exist_ok=True)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         handler = logging.handlers.TimedRotatingFileHandler(
-            os.path.join(log_dir, "daemon.log"),
+            str(log_path),
             when="midnight",
             backupCount=7,
             encoding="utf-8",
         )
     except OSError:
-        logger.warning("Could not open log file under %s", log_dir, exc_info=True)
+        logger.warning(
+            "Could not open log file under %s", log_path.parent, exc_info=True
+        )
         return None
     handler.setFormatter(
         logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -906,15 +914,17 @@ class _AbortCommandChain(Exception):
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the Dictatem daemon.
 
-    With no arguments, starts the daemon (Windows only). ``--uninstall`` runs
-    the cleanup that removes the daemon-owned autostart entry and prints the
-    final ``uv tool uninstall dictatem`` step (see ADR-0011); a bare tool
-    uninstall would otherwise orphan that entry.
+    With no arguments, starts the daemon — dispatching on ``sys.platform`` to
+    the Windows or macOS adapter set (#54); unsupported platforms raise
+    :class:`PlatformNotSupportedError`. ``--uninstall`` runs the cleanup that
+    removes the daemon-owned autostart entry and prints the final ``uv tool
+    uninstall dictatem`` step (see ADR-0011); a bare tool uninstall would
+    otherwise orphan that entry.
     """
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="dictatem", description="Local voice-dictation daemon for Windows."
+        prog="dictatem", description="Local voice-dictation daemon."
     )
     parser.add_argument(
         "--uninstall",
@@ -923,9 +933,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
 
-    if sys.platform != "win32":
+    if sys.platform not in ("win32", "darwin"):
         raise PlatformNotSupportedError(
-            "Dictatem is Windows-only. "
+            "Dictatem supports Windows and macOS. "
             f"Current platform: {sys.platform}"
         )
 
@@ -933,22 +943,36 @@ def main(argv: list[str] | None = None) -> None:
         _run_uninstall()
         return
 
-    _start_windows_daemon()
+    if sys.platform == "win32":
+        _start_windows_daemon()
+    else:
+        _start_macos_daemon()
 
 
 def _run_uninstall() -> None:
-    """Wire the Windows registrar and run the uninstall cleanup (#58).
+    """Wire the platform registrar and run the uninstall cleanup (#58).
 
-    The gui-scripts launcher is windowless (ADR-0011), so console output is
-    invisible — collect the cleanup's guidance and show it in a message box so
-    the user sees the remaining ``uv tool uninstall dictatem`` step. The README
+    The gui-scripts launcher is windowless on Windows (ADR-0011), so console
+    output is invisible — collect the cleanup's guidance and show it in a
+    message box so the user sees the remaining ``uv tool uninstall dictatem``
+    step. On macOS no daemon-owned autostart entry exists until #61, so the
+    no-op registrar leaves the guidance lines as the entire cleanup. The README
     also documents the two-step uninstall as the canonical reference.
     """
     from dictatem.autostart.reconcile import run_uninstall
-    from dictatem.autostart.win32_registrar import Win32AutostartRegistrar
+
+    registrar: AutostartRegistrar
+    if sys.platform == "win32":
+        from dictatem.autostart.win32_registrar import Win32AutostartRegistrar
+
+        registrar = Win32AutostartRegistrar()
+    else:
+        from dictatem.autostart.noop_registrar import NoopAutostartRegistrar
+
+        registrar = NoopAutostartRegistrar()
 
     lines: list[str] = []
-    run_uninstall(registrar=Win32AutostartRegistrar(), out=lines.append)
+    run_uninstall(registrar=registrar, out=lines.append)
     _show_uninstall_message("\n".join(lines))
 
 
@@ -968,8 +992,42 @@ def _show_uninstall_message(message: str) -> None:
     ctypes.windll.user32.MessageBoxW(0, message, "Dictatem", mb_ok_iconinfo)
 
 
-def _start_windows_daemon() -> None:
-    """Wire Windows adapters and start the Qt event loop."""
+@dataclass(frozen=True)
+class _PlatformAdapters:
+    """The OS-specific seam for the daemon wiring (#54 / ADR-0018).
+
+    Everything else in :func:`_run_daemon` is platform-neutral (Qt tray and
+    overlay, sounddevice capture, faster-whisper, Ollama). Each
+    ``_start_*_daemon`` builds this set with lazy imports so the daemon module
+    stays importable on any OS (``test_import_safety``).
+
+    ``install_keyboard_hook`` receives the thread-safe key-event handler,
+    installs the platform hook, and returns it (the caller keeps it alive for
+    the lifetime of the event loop). ``None`` means the platform has no
+    global-hotkey adapter yet (macOS until #56) — recording then runs from the
+    tray menu only.
+    """
+
+    probe: HardwareProbe
+    autostart_registrar: AutostartRegistrar
+    clipboard: ClipboardIO
+    keystroke: KeystrokeSender
+    foreground: ForegroundTracker
+    install_keyboard_hook: (
+        Callable[[Callable[[Key, KeyAction, int], None]], object] | None
+    )
+
+
+def _run_daemon(adapters: _PlatformAdapters) -> None:
+    """Wire the platform-neutral daemon around *adapters* and run the Qt loop.
+
+    Everything here is OS-independent: config load + Hardware Tier baking, the
+    Qt tray/overlay, sounddevice capture, the faster-whisper and Ollama
+    backends, DaemonCore, and the timers. The OS-specific pieces arrive
+    pre-built in *adapters* (see :class:`_PlatformAdapters`); heavy imports
+    stay lazy so importing ``dictatem.daemon`` pulls in no GUI/audio/ML
+    dependency.
+    """
     import time
     from pathlib import Path
 
@@ -978,16 +1036,10 @@ def _start_windows_daemon() -> None:
 
     from dictatem.audio.sounddevice_capture import SoundDeviceCapture
     from dictatem.autostart.reconcile import apply_autostart
-    from dictatem.autostart.win32_registrar import Win32AutostartRegistrar
     from dictatem.config import load_config, write_config
-    from dictatem.hardware.nvidia_probe import NvidiaHardwareProbe
     from dictatem.hotkey.classifier import HotkeyClassifier
-    from dictatem.hotkey.wh_keyboard_ll import WHKeyboardLLHook
     from dictatem.overlay.qt_widget import QtOverlayWidget
     from dictatem.overlay.state import OverlayState
-    from dictatem.paste.win32_clipboard import Win32ClipboardIO
-    from dictatem.paste.win32_foreground import Win32ForegroundTracker
-    from dictatem.paste.win32_keystroke import Win32KeystrokeSender
     from dictatem.state import StateMachine
     from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
     from dictatem.transcribe.latency_monitor import LatencyMonitor
@@ -1021,7 +1073,7 @@ def _start_windows_daemon() -> None:
     # First run with no config: probe the machine once and bake the resolved
     # Hardware Tier (model/device/compute_type + transform tag) into the file.
     # Existing configs are read unchanged and the probe is not consulted.
-    probe = NvidiaHardwareProbe()
+    probe = adapters.probe
     config = load_config(config_path, probe=probe)
 
     # Reconcile the config's pinned transcription hardware against the machine
@@ -1054,11 +1106,12 @@ def _start_windows_daemon() -> None:
 
     # Reconcile the OS autostart entry to config.startup.autostart on launch
     # (#55 / ADR-0012). The daemon — not the installer — owns autostart, so the
-    # flag is the single source of truth: register the HKCU Run entry when the
-    # flag is on and it's missing, remove it when the flag is off and it's
-    # present. apply_autostart runs the pure decision and applies it via the
-    # registrar adapter; the tray "Start at login" toggle flips the same flag.
-    autostart_registrar = Win32AutostartRegistrar()
+    # flag is the single source of truth: register the OS entry (the HKCU Run
+    # key on Windows) when the flag is on and it's missing, remove it when the
+    # flag is off and it's present. apply_autostart runs the pure decision and
+    # applies it via the registrar adapter; the tray "Start at login" toggle
+    # flips the same flag.
+    autostart_registrar = adapters.autostart_registrar
     apply_autostart(desired=config.startup.autostart, registrar=autostart_registrar)
 
     app = QApplication(sys.argv)
@@ -1078,9 +1131,9 @@ def _start_windows_daemon() -> None:
         min_transcription_chars=config.model.min_transcription_chars,
     )
 
-    clipboard = Win32ClipboardIO()
-    keystroke = Win32KeystrokeSender()
-    foreground = Win32ForegroundTracker()
+    clipboard = adapters.clipboard
+    keystroke = adapters.keystroke
+    foreground = adapters.foreground
 
     transform_backend = OllamaBackend(
         model_name=config.transform.model_name,
@@ -1163,8 +1216,15 @@ def _start_windows_daemon() -> None:
     )
     classifier.set_active(True)
     bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
-    hook = WHKeyboardLLHook(bridge.enqueue_key_event)
-    hook.install()
+    if adapters.install_keyboard_hook is not None:
+        # The returned hook must outlive this scope (on Windows its ctypes
+        # callback would otherwise be collected); app.exec() below keeps the
+        # reference alive until the daemon exits.
+        _hook = adapters.install_keyboard_hook(bridge.enqueue_key_event)
+    else:
+        # No global-hotkey adapter on this platform yet (macOS: #56). Recording
+        # runs from the tray menu; the bridge just ticks an empty queue.
+        logger.info("No global-hotkey adapter on this platform — use the tray menu")
 
     silence_timer = QTimer()
     silence_timer.setInterval(5000)
@@ -1221,3 +1281,60 @@ def _start_windows_daemon() -> None:
 
     logger.info("Dictatem daemon started")
     app.exec()
+
+
+def _start_windows_daemon() -> None:
+    """Build the Windows adapter set (lazy imports) and run the daemon."""
+    from dictatem.autostart.win32_registrar import Win32AutostartRegistrar
+    from dictatem.hardware.nvidia_probe import NvidiaHardwareProbe
+    from dictatem.hotkey.wh_keyboard_ll import WHKeyboardLLHook
+    from dictatem.paste.win32_clipboard import Win32ClipboardIO
+    from dictatem.paste.win32_foreground import Win32ForegroundTracker
+    from dictatem.paste.win32_keystroke import Win32KeystrokeSender
+
+    def _install_hook(handler: Callable[[Key, KeyAction, int], None]) -> object:
+        hook = WHKeyboardLLHook(handler)
+        hook.install()
+        return hook
+
+    _run_daemon(
+        _PlatformAdapters(
+            probe=NvidiaHardwareProbe(),
+            autostart_registrar=Win32AutostartRegistrar(),
+            clipboard=Win32ClipboardIO(),
+            keystroke=Win32KeystrokeSender(),
+            foreground=Win32ForegroundTracker(),
+            install_keyboard_hook=_install_hook,
+        )
+    )
+
+
+def _start_macos_daemon() -> None:
+    """Build the macOS adapter set (lazy imports) and run the daemon (#54).
+
+    Phase-1 boot slice of the macOS track (ADR-0018): reuse every
+    platform-neutral layer — Qt tray/overlay, sounddevice (CoreAudio) capture,
+    the CPU faster-whisper backend (ADR-0013), the Ollama Transform — and
+    stand in no-op adapters for the native pieces that later slices deliver:
+    global hotkey (#56), NSPasteboard/CGEvent paste (#59), LaunchAgent
+    autostart (#61). MacHardwareProbe reports no CUDA, so first run bakes the
+    CPU tier into the config.
+    """
+    from dictatem.autostart.noop_registrar import NoopAutostartRegistrar
+    from dictatem.hardware.mac_probe import MacHardwareProbe
+    from dictatem.paste.noop import (
+        NoopClipboardIO,
+        NoopForegroundTracker,
+        NoopKeystrokeSender,
+    )
+
+    _run_daemon(
+        _PlatformAdapters(
+            probe=MacHardwareProbe(),
+            autostart_registrar=NoopAutostartRegistrar(),
+            clipboard=NoopClipboardIO(),
+            keystroke=NoopKeystrokeSender(),
+            foreground=NoopForegroundTracker(),
+            install_keyboard_hook=None,
+        )
+    )
