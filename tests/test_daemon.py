@@ -80,6 +80,9 @@ class TestStarterAdapterSets:
     real launch.
     """
 
+    @pytest.mark.skipif(
+        sys.platform != "darwin", reason="lazy-imports the PyObjC native adapters"
+    )
     def test_macos_starter_builds_cpu_adapter_set(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -87,19 +90,16 @@ class TestStarterAdapterSets:
 
         captured: list[daemon._PlatformAdapters] = []
         monkeypatch.setattr(daemon, "_run_daemon", captured.append)
-        # The registrar mapping keys on the live sys.platform; pin it so this
-        # asserts the darwin set on every CI OS.
-        monkeypatch.setattr(sys, "platform", "darwin")
         daemon._start_macos_daemon()
         (adapters,) = captured
         assert isinstance(adapters.probe, MacHardwareProbe)
-        # Native adapters that later slices deliver are absent, not faked —
-        # DaemonCore's None-tolerant paths handle them (#56/#59/#61).
-        assert adapters.clipboard is None
-        assert adapters.keystroke is None
-        assert adapters.foreground is None
+        assert adapters.clipboard is not None
+        assert adapters.keystroke is not None
+        assert adapters.foreground is not None
+        assert adapters.install_keyboard_hook is not None
+        # The LaunchAgent registrar arrives with the .app (#61) — absent, not
+        # faked: the reconcile is skipped and the tray hides the toggle.
         assert adapters.autostart_registrar is None
-        assert adapters.install_keyboard_hook is None
 
     @pytest.mark.skipif(
         sys.platform != "win32", reason="lazy-imports the win32 native adapters"

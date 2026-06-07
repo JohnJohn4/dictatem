@@ -1006,13 +1006,13 @@ class _PlatformAdapters:
     A ``None`` field means the platform has no such adapter yet — absent, not
     faked: DaemonCore's existing None-tolerant paths handle it honestly (the
     paste path logs "Paste skipped" and records no Last Paste; the autostart
-    reconcile is skipped and the tray hides the toggle). On macOS the paste
-    adapters arrive with #59, the LaunchAgent registrar with #61.
+    reconcile is skipped and the tray hides the toggle). On macOS only the
+    LaunchAgent registrar is still pending — it arrives with the ``.app`` (#61).
 
     ``install_keyboard_hook`` receives the thread-safe key-event handler,
     installs the platform hook, and returns it (the caller keeps it alive for
-    the lifetime of the event loop). ``None`` means no global-hotkey adapter
-    yet (macOS until #56) — recording then runs from the tray menu only.
+    the lifetime of the event loop). ``None`` means the platform has no
+    global-hotkey adapter — recording then runs from the tray menu only.
     """
 
     probe: HardwareProbe
@@ -1327,23 +1327,33 @@ def _start_windows_daemon() -> None:
 def _start_macos_daemon() -> None:
     """Build the macOS adapter set (lazy imports) and run the daemon (#54).
 
-    Phase-1 boot slice of the macOS track (ADR-0018): reuse every
-    platform-neutral layer — Qt tray/overlay, sounddevice (CoreAudio) capture,
-    the CPU faster-whisper backend (ADR-0013), the Ollama Transform. The
-    native adapters that later slices deliver are wired as None — absent, not
-    faked (see _PlatformAdapters): global hotkey #56, NSPasteboard/CGEvent
-    paste #59, LaunchAgent autostart #61. MacHardwareProbe reports no CUDA, so
-    first run bakes the CPU tier into the config.
+    Reuses every platform-neutral layer — Qt tray/overlay, sounddevice
+    (CoreAudio) capture, the CPU faster-whisper backend (ADR-0013), the Ollama
+    Transform. The native adapters: CGEventTap global hotkey (#56) and
+    NSPasteboard/CGEvent/NSWorkspace paste (#59) — manual-QA only, like their
+    win32 counterparts. The LaunchAgent autostart registrar stays None until
+    the ``.app`` exists (#61) — absent, not faked (see _PlatformAdapters).
+    MacHardwareProbe reports no CUDA, so first run bakes the CPU tier into the
+    config.
     """
     from dictatem.hardware.mac_probe import MacHardwareProbe
+    from dictatem.hotkey.mac_hook import CGEventTapHook
+    from dictatem.paste.mac_clipboard import MacClipboardIO
+    from dictatem.paste.mac_foreground import MacForegroundTracker
+    from dictatem.paste.mac_keystroke import MacKeystrokeSender
+
+    def _install_hook(handler: Callable[[Key, KeyAction, int], None]) -> object:
+        hook = CGEventTapHook(handler)
+        hook.install()
+        return hook
 
     _run_daemon(
         _PlatformAdapters(
             probe=MacHardwareProbe(),
             autostart_registrar=_platform_autostart_registrar(),
-            clipboard=None,
-            keystroke=None,
-            foreground=None,
-            install_keyboard_hook=None,
+            clipboard=MacClipboardIO(),
+            keystroke=MacKeystrokeSender(),
+            foreground=MacForegroundTracker(),
+            install_keyboard_hook=_install_hook,
         )
     )
