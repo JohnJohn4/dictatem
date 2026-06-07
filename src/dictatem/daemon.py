@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
-import os
 import queue
 import sys
 import threading
@@ -58,11 +57,9 @@ def _add_rotating_log_file() -> logging.handlers.TimedRotatingFileHandler | None
     or ``None`` if the platform has no log path or the file could not be
     opened. Per-OS locations live in :func:`dictatem.logpaths.daemon_log_path`.
     """
-    from pathlib import Path
+    from dictatem.logpaths import default_daemon_log_path
 
-    from dictatem.logpaths import daemon_log_path
-
-    log_path = daemon_log_path(sys.platform, os.environ, Path.home())
+    log_path = default_daemon_log_path()
     if log_path is None:
         return None
     try:
@@ -956,24 +953,29 @@ def _run_uninstall() -> None:
     output is invisible — collect the cleanup's guidance and show it in a
     message box so the user sees the remaining ``uv tool uninstall dictatem``
     step. On macOS no daemon-owned autostart entry exists until #61, so the
-    no-op registrar leaves the guidance lines as the entire cleanup. The README
-    also documents the two-step uninstall as the canonical reference.
+    registrar is None and only the guidance lines print. The README also
+    documents the two-step uninstall as the canonical reference.
     """
     from dictatem.autostart.reconcile import run_uninstall
 
-    registrar: AutostartRegistrar
+    lines: list[str] = []
+    run_uninstall(registrar=_platform_autostart_registrar(), out=lines.append)
+    _show_uninstall_message("\n".join(lines))
+
+
+def _platform_autostart_registrar() -> AutostartRegistrar | None:
+    """Build this platform's autostart registrar, or None where none exists yet.
+
+    The single platform→registrar mapping, shared by ``--uninstall`` and the
+    daemon starters so they cannot drift: when the macOS LaunchAgent registrar
+    lands (#61), this is the one place to wire it. ``None`` (macOS today) means
+    the launch reconcile is skipped and the tray hides the toggle.
+    """
     if sys.platform == "win32":
         from dictatem.autostart.win32_registrar import Win32AutostartRegistrar
 
-        registrar = Win32AutostartRegistrar()
-    else:
-        from dictatem.autostart.noop_registrar import NoopAutostartRegistrar
-
-        registrar = NoopAutostartRegistrar()
-
-    lines: list[str] = []
-    run_uninstall(registrar=registrar, out=lines.append)
-    _show_uninstall_message("\n".join(lines))
+        return Win32AutostartRegistrar()
+    return None
 
 
 def _show_uninstall_message(message: str) -> None:
@@ -1001,18 +1003,23 @@ class _PlatformAdapters:
     ``_start_*_daemon`` builds this set with lazy imports so the daemon module
     stays importable on any OS (``test_import_safety``).
 
+    A ``None`` field means the platform has no such adapter yet — absent, not
+    faked: DaemonCore's existing None-tolerant paths handle it honestly (the
+    paste path logs "Paste skipped" and records no Last Paste; the autostart
+    reconcile is skipped and the tray hides the toggle). On macOS the paste
+    adapters arrive with #59, the LaunchAgent registrar with #61.
+
     ``install_keyboard_hook`` receives the thread-safe key-event handler,
     installs the platform hook, and returns it (the caller keeps it alive for
-    the lifetime of the event loop). ``None`` means the platform has no
-    global-hotkey adapter yet (macOS until #56) — recording then runs from the
-    tray menu only.
+    the lifetime of the event loop). ``None`` means no global-hotkey adapter
+    yet (macOS until #56) — recording then runs from the tray menu only.
     """
 
     probe: HardwareProbe
-    autostart_registrar: AutostartRegistrar
-    clipboard: ClipboardIO
-    keystroke: KeystrokeSender
-    foreground: ForegroundTracker
+    autostart_registrar: AutostartRegistrar | None
+    clipboard: ClipboardIO | None
+    keystroke: KeystrokeSender | None
+    foreground: ForegroundTracker | None
     install_keyboard_hook: (
         Callable[[Callable[[Key, KeyAction, int], None]], object] | None
     )
@@ -1110,9 +1117,13 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # key on Windows) when the flag is on and it's missing, remove it when the
     # flag is off and it's present. apply_autostart runs the pure decision and
     # applies it via the registrar adapter; the tray "Start at login" toggle
-    # flips the same flag.
+    # flips the same flag. Platforms with no registrar yet (macOS until #61)
+    # skip the reconcile, and the tray hides the toggle below.
     autostart_registrar = adapters.autostart_registrar
-    apply_autostart(desired=config.startup.autostart, registrar=autostart_registrar)
+    if autostart_registrar is not None:
+        apply_autostart(
+            desired=config.startup.autostart, registrar=autostart_registrar
+        )
 
     app = QApplication(sys.argv)
 
@@ -1208,22 +1219,26 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     tray_icon.on_unload = daemon.on_tray_unload
     tray_icon.on_autostart_toggled = daemon.on_tray_set_autostart
     tray_icon.set_autostart_checked(config.startup.autostart)
+    # A visible toggle backed by no registrar would show a checkmark that the
+    # OS never honors — hide it until the platform has one (macOS: #61).
+    tray_icon.set_autostart_available(autostart_registrar is not None)
     tray_icon.on_quit = lambda: daemon.on_tray_quit(app.quit)
 
-    classifier = HotkeyClassifier(
-        tap_threshold_ms=config.hotkey.tap_threshold_ms,
-        modifiers=config.hotkey.modifiers,
-    )
-    classifier.set_active(True)
-    bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
+    bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:
+        classifier = HotkeyClassifier(
+            tap_threshold_ms=config.hotkey.tap_threshold_ms,
+            modifiers=config.hotkey.modifiers,
+        )
+        classifier.set_active(True)
+        bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
         # The returned hook must outlive this scope (on Windows its ctypes
         # callback would otherwise be collected); app.exec() below keeps the
         # reference alive until the daemon exits.
         _hook = adapters.install_keyboard_hook(bridge.enqueue_key_event)
     else:
         # No global-hotkey adapter on this platform yet (macOS: #56). Recording
-        # runs from the tray menu; the bridge just ticks an empty queue.
+        # runs from the tray menu, so no classifier/bridge machinery is built.
         logger.info("No global-hotkey adapter on this platform — use the tray menu")
 
     silence_timer = QTimer()
@@ -1243,7 +1258,8 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 
     def _on_tick() -> None:
         now = int(time.monotonic() * 1000)
-        bridge.tick(now)
+        if bridge is not None:
+            bridge.tick(now)
         overlay.update_level(audio_capture._buffer.current_level())
         daemon.check_loading_overlay(now_ms=now)
         daemon.check_transcription_result(now_ms=now)
@@ -1285,7 +1301,6 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 
 def _start_windows_daemon() -> None:
     """Build the Windows adapter set (lazy imports) and run the daemon."""
-    from dictatem.autostart.win32_registrar import Win32AutostartRegistrar
     from dictatem.hardware.nvidia_probe import NvidiaHardwareProbe
     from dictatem.hotkey.wh_keyboard_ll import WHKeyboardLLHook
     from dictatem.paste.win32_clipboard import Win32ClipboardIO
@@ -1300,7 +1315,7 @@ def _start_windows_daemon() -> None:
     _run_daemon(
         _PlatformAdapters(
             probe=NvidiaHardwareProbe(),
-            autostart_registrar=Win32AutostartRegistrar(),
+            autostart_registrar=_platform_autostart_registrar(),
             clipboard=Win32ClipboardIO(),
             keystroke=Win32KeystrokeSender(),
             foreground=Win32ForegroundTracker(),
@@ -1314,27 +1329,21 @@ def _start_macos_daemon() -> None:
 
     Phase-1 boot slice of the macOS track (ADR-0018): reuse every
     platform-neutral layer — Qt tray/overlay, sounddevice (CoreAudio) capture,
-    the CPU faster-whisper backend (ADR-0013), the Ollama Transform — and
-    stand in no-op adapters for the native pieces that later slices deliver:
-    global hotkey (#56), NSPasteboard/CGEvent paste (#59), LaunchAgent
-    autostart (#61). MacHardwareProbe reports no CUDA, so first run bakes the
-    CPU tier into the config.
+    the CPU faster-whisper backend (ADR-0013), the Ollama Transform. The
+    native adapters that later slices deliver are wired as None — absent, not
+    faked (see _PlatformAdapters): global hotkey #56, NSPasteboard/CGEvent
+    paste #59, LaunchAgent autostart #61. MacHardwareProbe reports no CUDA, so
+    first run bakes the CPU tier into the config.
     """
-    from dictatem.autostart.noop_registrar import NoopAutostartRegistrar
     from dictatem.hardware.mac_probe import MacHardwareProbe
-    from dictatem.paste.noop import (
-        NoopClipboardIO,
-        NoopForegroundTracker,
-        NoopKeystrokeSender,
-    )
 
     _run_daemon(
         _PlatformAdapters(
             probe=MacHardwareProbe(),
-            autostart_registrar=NoopAutostartRegistrar(),
-            clipboard=NoopClipboardIO(),
-            keystroke=NoopKeystrokeSender(),
-            foreground=NoopForegroundTracker(),
+            autostart_registrar=_platform_autostart_registrar(),
+            clipboard=None,
+            keystroke=None,
+            foreground=None,
             install_keyboard_hook=None,
         )
     )

@@ -8,11 +8,23 @@ unit-testable on any OS (see ``tests/test_logpaths.py``).
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+
+def default_daemon_log_path() -> Path | None:
+    """The daemon.log path for THIS process — the one canonical spelling.
+
+    Thin ambient wrapper over :func:`daemon_log_path` so production call sites
+    (the daemon's file handler, the tray "Open log") cannot drift on which
+    platform/env/home they pass; tests target the pure core directly.
+    """
+    return daemon_log_path(sys.platform, os.environ, Path.home())
 
 
 def daemon_log_path(platform: str, env: Mapping[str, str], home: Path) -> Path | None:

@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
 import sys
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QRectF, Qt, QUrl
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
 from dictatem.assets import asset_path
-from dictatem.logpaths import daemon_log_path
+from dictatem.logpaths import default_daemon_log_path
 from dictatem.tray.glyph import waveform_bars
 from dictatem.tray.state import MenuItem, TrayState, glyph_tint_rgba
 
@@ -180,6 +177,15 @@ class QtTrayIcon:
         """Reflect the current ``config.startup.autostart`` flag in the menu."""
         self._actions[MenuItem.AUTOSTART].setChecked(checked)
 
+    def set_autostart_available(self, available: bool) -> None:
+        """Show or hide the "Start at Login" item.
+
+        Hidden on platforms with no autostart registrar yet (macOS until #61)
+        — a visible toggle there would show a checkmark the OS never honors.
+        Visibility survives ``update_state``, which only toggles enablement.
+        """
+        self._actions[MenuItem.AUTOSTART].setVisible(available)
+
     def update_state(self, state: TrayState) -> None:
         # The tray glyph is static brand identity (ADR-0006); only menu-item
         # enable/disable tracks TrayState. The icon does not change with state.
@@ -193,10 +199,8 @@ class QtTrayIcon:
         if self.on_show_log is not None:
             self.on_show_log()
             return
-        log_path = daemon_log_path(sys.platform, os.environ, Path.home())
-        if log_path is None or not log_path.exists():
-            return
-        if sys.platform == "darwin":
-            subprocess.Popen(["open", str(log_path)])
-        else:
-            os.startfile(str(log_path))  # type: ignore[attr-defined]  # Windows only
+        log_path = default_daemon_log_path()
+        if log_path is not None and log_path.exists():
+            # Qt's cross-platform "open with the OS default app" — no
+            # per-platform branch (os.startfile is Windows-only).
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path)))

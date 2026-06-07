@@ -125,3 +125,12 @@ class TestRunUninstall:
         run_uninstall(registrar=reg, out=lines.append)
         joined = "\n".join(lines)
         assert "uv tool uninstall dictatem" in joined
+
+    def test_none_registrar_prints_guidance_only(self) -> None:
+        # Platforms with no autostart registrar yet (macOS until #61): there
+        # is no entry to remove, so claiming "Removed" would be false.
+        lines: list[str] = []
+        run_uninstall(registrar=None, out=lines.append)
+        joined = "\n".join(lines)
+        assert "Removed" not in joined
+        assert "uv tool uninstall dictatem" in joined

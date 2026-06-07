@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
-from dictatem.logpaths import daemon_log_path
+from dictatem.logpaths import daemon_log_path, default_daemon_log_path
 
 
 class TestWindowsLogPath:
@@ -30,3 +32,12 @@ class TestMacLogPath:
 class TestOtherPlatforms:
     def test_no_log_path(self) -> None:
         assert daemon_log_path("linux", {}, Path("/home/u")) is None
+
+
+class TestDefaultWrapper:
+    def test_matches_pure_core_for_this_process(self) -> None:
+        # The zero-arg wrapper is the one canonical production spelling; it
+        # must agree with the pure core fed this process's ambient values.
+        assert default_daemon_log_path() == daemon_log_path(
+            sys.platform, os.environ, Path.home()
+        )
