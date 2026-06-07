@@ -20,13 +20,14 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 - Python 3.11+
 - x64 CPU, ~8 GB RAM (minimum — CPU-only works using the `base` Whisper model)
 - **Windows on ARM** (ARM64 / Snapdragon) is supported — the installer transparently runs Dictatem under x64 emulation (usable, though slower than native; see [ADR-0017](docs/adr/0017-windows-on-arm-installs-under-x64-emulation.md))
+- **macOS 12+** (Apple silicon or Intel) — transcription runs on CPU (see [ADR-0013](docs/adr/0013-macos-transcription-engine.md)); see [Install on macOS](#install-on-macos)
 - NVIDIA GPU with CUDA support — optional, recommended for larger models and sub-realtime speed
 - [`uv`](https://docs.astral.sh/uv/) (fast Python package manager)
 - [Ollama](https://ollama.com) — optional, only for [Trigger Words](#trigger-words); see [Ollama / Transform setup](#ollama--transform-setup)
 
 ## Installation
 
-### Install (recommended)
+### Install on Windows (recommended)
 
 Run this in PowerShell. It installs [`uv`](https://docs.astral.sh/uv/) if needed, auto-detects whether you have an NVIDIA GPU (picking the CUDA or CPU-lean dependency set accordingly; on Windows on ARM it installs under x64 emulation), installs Dictatem **pinned to the v0.3.0 release**, and launches it to the system tray:
 
@@ -41,6 +42,26 @@ Piping a script from the internet into `iex` runs it immediately. If you'd rathe
 **Updating.** Re-run the one-liner with a newer version tag in the URL (e.g. `.../v0.3.0/install.ps1`); see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest) for the current tag.
 
 The script never installs or starts Ollama and never downloads a Whisper model. The model lazy-downloads on first dictation, so your **first dictation after launch** (or after the idle-unload timer frees VRAM) pauses a few seconds while the model loads — subsequent dictations are immediate. [Trigger Words](#trigger-words) stay off until you set Ollama up yourself ([Ollama / Transform setup](#ollama--transform-setup)).
+
+### Install on macOS
+
+> **Note:** macOS support ships with the next tagged release — the pinned one-liner below currently installs a Windows-only build. To try it today, run the script with a ref override, e.g. `curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/main/install.sh | DICTATEM_REF=main sh`.
+
+Run this in Terminal. It installs [`uv`](https://docs.astral.sh/uv/) if needed, installs Dictatem **pinned to the v0.3.0 release** (the CPU dependency set — Macs have no CUDA), generates the `~/Applications/Dictatem.app` launcher, and starts it in the menu bar:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.3.0/install.sh | sh
+```
+
+Piping a script from the internet into `sh` runs it immediately. If you'd rather read it first, open [that URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.3.0/install.sh) in your browser and run it once you're satisfied.
+
+**The `Dictatem.app` matters.** macOS binds permission grants to the app that asks for them. The generated, unsigned `~/Applications/Dictatem.app` exists so you grant "**Dictatem**" — not "Python" — and so the grants survive upgrades (see [ADR-0014](docs/adr/0014-macos-permissions-and-app-identity-shell.md); it is generated locally by the installer, so it never hits Gatekeeper). **Always launch Dictatem through the app** — Spotlight "Dictatem", or `open -g ~/Applications/Dictatem.app`. Running `dictatem` straight from a terminal works, but macOS then attributes the permission prompts to your *terminal app* instead.
+
+**Permissions.** On first launch Dictatem walks you through the two grants macOS makes you flip by hand — **Accessibility** (typing/pasting the dictated text) and **Input Monitoring** (hearing the global hotkey) — with dialogs that deep-link into the exact System Settings panes; each grant takes effect after a one-time relaunch. **Microphone** is the standard macOS prompt on your first dictation. Until the grants are in, the daemon still runs — record from the tray menu.
+
+**Hotkey.** The default combo is **Option+Command (⌥⌘)** — the same `modifiers = ["win", "alt"]` [config](#configuration) maps to each platform's keys. Hold for push-to-talk, tap to toggle.
+
+**Updating.** Re-run the one-liner with a newer version tag in the URL; it refreshes the tool, the `.app`, and the start-at-login entry together.
 
 ### Developer install (from a clone)
 
@@ -75,6 +96,13 @@ uv tool uninstall dictatem  # step 2: removes the tool (dismiss the step 1 dialo
 ```
 
 Quitting first matters: while the daemon is running its files are in use, so `uv tool uninstall` can otherwise fail with `Access is denied`. `dictatem --uninstall` runs windowless, so it confirms step 1 in a pop-up dialog rather than the terminal. Your config under `~/.dictatem` is left untouched. (A future release will stop the daemon automatically so this is just two lines — issue #69.)
+
+On macOS the same two steps apply, in Terminal — step 1 also removes the daemon-owned `~/Applications/Dictatem.app` and its start-at-login LaunchAgent (they must go first: after step 2 the `.app`'s launch target no longer exists), and prints its confirmation to the terminal:
+
+```sh
+dictatem --uninstall        # step 1: removes the LaunchAgent and Dictatem.app
+uv tool uninstall dictatem  # step 2: removes the tool
+```
 
 ## Verify the setup
 

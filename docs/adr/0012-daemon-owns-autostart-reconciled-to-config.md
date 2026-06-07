@@ -37,4 +37,8 @@ shape. Default stays `True`.
 - Uninstall must remove the autostart entry **before** `uv tool uninstall`
   (ADR-0011), otherwise the OS entry is orphaned, pointing at a deleted command.
 - The entry points at the `gui-scripts` launcher (ADR-0011), so autostart runs
-  the same windowless command as a manual launch.
+  the same windowless command as a manual launch. On macOS the entry instead
+  launches the generated `.app` — the identity TCC trusts (ADR-0014) — via
+  `/usr/bin/open -g`: a LaunchServices launch attributes TCC grants exactly like
+  a Finder launch and will not start a second instance of an already-running
+  daemon, which a direct exec of the bundle binary could.

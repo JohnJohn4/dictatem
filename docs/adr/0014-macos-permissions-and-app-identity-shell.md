@@ -23,8 +23,14 @@ user-invoked script, so — like the rest of the thin-script install — it neve
 hits Gatekeeper. The `.app` exists for permission identity and a Finder-visible
 launch target, not as a distribution artifact. Windows needs none of this.
 
-On first launch the daemon detects missing grants (`AXIsProcessTrusted()`, tap
-creation failing) and shows a guided dialog that deep-links into the exact
+On first launch the daemon detects missing grants and shows a guided dialog.
+Detection uses the CoreGraphics preflight pair — `CGPreflightPostEventAccess()`
+for Accessibility (probing exactly what Dictatem does: posting synthetic events)
+and `CGPreflightListenEventAccess()` for Input Monitoring — rather than
+`AXIsProcessTrusted()`: the CG pair lives in the already-shipped Quartz binding,
+so no `pyobjc-framework-ApplicationServices` dependency is added, and tap
+creation failing remains the runtime backstop signal. The dialog deep-links into
+the exact
 System Settings panes (`x-apple.systempreferences:com.apple.preference.security?
 Privacy_Accessibility` / `…?Privacy_ListenEvent`) and explains the one-time
 relaunch. It never tries to grant on the user's behalf.
@@ -53,4 +59,5 @@ relaunch. It never tries to grant on the user's behalf.
   *which* permission is missing → *which* pane to open is pure and unit-testable.
 - The autostart LaunchAgent (ADR-0012) should launch the `.app` (the identity
   TCC trusts), not the bare venv binary, so a login-started daemon keeps its
-  granted permissions.
+  granted permissions — via `/usr/bin/open -g` (see ADR-0012's consequences for
+  the launch-mechanism rationale).

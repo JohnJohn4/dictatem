@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from dictatem.interfaces import AutostartRegistrar
 
@@ -62,7 +63,10 @@ def apply_autostart(
 
 
 def run_uninstall(
-    *, registrar: AutostartRegistrar | None, out: Callable[[str], None]
+    *,
+    registrar: AutostartRegistrar | None,
+    out: Callable[[str], None],
+    remove_app_bundle: Callable[[], Path | None] | None = None,
 ) -> None:
     """Run the ``dictatem --uninstall`` cleanup, then print the final step.
 
@@ -71,12 +75,24 @@ def run_uninstall(
     no-op if already absent), then prints — via *out* — the ``uv tool uninstall
     dictatem`` command for the user to run, since a tool can't uninstall its own
     running interpreter mid-process. *registrar* is ``None`` on platforms with
-    no autostart registrar yet (macOS until #61): there is no entry to remove,
-    so only the guidance prints — claiming "Removed" would be false.
+    no autostart registrar: there is no entry to remove, so only the guidance
+    prints — claiming "Removed" would be false.
+
+    *remove_app_bundle* is the macOS-only extra step (#61 / ADR-0014): a
+    callable that removes ``~/Applications/Dictatem.app`` and returns the
+    removed path, or ``None`` when it was already absent. Both daemon-owned
+    artifacts (autostart entry, ``.app``) must go away *before* the user runs
+    ``uv tool uninstall`` — after it, the ``.app``'s exec shim target no longer
+    exists.
     """
     if registrar is not None:
         registrar.disable()
         out("Removed Dictatem autostart entry.")
         out("")
+    if remove_app_bundle is not None:
+        removed = remove_app_bundle()
+        if removed is not None:
+            out(f"Removed {removed}.")
+            out("")
     out("To finish removing Dictatem, run:")
     out("    uv tool uninstall dictatem")

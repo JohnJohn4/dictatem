@@ -23,6 +23,7 @@ from dictatem.types import EmptyResult, RecordingMode
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from dictatem.audio.buffer import AudioBuffer
     from dictatem.hotkey.classifier import HotkeyClassifier, HotkeyEvent, Key, KeyAction
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
         TrayRenderer,
     )
     from dictatem.overlay.state import OverlayState
+    from dictatem.permissions.mapper import PermissionGuidance
     from dictatem.state import StateMachine
     from dictatem.transcribe.latency_monitor import LatencyMonitor
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
@@ -914,9 +916,11 @@ def main(argv: list[str] | None = None) -> None:
     With no arguments, starts the daemon — dispatching on ``sys.platform`` to
     the Windows or macOS adapter set (#54); unsupported platforms raise
     :class:`PlatformNotSupportedError`. ``--uninstall`` runs the cleanup that
-    removes the daemon-owned autostart entry and prints the final ``uv tool
-    uninstall dictatem`` step (see ADR-0011); a bare tool uninstall would
-    otherwise orphan that entry.
+    removes the daemon-owned autostart entry (and, on macOS, the generated
+    ``.app``) and prints the final ``uv tool uninstall dictatem`` step (see
+    ADR-0011); a bare tool uninstall would otherwise orphan those.
+    ``--install-macos-app`` generates the ``Dictatem.app`` identity shell
+    (#61 / ADR-0014) instead of starting the daemon.
     """
     import argparse
 
@@ -927,6 +931,12 @@ def main(argv: list[str] | None = None) -> None:
         "--uninstall",
         action="store_true",
         help="Remove the autostart entry, then print the uv tool uninstall step.",
+    )
+    parser.add_argument(
+        "--install-macos-app",
+        action="store_true",
+        help="Generate ~/Applications/Dictatem.app — the stable identity that "
+        "macOS permission grants bind to (macOS only).",
     )
     args = parser.parse_args(argv)
 
@@ -940,6 +950,12 @@ def main(argv: list[str] | None = None) -> None:
         _run_uninstall()
         return
 
+    if args.install_macos_app:
+        if sys.platform != "darwin":
+            parser.error("--install-macos-app is only available on macOS")
+        _run_install_macos_app()
+        return
+
     if sys.platform == "win32":
         _start_windows_daemon()
     else:
@@ -947,34 +963,106 @@ def main(argv: list[str] | None = None) -> None:
 
 
 def _run_uninstall() -> None:
-    """Wire the platform registrar and run the uninstall cleanup (#58).
+    """Wire the platform registrar and run the uninstall cleanup (#58/#61).
 
     The gui-scripts launcher is windowless on Windows (ADR-0011), so console
     output is invisible — collect the cleanup's guidance and show it in a
     message box so the user sees the remaining ``uv tool uninstall dictatem``
-    step. On macOS no daemon-owned autostart entry exists until #61, so the
-    registrar is None and only the guidance lines print. The README also
-    documents the two-step uninstall as the canonical reference.
+    step. On macOS the cleanup also removes ``~/Applications/Dictatem.app``;
+    both daemon-owned artifacts must go before the tool uninstall deletes the
+    ``.app``'s exec-shim target. The README also documents the two-step
+    uninstall as the canonical reference.
     """
     from dictatem.autostart.reconcile import run_uninstall
 
+    remove_app: Callable[[], Path | None] | None = None
+    if sys.platform == "darwin":
+        from functools import partial
+
+        from dictatem.macapp.bundle import default_app_bundle_path, remove_app_bundle
+
+        remove_app = partial(remove_app_bundle, default_app_bundle_path())
+
     lines: list[str] = []
-    run_uninstall(registrar=_platform_autostart_registrar(), out=lines.append)
+    run_uninstall(
+        registrar=_platform_autostart_registrar(),
+        out=lines.append,
+        remove_app_bundle=remove_app,
+    )
     _show_uninstall_message("\n".join(lines))
 
 
-def _platform_autostart_registrar() -> AutostartRegistrar | None:
-    """Build this platform's autostart registrar, or None where none exists yet.
+def _run_install_macos_app() -> None:
+    """Generate the ``Dictatem.app`` identity shell (#61 / ADR-0014).
 
-    The single platform→registrar mapping, shared by ``--uninstall`` and the
-    daemon starters so they cannot drift: when the macOS LaunchAgent registrar
-    lands (#61), this is the one place to wire it. ``None`` (macOS today) means
-    the launch reconcile is skipped and the tray hides the toggle.
+    Thin darwin glue around the pure ``macapp.bundle`` machinery: resolve the
+    uv-installed launcher for the exec shim (mirroring the win32 registrar's
+    ``_launch_command``), stamp the installed version into the Info.plist, and
+    report what happened. Unlike the windowless ``--uninstall`` this runs from
+    a terminal (install.sh or the user), so plain stdout is the surface.
+    """
+    import shutil
+    from importlib.metadata import PackageNotFoundError, version
+    from pathlib import Path
+
+    from dictatem.assets import asset_path
+    from dictatem.autostart.launch_agent import default_agents_dir
+    from dictatem.macapp.bundle import (
+        default_apps_dir,
+        install_app_bundle,
+        resolve_launcher,
+    )
+
+    try:
+        pkg_version: str | None = version("dictatem")
+    except PackageNotFoundError:
+        pkg_version = None
+
+    launcher = resolve_launcher(shutil.which("dictatem"), home=Path.home())
+    bundle, agent_refreshed = install_app_bundle(
+        apps_dir=default_apps_dir(),
+        agents_dir=default_agents_dir(),
+        launcher=launcher,
+        icns_source=asset_path("app.icns"),
+        version=pkg_version,
+    )
+    print(f"Generated {bundle}")
+    print(f"It launches the dictatem daemon at: {launcher}")
+    if agent_refreshed:
+        print("Refreshed the start-at-login LaunchAgent to launch it.")
+    print(
+        'Launch Dictatem through this app (Spotlight: "Dictatem") so macOS '
+        "permission grants bind to it."
+    )
+
+
+def _platform_autostart_registrar() -> AutostartRegistrar | None:
+    """Build this platform's autostart registrar, or None where none exists.
+
+    The single platform→registrar construction point, shared by ``--uninstall``,
+    ``--install-macos-app`` (via ``install_app_bundle``'s refresh), and the
+    daemon starters so they cannot drift. On macOS the LaunchAgent launches the
+    generated ``.app`` via ``/usr/bin/open`` (ADR-0012/0014). It is built
+    unconditionally — uninstall must be able to remove the LaunchAgent even
+    after the user hand-deleted the ``.app`` — and the darwin *starter* applies
+    the .app-exists guard before handing it to the reconcile (see
+    ``_start_macos_daemon``).
     """
     if sys.platform == "win32":
         from dictatem.autostart.win32_registrar import Win32AutostartRegistrar
 
         return Win32AutostartRegistrar()
+    if sys.platform == "darwin":
+        from dictatem.autostart.launch_agent import (
+            LaunchAgentRegistrar,
+            default_agents_dir,
+        )
+        from dictatem.macapp.bundle import default_app_bundle_path, launch_arguments
+
+        return LaunchAgentRegistrar(
+            agents_dir=default_agents_dir(),
+            program_arguments=launch_arguments(default_app_bundle_path()),
+        )
     return None
 
 
@@ -1003,16 +1091,23 @@ class _PlatformAdapters:
     ``_start_*_daemon`` builds this set with lazy imports so the daemon module
     stays importable on any OS (``test_import_safety``).
 
-    A ``None`` field means the platform has no such adapter yet — absent, not
+    A ``None`` field means the platform has no such adapter — absent, not
     faked: DaemonCore's existing None-tolerant paths handle it honestly (the
     paste path logs "Paste skipped" and records no Last Paste; the autostart
-    reconcile is skipped and the tray hides the toggle). On macOS only the
-    LaunchAgent registrar is still pending — it arrives with the ``.app`` (#61).
+    reconcile is skipped and the tray hides the toggle). On macOS the
+    LaunchAgent registrar is ``None`` until the user generates the ``.app``
+    it launches (``--install-macos-app``, #61).
 
     ``install_keyboard_hook`` receives the thread-safe key-event handler,
     installs the platform hook, and returns it (the caller keeps it alive for
     the lifetime of the event loop). ``None`` means the platform has no
     global-hotkey adapter — recording then runs from the tray menu only.
+
+    ``check_permissions`` probes the platform's manually-granted permissions
+    once at startup and returns the guidance to show (#57 / ADR-0014) — empty
+    means all granted, show nothing. ``None`` means the platform has no guided
+    permission UX (Windows: the mic permission surfaces in-flow when capture
+    fails).
     """
 
     probe: HardwareProbe
@@ -1023,6 +1118,7 @@ class _PlatformAdapters:
     install_keyboard_hook: (
         Callable[[Callable[[Key, KeyAction, int], None]], object] | None
     )
+    check_permissions: Callable[[], tuple[PermissionGuidance, ...]] | None
 
 
 def _run_daemon(adapters: _PlatformAdapters) -> None:
@@ -1121,9 +1217,16 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # skip the reconcile, and the tray hides the toggle below.
     autostart_registrar = adapters.autostart_registrar
     if autostart_registrar is not None:
-        apply_autostart(
-            desired=config.startup.autostart, registrar=autostart_registrar
-        )
+        try:
+            apply_autostart(
+                desired=config.startup.autostart, registrar=autostart_registrar
+            )
+        except Exception:
+            # A reconcile hiccup — a registry error, EACCES out of
+            # Path.is_file (pre-3.13), a directory squatting on the plist
+            # path — must never kill startup; the tray toggle path is wrapped
+            # the same way.
+            logger.error("Error reconciling autostart on launch", exc_info=True)
 
     app = QApplication(sys.argv)
 
@@ -1270,6 +1373,28 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     tick_timer.timeout.connect(_on_tick)
     tick_timer.start()
 
+    # First-run permission UX (#57 / ADR-0014), deferred like the CPU-fallback
+    # balloon below so the tray and event loop are up first. One probe per
+    # launch: the platform callable reads the grant state, registers Dictatem
+    # in the System Settings panes for anything missing, and returns the pure
+    # mapper's guidance; the Qt dialogs then deep-link the user into the right
+    # pane and explain the one-time relaunch. Empty guidance = no dialog.
+    if adapters.check_permissions is not None:
+        check_permissions = adapters.check_permissions
+
+        def _show_permission_guidance() -> None:
+            try:
+                guidances = check_permissions()
+                if not guidances:
+                    return
+                from dictatem.permissions.qt_dialog import show_permission_dialogs
+
+                show_permission_dialogs(guidances)
+            except Exception:
+                logger.error("Error in startup permission check", exc_info=True)
+
+        QTimer.singleShot(2000, _show_permission_guidance)
+
     # Surface the session CPU fallback once, after the loop is up. A
     # QSystemTrayIcon balloon needs a visible icon and a running event loop, so
     # we defer it with a single-shot timer rather than firing it inline (#39).
@@ -1320,6 +1445,7 @@ def _start_windows_daemon() -> None:
             keystroke=Win32KeystrokeSender(),
             foreground=Win32ForegroundTracker(),
             install_keyboard_hook=_install_hook,
+            check_permissions=None,
         )
     )
 
@@ -1329,31 +1455,52 @@ def _start_macos_daemon() -> None:
 
     Reuses every platform-neutral layer — Qt tray/overlay, sounddevice
     (CoreAudio) capture, the CPU faster-whisper backend (ADR-0013), the Ollama
-    Transform. The native adapters: CGEventTap global hotkey (#56) and
-    NSPasteboard/CGEvent/NSWorkspace paste (#59) — manual-QA only, like their
-    win32 counterparts. The LaunchAgent autostart registrar stays None until
-    the ``.app`` exists (#61) — absent, not faked (see _PlatformAdapters).
-    MacHardwareProbe reports no CUDA, so first run bakes the CPU tier into the
-    config.
+    Transform. The native adapters: CGEventTap global hotkey (#56),
+    NSPasteboard/CGEvent/NSWorkspace paste (#59), the CGPreflight permission
+    check (#57), and the LaunchAgent autostart registrar (#61) — manual-QA
+    only, like their win32 counterparts. MacHardwareProbe reports no CUDA, so
+    first run bakes the CPU tier into the config.
+
+    This body executes on the headless macOS CI leg (TestStarterAdapterSets):
+    everything here must stay construction-only — no native call happens until
+    the daemon actually runs.
     """
     from dictatem.hardware.mac_probe import MacHardwareProbe
     from dictatem.hotkey.mac_hook import CGEventTapHook
+    from dictatem.macapp.bundle import default_app_bundle_path
     from dictatem.paste.mac_clipboard import MacClipboardIO
     from dictatem.paste.mac_foreground import MacForegroundTracker
     from dictatem.paste.mac_keystroke import MacKeystrokeSender
+    from dictatem.permissions.mac_tcc import check_permissions
 
     def _install_hook(handler: Callable[[Key, KeyAction, int], None]) -> object:
         hook = CGEventTapHook(handler)
         hook.install()
         return hook
 
+    # Autostart can only launch the generated .app — the identity TCC trusts
+    # (ADR-0014) — so without one the registrar stays absent (reconcile
+    # skipped, tray toggle hidden) rather than writing a LaunchAgent that
+    # points at a missing bundle. --uninstall deliberately skips this guard.
+    app_bundle = default_app_bundle_path()
+    if app_bundle.exists():
+        autostart_registrar = _platform_autostart_registrar()
+    else:
+        autostart_registrar = None
+        logger.info(
+            "No %s — run `dictatem --install-macos-app` to enable "
+            "start-at-login and give permission grants a stable identity",
+            app_bundle,
+        )
+
     _run_daemon(
         _PlatformAdapters(
             probe=MacHardwareProbe(),
-            autostart_registrar=_platform_autostart_registrar(),
+            autostart_registrar=autostart_registrar,
             clipboard=MacClipboardIO(),
             keystroke=MacKeystrokeSender(),
             foreground=MacForegroundTracker(),
             install_keyboard_hook=_install_hook,
+            check_permissions=check_permissions,
         )
     )

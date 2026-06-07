@@ -12,6 +12,8 @@ from __future__ import annotations
 import plistlib
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 from dictatem.autostart.launch_agent import (
     LaunchAgentRegistrar,
     render_launch_agent_plist,
@@ -100,6 +102,34 @@ class TestEnable:
         )
         registrar.enable()
         assert (tmp_path / "com.example.other.plist").is_file()
+
+    def test_leaves_no_tmp_sibling_behind(self, tmp_path: Path) -> None:
+        # The atomic write goes through a sibling tmp file + os.replace.
+        registrar = _registrar(tmp_path)
+        registrar.enable()
+        assert [p.name for p in registrar.plist_path.parent.iterdir()] == [
+            registrar.plist_path.name
+        ]
+
+    def test_failed_write_never_corrupts_an_existing_plist(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A crash mid-write must not leave a truncated plist that the
+        # existence-only is_enabled() reports as registered: the write lands
+        # in a tmp sibling, so the registered plist stays parseable.
+        registrar = _registrar(tmp_path)
+        registrar.enable()
+
+        def _boom(self: Path, data: bytes) -> int:
+            self.write_text("truncated garbage", encoding="utf-8")
+            raise OSError("disk full mid-write")
+
+        monkeypatch.setattr(type(registrar.plist_path), "write_bytes", _boom)
+        with pytest.raises(OSError, match="disk full"):
+            registrar.enable()
+
+        agent = _load(registrar.plist_path)
+        assert agent["ProgramArguments"] == PROGRAM_ARGS
 
 
 class TestDisable:

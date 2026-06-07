@@ -15,16 +15,24 @@ the daemon at the next login. The registrar deliberately does not shell out to
 from __future__ import annotations
 
 import logging
+import os
 import plistlib
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dictatem.macapp.plist import BUNDLE_ID
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def default_agents_dir() -> Path:
+    """``~/Library/LaunchAgents`` — the production value for the injected
+    *agents_dir*. The registrar seam itself stays injected (tmp_path-tested);
+    this is the single place the wiring gets the real directory from."""
+    return Path.home() / "Library" / "LaunchAgents"
 
 
 def render_launch_agent_plist(*, label: str, program_arguments: Sequence[str]) -> bytes:
@@ -71,17 +79,25 @@ class LaunchAgentRegistrar:
         """Write the LaunchAgent plist. Idempotent — rewriting converges on the
         same file, mirroring the Win32 adapter's unconditional ``SetValueEx``.
 
+        Written atomically (sibling tmp file + ``os.replace``) so a crash
+        mid-write can never leave a truncated plist that the existence-only
+        ``is_enabled()`` would report as registered.
+
         Note that the reconcile driver (``apply_autostart``) only reaches this
         when ``is_enabled()`` is False, and ``is_enabled()`` checks existence,
         not content — an existing plist with a stale launch command is never
         rewritten through reconcile (the Win32 adapter shares this property).
+        Staleness instead heals on the upgrade path: ``--install-macos-app``,
+        which every install/upgrade runs, rewrites an existing plist with the
+        current launch command (see ``macapp.bundle.install_app_bundle``).
         """
         self._agents_dir.mkdir(parents=True, exist_ok=True)
-        self.plist_path.write_bytes(
-            render_launch_agent_plist(
-                label=self._label, program_arguments=self._program_arguments
-            )
+        rendered = render_launch_agent_plist(
+            label=self._label, program_arguments=self._program_arguments
         )
+        tmp_path = self.plist_path.with_name(self.plist_path.name + ".tmp")
+        tmp_path.write_bytes(rendered)
+        os.replace(tmp_path, self.plist_path)
         logger.info("Registered LaunchAgent %s", self.plist_path)
 
     def disable(self) -> None:
