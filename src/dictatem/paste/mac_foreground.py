@@ -35,7 +35,10 @@ class MacForegroundTracker:
         app = NSWorkspace.sharedWorkspace().frontmostApplication()
         if app is None:
             # Possible in headless/login-window edge states. 0 is never a
-            # real PID, so the rail's equality check simply won't match.
+            # real PID, so against any real capture the rail won't match.
+            # (Two consecutive no-frontmost captures DO match each other —
+            # the same latent edge exists on Windows, where
+            # GetForegroundWindow can return NULL; accepted on both.)
             logger.warning("No frontmost application; capturing target_id=0")
             return 0
         return int(app.processIdentifier())

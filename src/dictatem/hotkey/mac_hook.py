@@ -103,8 +103,11 @@ class CGEventTapHook:
                     # macOS disables a tap whose callback runs too slowly (or
                     # while secure input is active). Without re-enabling here
                     # the hotkey would stay dead for the rest of the session.
-                    if self._tap is not None:
-                        CGEventTapEnable(self._tap, True)
+                    # Snapshot the ref: uninstall() (another thread) clears
+                    # self._tap between the check and the call.
+                    tap = self._tap
+                    if tap is not None:
+                        CGEventTapEnable(tap, True)
                     return event
 
                 keycode = CGEventGetIntegerValueField(
