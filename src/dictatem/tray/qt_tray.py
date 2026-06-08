@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from typing import TYPE_CHECKING
 
@@ -16,6 +17,8 @@ from dictatem.tray.state import MenuItem, TrayState, glyph_tint_rgba
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+logger = logging.getLogger(__name__)
 
 _MENU_LABELS: dict[MenuItem, str] = {
     MenuItem.START: "Start Recording",
@@ -147,6 +150,18 @@ class QtTrayIcon:
     def _realize(self) -> None:
         self._refresh_icon()
         self._tray.show()
+        geo = self._tray.geometry()
+        logger.info(
+            "diag: tray realize systrayAvailable=%s visible=%s iconNull=%s "
+            "geometry=(x=%s,y=%s,w=%s,h=%s)",
+            QSystemTrayIcon.isSystemTrayAvailable(),
+            self._tray.isVisible(),
+            self._tray.icon().isNull(),
+            geo.x(),
+            geo.y(),
+            geo.width(),
+            geo.height(),
+        )
 
     def _refresh_icon(self) -> None:
         self._tray.setIcon(_themed_tray_icon(_is_dark_taskbar()))

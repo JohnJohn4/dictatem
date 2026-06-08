@@ -1261,10 +1261,26 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         # LSUIElement does not apply because the daemon runs as the interpreter
         # the shim execs into, not as the bundle (#61). Without this, an .app
         # launch shows a Dock icon and NO top-right status item. Lazy import —
-        # the module binds AppKit and is macOS-only.
-        from dictatem.macapp.activation import set_accessory_activation_policy
+        # the module binds AppKit and is macOS-only. The diagnostics + native
+        # test status item are the active hunt for the missing-icon bug (#54).
+        import os
+
+        from dictatem.macapp.activation import (
+            create_native_test_status_item,
+            log_activation_diagnostics,
+            set_accessory_activation_policy,
+        )
 
         set_accessory_activation_policy()
+        log_activation_diagnostics()
+        create_native_test_status_item()
+        logger.info(
+            "diag: pid=%s exe=%s argv=%s qtPlatform=%s",
+            os.getpid(),
+            sys.executable,
+            sys.argv,
+            app.platformName(),
+        )
 
     audio_capture = SoundDeviceCapture(config)
 
