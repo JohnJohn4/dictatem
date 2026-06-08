@@ -124,39 +124,56 @@ dictatem --install-macos-app
 echo "Launching Dictatem..."
 launcher="$(command -v dictatem || echo "$HOME/.local/bin/dictatem")"
 uid="$(id -u)"
+service="gui/$uid/com.dictatem.daemon"
 plist="$HOME/Library/LaunchAgents/com.dictatem.daemon.plist"
 
-# Stop any already-running daemon so a re-install/upgrade restarts cleanly
-# (until the app-level single-instance guard lands, #92).
-launchctl bootout "gui/$uid/com.dictatem.daemon" 2>/dev/null || true
+# Stop any running daemon (launchd-managed or a stray direct run) so a
+# re-install/upgrade restarts cleanly (until the single-instance guard, #92),
+# then WAIT for the launchd job to finish unloading: bootout is asynchronous,
+# so bootstrapping immediately would race it, fail, and fall through to the
+# broken terminal-launch fallback.
+launchctl bootout "$service" 2>/dev/null || true
 pkill -f "$launcher" 2>/dev/null || true
+i=0
+while launchctl print "$service" >/dev/null 2>&1 && [ "$i" -lt 40 ]; do
+    sleep 0.25
+    i=$((i + 1))
+done
 
-# The daemon owns autostart (ADR-0012): it writes the LaunchAgent on its first
-# run by reconciling config.startup.autostart (default on). On a fresh install
-# the plist does not exist yet, so a brief direct run registers it; we stop that
-# Terminal-parented instance once the plist appears and hand off to launchd.
+# Register the LaunchAgent if it does not exist yet: the daemon writes it on its
+# first run by reconciling config.startup.autostart (default on, ADR-0012). A
+# brief direct run is enough; stop it once the plist appears. The wait is
+# generous — a cold first run imports the ML/Qt stack before reconciling.
 if [ ! -f "$plist" ]; then
     "$launcher" >/dev/null 2>&1 &
     boot_pid=$!
     i=0
-    while [ ! -f "$plist" ] && [ "$i" -lt 40 ]; do
+    while [ ! -f "$plist" ] && [ "$i" -lt 160 ]; do
         sleep 0.25
         i=$((i + 1))
     done
     kill "$boot_pid" 2>/dev/null || true
-    sleep 1
+    wait "$boot_pid" 2>/dev/null || true
 fi
 
+# Start the daemon under launchd (see the comment above for why a terminal
+# launch breaks the hotkey/paste). bootstrap loads the plist and RunAtLoad
+# starts it; retry a few times in case the unload has not fully settled.
 if [ -f "$plist" ]; then
-    # `if !` keeps a bootstrap failure from tripping `set -e`; fall back to a
-    # direct run so the install still leaves a daemon up.
-    if ! launchctl bootstrap "gui/$uid" "$plist"; then
+    i=0
+    while ! launchctl bootstrap "$service" "$plist" 2>/dev/null && [ "$i" -lt 12 ]; do
+        sleep 0.5
+        i=$((i + 1))
+    done
+    if ! launchctl print "$service" >/dev/null 2>&1; then
+        # launchd would not take it — direct-run fallback so the install still
+        # leaves a daemon up (hotkey/paste limited until a launchd start).
         nohup "$launcher" >/dev/null 2>&1 &
     fi
 else
-    # Autostart is off (no plist written) — fall back to a direct run. The
-    # hotkey/paste will not work until the daemon runs under launchd; re-enable
-    # "Start at Login" from the tray to fix that.
+    # Autostart is off (no plist written) — direct-run fallback. The hotkey and
+    # paste will not work until the daemon runs under launchd; re-enable "Start
+    # at Login" from the tray to fix that.
     nohup "$launcher" >/dev/null 2>&1 &
 fi
 
