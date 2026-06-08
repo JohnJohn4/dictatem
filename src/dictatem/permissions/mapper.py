@@ -66,6 +66,12 @@ _RELAUNCH = (
     "the permission on the next launch."
 )
 
+# Until a signed bundle gives Dictatem its own identity (#91), the running
+# process is the Python interpreter, so the System Settings entry is named
+# "Python" (e.g. "python3.12"), not "Dictatem". Say so, or the user hunts for a
+# "Dictatem" row that isn't there. Drop this note when #91 lands.
+_LISTED_AS_PYTHON = ' (it appears in the list as "Python", not "Dictatem")'
+
 _GUIDANCE: dict[MacPermission, PermissionGuidance] = {
     MacPermission.ACCESSIBILITY: PermissionGuidance(
         permission=MacPermission.ACCESSIBILITY,
@@ -75,7 +81,9 @@ _GUIDANCE: dict[MacPermission, PermissionGuidance] = {
         message=(
             "Dictatem needs the Accessibility permission to type and paste "
             "dictated text. macOS only lets you grant it in System Settings: "
-            "open Privacy & Security > Accessibility and turn on Dictatem. "
+            "open Privacy & Security > Accessibility and turn on Dictatem"
+            + _LISTED_AS_PYTHON
+            + ". "
             + _RELAUNCH
         ),
     ),
@@ -88,7 +96,7 @@ _GUIDANCE: dict[MacPermission, PermissionGuidance] = {
             "Dictatem needs the Input Monitoring permission to hear its "
             "global dictation hotkey. macOS only lets you grant it in System "
             "Settings: open Privacy & Security > Input Monitoring and turn "
-            "on Dictatem. " + _RELAUNCH
+            "on Dictatem" + _LISTED_AS_PYTHON + ". " + _RELAUNCH
         ),
     ),
 }
