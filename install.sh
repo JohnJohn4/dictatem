@@ -124,6 +124,13 @@ dictatem --install-macos-app
 echo "Launching Dictatem..."
 launcher="$(command -v dictatem || echo "$HOME/.local/bin/dictatem")"
 uid="$(id -u)"
+# launchctl target grammar differs by subcommand: bootout/print/kickstart take
+# a SERVICE target (gui/<uid>/<label>), but bootstrap takes the DOMAIN target
+# (gui/<uid>) followed by the plist path. Passing the service target to
+# bootstrap makes every retry fail and fall through to the broken
+# terminal-launch fallback (hotkey + paste then silently die) — fresh-Mac QA
+# caught exactly this on a clean install (#56/#59).
+domain="gui/$uid"
 service="gui/$uid/com.dictatem.daemon"
 plist="$HOME/Library/LaunchAgents/com.dictatem.daemon.plist"
 
@@ -161,7 +168,7 @@ fi
 # starts it; retry a few times in case the unload has not fully settled.
 if [ -f "$plist" ]; then
     i=0
-    while ! launchctl bootstrap "$service" "$plist" 2>/dev/null && [ "$i" -lt 12 ]; do
+    while ! launchctl bootstrap "$domain" "$plist" 2>/dev/null && [ "$i" -lt 12 ]; do
         sleep 0.5
         i=$((i + 1))
     done
