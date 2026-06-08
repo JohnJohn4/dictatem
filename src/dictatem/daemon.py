@@ -1249,6 +1249,12 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             logger.error("Error reconciling autostart on launch", exc_info=True)
 
     app = QApplication(sys.argv)
+    # The daemon is a tray app with no persistent main window: the overlay pill
+    # and the guided permission dialogs are transient. Without this, Qt's
+    # default quits the whole daemon when the last window closes — on macOS,
+    # closing the first-run permission dialog killed the daemon (and its
+    # menu-bar icon) outright (#57 QA). Tray/hotkey keep it alive instead.
+    app.setQuitOnLastWindowClosed(False)
 
     if sys.platform == "darwin":
         # Force the menu-bar accessory policy on the running process: the .app's

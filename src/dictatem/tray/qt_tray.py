@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QRectF, Qt, QUrl
+from PySide6.QtCore import QRectF, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
@@ -115,7 +115,6 @@ class QtTrayIcon:
         self._parent.setWindowIcon(self._app_icon)
 
         self._tray = QSystemTrayIcon(self._parent)
-        self._refresh_icon()
 
         self._menu = QMenu()
         self._actions: dict[MenuItem, QAction] = {}
@@ -137,6 +136,16 @@ class QtTrayIcon:
 
         self._build_menu()
         self._tray.setContextMenu(self._menu)
+        # Defer the first icon render + show until the event loop is running.
+        # Creating/showing the status item during __init__ (before app.exec())
+        # silently fails to appear under a LaunchServices/.app launch on macOS,
+        # though it works from a foreground Terminal launch (#54 QA). A 0-delay
+        # timer fires the moment exec() starts, when NSApplication is fully up.
+        # Harmless on Windows — same result, a tick later.
+        QTimer.singleShot(0, self._realize)
+
+    def _realize(self) -> None:
+        self._refresh_icon()
         self._tray.show()
 
     def _refresh_icon(self) -> None:
