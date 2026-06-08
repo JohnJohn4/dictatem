@@ -128,8 +128,12 @@ class TestMainInstallMacosAppFlag:
         # The stale-launch-command heal rides the upgrade path (PR #86 note):
         # an existing plist is rewritten with the current launch command.
         from dictatem.autostart.launch_agent import LaunchAgentRegistrar
+        from dictatem.macapp.bundle import launch_arguments
 
         monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+        # Force resolve_launcher onto its documented fallback so the expected
+        # launch command is deterministic regardless of the test host's PATH.
+        monkeypatch.setattr("shutil.which", lambda _name: None)
         agents_dir = tmp_path / "Library" / "LaunchAgents"
         LaunchAgentRegistrar(
             agents_dir=agents_dir, program_arguments=["/stale/command"]
@@ -140,8 +144,9 @@ class TestMainInstallMacosAppFlag:
         agent = plistlib.loads(
             (agents_dir / "com.dictatem.daemon.plist").read_bytes()
         )
-        bundle = tmp_path / "Applications" / "Dictatem.app"
-        assert agent["ProgramArguments"] == ["/usr/bin/open", "-g", bundle.as_posix()]
+        # Rewritten to launch the daemon launcher DIRECTLY (#54), not the .app.
+        launcher = tmp_path / ".local" / "bin" / "dictatem"
+        assert agent["ProgramArguments"] == launch_arguments(launcher)
         assert "Refreshed the start-at-login LaunchAgent" in capsys.readouterr().out
 
 

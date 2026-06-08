@@ -115,10 +115,22 @@ grant is functional and, because the pinned managed interpreter is byte-stable
 across `uv tool upgrade`, it *survives upgrades* — only the displayed name and
 icon are wrong. An ad-hoc local bundle would be worse (content-hash identity
 churns on regeneration, breaking the grant every upgrade). A clean
-Developer-ID-signed bundle is tracked as a future enhancement (#91). The `.app`
-shell still earns its place even with the wrong label: a Spotlight/Finder launch
-target, single-instance launch via LaunchServices, `LSUIElement`, and the
-autostart identity the LaunchAgent launches.
+Developer-ID-signed bundle is tracked as a future enhancement (#91).
+
+A second QA finding (#54) forced a further retreat: the `.app` can no longer
+even *launch* the daemon. Launching through the bundle makes the daemon process
+inherit the bundle's LaunchServices identity, and macOS then silently refuses
+to render its **menu-bar status item** — the tray icon never appeared under any
+`.app`/`open`/Spotlight/login launch, while a directly-launched (non-bundle)
+process showed it fine (proven with a native `NSStatusItem`, so it is not a Qt
+bug). So every launch path now runs the uv-installed launcher **directly** (see
+ADR-0012's revised consequence); the menu-bar accessory behaviour that
+`LSUIElement` was meant to provide is set on the running process instead
+(`TransformProcessType` → UIElement, in `macapp.activation`). The `.app` is thus
+reduced to just the generated icon and the placeholder for the eventual signed
+bundle (#91) — it no longer launches anything and is not the recommended launch
+path. This means `--install-macos-app` keeps generating it, but `install.sh` and
+the LaunchAgent both bypass it.
 
 Rejected deeper fix: a tiny native Mach-O trampoline as `Contents/MacOS` would
 give LaunchServices a real architecture header, but compiling one at install

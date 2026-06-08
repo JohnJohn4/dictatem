@@ -1048,11 +1048,15 @@ def _run_install_macos_app() -> None:
             "`dictatem --install-macos-app`."
         )
     if agent_refreshed:
-        print("Refreshed the start-at-login LaunchAgent to launch it.")
-    print(
-        'Launch Dictatem through this app (Spotlight: "Dictatem") so macOS '
-        "permission grants bind to it."
-    )
+        print(
+            "Refreshed the start-at-login LaunchAgent (launches the daemon "
+            "directly)."
+        )
+    # NB: launch the daemon directly, never via the .app — launching through
+    # the bundle suppresses the menu-bar status item (#54). The .app is the
+    # icon/identity shell only.
+    print("Dictatem runs in the menu bar and starts at login. To start it now, "
+          "run: dictatem")
 
 
 def _platform_autostart_registrar() -> AutostartRegistrar | None:
@@ -1062,26 +1066,29 @@ def _platform_autostart_registrar() -> AutostartRegistrar | None:
     and the daemon starters so they cannot drift (``--install-macos-app``'s
     LaunchAgent refresh builds the same launch command through
     ``macapp.bundle.launch_arguments``). On macOS the LaunchAgent launches the
-    generated ``.app`` via ``/usr/bin/open`` (ADR-0012/0014). It is built
-    unconditionally — uninstall must be able to remove the LaunchAgent even
-    after the user hand-deleted the ``.app`` — and the darwin *starter* applies
-    the .app-exists guard before handing it to the reconcile (see
-    ``_start_macos_daemon``).
+    uv-installed daemon launcher **directly** — launching via the ``.app``
+    makes the daemon inherit the bundle identity, which suppresses its menu-bar
+    status item (#54, ADR-0012/0014 revised). It is built unconditionally —
+    uninstall must be able to remove the LaunchAgent regardless.
     """
     if sys.platform == "win32":
         from dictatem.autostart.win32_registrar import Win32AutostartRegistrar
 
         return Win32AutostartRegistrar()
     if sys.platform == "darwin":
+        import shutil
+        from pathlib import Path
+
         from dictatem.autostart.launch_agent import (
             LaunchAgentRegistrar,
             default_agents_dir,
         )
-        from dictatem.macapp.bundle import default_app_bundle_path, launch_arguments
+        from dictatem.macapp.bundle import launch_arguments, resolve_launcher
 
+        launcher = resolve_launcher(shutil.which("dictatem"), home=Path.home())
         return LaunchAgentRegistrar(
             agents_dir=default_agents_dir(),
-            program_arguments=launch_arguments(default_app_bundle_path()),
+            program_arguments=launch_arguments(launcher),
         )
     return None
 
@@ -1257,30 +1264,14 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     app.setQuitOnLastWindowClosed(False)
 
     if sys.platform == "darwin":
-        # Force the menu-bar accessory policy on the running process: the .app's
-        # LSUIElement does not apply because the daemon runs as the interpreter
-        # the shim execs into, not as the bundle (#61). Without this, an .app
-        # launch shows a Dock icon and NO top-right status item. Lazy import —
-        # the module binds AppKit and is macOS-only. The diagnostics + native
-        # test status item are the active hunt for the missing-icon bug (#54).
-        import os
-
-        from dictatem.macapp.activation import (
-            create_native_test_status_item,
-            log_activation_diagnostics,
-            set_accessory_activation_policy,
-        )
+        # Make the running process a menu-bar accessory: the .app's LSUIElement
+        # does not apply because the daemon runs as the interpreter the shim
+        # execs into, not as the bundle (#61). Without this, a Dock icon shows
+        # and the status item does not register. Lazy import — the module binds
+        # AppKit and is macOS-only.
+        from dictatem.macapp.activation import set_accessory_activation_policy
 
         set_accessory_activation_policy()
-        log_activation_diagnostics()
-        create_native_test_status_item()
-        logger.info(
-            "diag: pid=%s exe=%s argv=%s qtPlatform=%s",
-            os.getpid(),
-            sys.executable,
-            sys.argv,
-            app.platformName(),
-        )
 
     audio_capture = SoundDeviceCapture(config)
 

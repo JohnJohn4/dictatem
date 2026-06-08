@@ -107,11 +107,16 @@ fi
 dictatem --install-macos-app
 
 # --- 4. Launch the daemon once ----------------------------------------------
-# Launch through the .app with /usr/bin/open, NOT by running `dictatem` from
-# this shell: macOS attributes a terminal-spawned process's permission prompts
-# to the *terminal app*, which would defeat the identity shell entirely.
+# Launch the daemon binary DIRECTLY (detached), NOT via `open` on the .app.
+# Real-Mac QA (#54) found that launching through the bundle makes the daemon
+# inherit the bundle's LaunchServices identity, and macOS then refuses to
+# render its menu-bar status item — the tray icon never appears. A direct
+# launch shows it. (TCC permission grants bind to the interpreter either way;
+# the .app does not change that — ADR-0014 / #91.) nohup + & so the piped
+# `curl | sh` returns instead of blocking on the long-lived daemon.
 echo "Launching Dictatem..."
-open -g "$HOME/Applications/Dictatem.app"
+launcher="$(command -v dictatem || echo "$HOME/.local/bin/dictatem")"
+nohup "$launcher" >/dev/null 2>&1 &
 
 # --- 5. Permissions + optional Ollama pointers ------------------------------
 echo ""

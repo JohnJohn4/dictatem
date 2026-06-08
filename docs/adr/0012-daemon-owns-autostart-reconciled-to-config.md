@@ -37,8 +37,18 @@ shape. Default stays `True`.
 - Uninstall must remove the autostart entry **before** `uv tool uninstall`
   (ADR-0011), otherwise the OS entry is orphaned, pointing at a deleted command.
 - The entry points at the `gui-scripts` launcher (ADR-0011), so autostart runs
-  the same windowless command as a manual launch. On macOS the entry instead
-  launches the generated `.app` — the identity TCC trusts (ADR-0014) — via
-  `/usr/bin/open -g`: a LaunchServices launch attributes TCC grants exactly like
-  a Finder launch and will not start a second instance of an already-running
-  daemon, which a direct exec of the bundle binary could.
+  the same windowless command as a manual launch — on **both** platforms.
+
+  *Revised after real-Mac QA (#54).* The macOS entry originally launched the
+  generated `.app` via `/usr/bin/open -g`, on the theory that a LaunchServices
+  launch would attribute TCC grants to the bundle. QA disproved both halves:
+  the grant attributes to the interpreter (`python3.12`) regardless (ADR-0014
+  amendment, #91), and — decisively — launching *through* the bundle makes the
+  daemon process inherit the bundle's LaunchServices identity, which macOS then
+  **refuses to render a menu-bar status item for** (the tray icon never
+  appeared; a directly-launched, non-bundle process shows it fine). So the
+  LaunchAgent now launches the **uv-installed launcher directly**
+  (`macapp.bundle.launch_arguments` returns `[launcher]`), exactly like the
+  win32 Run key, and `launchd` itself provides the single-instance guarantee
+  the `open`-launch was relied on for. The `.app` survives only as the icon /
+  identity shell and the future home of a signed bundle (#91).

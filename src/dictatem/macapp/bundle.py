@@ -69,21 +69,24 @@ def resolve_launcher(which_result: str | None, *, home: Path) -> Path:
     return home / ".local" / "bin" / "dictatem"
 
 
-def launch_arguments(bundle_path: Path) -> list[str]:
-    """The canonical command that launches the ``.app`` (ADR-0012/0014).
+def launch_arguments(launcher: Path) -> list[str]:
+    """The canonical command that launches the daemon (ADR-0012/0014, revised).
 
-    ``/usr/bin/open`` asks LaunchServices to launch the bundle — the same code
-    path as a Finder launch, so TCC attribution lands on the bundle identity,
-    and LaunchServices will not start a second instance of an already-running
-    app (a direct exec of the bundle binary could double-launch the daemon).
-    ``-g`` keeps the launch in the background. Used by the LaunchAgent
-    ``ProgramArguments`` (both wiring sites); install.sh's first launch
-    mirrors it in shell.
+    Launches the uv-installed *launcher* **directly** — NOT via ``/usr/bin/open``
+    on the ``.app``. Real-Mac QA (#54) found that launching through the bundle
+    makes the daemon process inherit the bundle's LaunchServices identity
+    (``NSRunningApplication.bundleIdentifier == com.dictatem.daemon``), and
+    macOS then silently refuses to render a menu-bar status item for it — the
+    tray icon never appeared. A directly-launched (non-bundle) process shows it
+    fine. The ``.app`` no longer launches the daemon; it survives only as the
+    icon/identity shell and the future home of a signed bundle (#91). Used by
+    the LaunchAgent ``ProgramArguments``; install.sh's first launch mirrors it
+    in shell.
 
     ``as_posix()`` (identical to ``str()`` on macOS) keeps the rendering
     deterministic when the pure function is unit-tested on Windows.
     """
-    return ["/usr/bin/open", "-g", bundle_path.as_posix()]
+    return [launcher.as_posix()]
 
 
 def render_exec_shim(launcher: Path) -> str:
@@ -183,7 +186,7 @@ def install_app_bundle(
         version=version,
     )
     registrar = LaunchAgentRegistrar(
-        agents_dir=agents_dir, program_arguments=launch_arguments(bundle)
+        agents_dir=agents_dir, program_arguments=launch_arguments(launcher)
     )
     refreshed = registrar.is_enabled()
     if refreshed:
