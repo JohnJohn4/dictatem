@@ -49,3 +49,19 @@ def set_accessory_activation_policy() -> None:
         logger.warning(
             "Could not set macOS accessory activation policy", exc_info=True
         )
+
+
+def activate_app() -> None:
+    """Bring the accessory app to the front so a modal dialog grabs focus.
+
+    Accessory apps (see :func:`set_accessory_activation_policy`) are never
+    auto-activated, so a ``QMessageBox`` — our guided permission prompts —
+    can open behind the frontmost app and be dismissed on the first click
+    elsewhere (observed in QA, #57). Call this right before showing one.
+    Best-effort. ``activateIgnoringOtherApps_`` is soft-deprecated but remains
+    the working way to front an accessory app on current macOS.
+    """
+    try:
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+    except Exception:
+        logger.warning("Could not bring the app to the front", exc_info=True)
