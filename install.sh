@@ -64,11 +64,13 @@ fi
 requirement="dictatem[runtime] @ ${source_url}"
 
 # Pin the tool environment to a uv-MANAGED CPython instead of whatever Python
-# the Mac happens to have: real-Mac QA (#61) showed a discovered system Python
-# defeating the .app identity shell — Rosetta-mislaunched x86_64 slice, TCC
-# grants attributed to "python3.14" instead of "Dictatem". Full story in
-# ADR-0014's amendment. Keep the version inside CI's tested matrix; the env
-# override mirrors DICTATEM_REF for QA.
+# the Mac happens to have. Real-Mac QA (#61) showed a discovered python.org
+# universal2 build Rosetta-mislaunching its x86_64 slice and crashing on the
+# arm64-only wheels; a managed single-arch arm64 build fixes that boot crash.
+# (It does NOT fix the TCC label — the daemon still shows as "python3.12" in
+# the privacy panes; a clean "Dictatem" identity needs a signed bundle and is
+# an accepted limitation, see ADR-0014's amendment / #91.) Keep the version
+# inside CI's tested matrix; the env override mirrors DICTATEM_REF for QA.
 DICTATEM_PYTHON="${DICTATEM_PYTHON:-3.12}"
 
 echo "Installing ${requirement} (on managed CPython ${DICTATEM_PYTHON}) ..."

@@ -84,14 +84,41 @@ instead of provisioning its own:
   Python rocket, and a Dock tile appeared despite `LSUIElement` — the
   interposed stub's plist won. No plist key in our bundle can prevent this.
 
-Both failures share one root: the shell only anchors identity if *the process
-it execs has no competing identity*. So `install.sh` pins the tool environment
-to a **uv-managed CPython** (`--managed-python --python <CI-tested version>`)
-— a plain, single-arch, stub-free binary — making interpreter discovery, and
-with it both failure modes, impossible on the supported install path. A
-manually-run `--install-macos-app` against an arbitrary interpreter still gets
-the Rosetta guard, but framework-build identity theft remains out of scope:
-the supported answer is the pinned install.
+These two failures split cleanly once tested on a real Mac (#61), and only one
+is fixable within this ADR's no-signing posture.
+
+The **Rosetta mislaunch** is fixed: `install.sh` pins the tool environment to a
+**uv-managed CPython** (`--managed-python --python <CI-tested version>`) — a
+plain, single-arch arm64 binary with no x86_64 slice to mislaunch — and the
+shim's `proc_translated` re-exec guard backs it up for a manually-run
+`--install-macos-app` against some other universal interpreter. QA confirmed the
+boot crash is gone: the daemon launches, the menu-bar icon appears, no Intel
+warning.
+
+The **identity** problem is NOT fixed by the pin, and QA proved it: the managed
+interpreter still presents to TCC as `python3.12` (generic icon) in the
+Accessibility and Input Monitoring panes — not "Dictatem". The cause is deeper
+than which interpreter runs: TCC attributes Accessibility / Input Monitoring to
+the **binary that calls the gated API**, keyed on its code signature, and the
+daemon's calls come from the Python interpreter the `.app` shim execs into. A
+locally-generated, unsigned (or ad-hoc-signed) shell-shim bundle cannot override
+that — ad-hoc `codesign --force --deep -s -` on the bundle was tested on the QA
+Mac and the panes still read `python3.12`. The only thing that makes the calling
+process present as "Dictatem" is a **code-signed bundle that owns the
+interpreter** (the Developer-ID-signed, py2app-style bundle Espanso and
+Hammerspoon ship) — exactly the signing tax ADR-0011 rejected, and even those
+tools have TCC-identity pain on macOS 26.
+
+**Accepted limitation (this revises the ADR's headline claim).** Dictatem ships
+with the `python3.12` label rather than holding go-live for a signed bundle. The
+grant is functional and, because the pinned managed interpreter is byte-stable
+across `uv tool upgrade`, it *survives upgrades* — only the displayed name and
+icon are wrong. An ad-hoc local bundle would be worse (content-hash identity
+churns on regeneration, breaking the grant every upgrade). A clean
+Developer-ID-signed bundle is tracked as a future enhancement (#91). The `.app`
+shell still earns its place even with the wrong label: a Spotlight/Finder launch
+target, single-instance launch via LaunchServices, `LSUIElement`, and the
+autostart identity the LaunchAgent launches.
 
 Rejected deeper fix: a tiny native Mach-O trampoline as `Contents/MacOS` would
 give LaunchServices a real architecture header, but compiling one at install
