@@ -106,17 +106,59 @@ fi
 # start-at-login LaunchAgent's launch command.
 dictatem --install-macos-app
 
-# --- 4. Launch the daemon once ----------------------------------------------
-# Launch the daemon binary DIRECTLY (detached), NOT via `open` on the .app.
-# Real-Mac QA (#54) found that launching through the bundle makes the daemon
-# inherit the bundle's LaunchServices identity, and macOS then refuses to
-# render its menu-bar status item — the tray icon never appears. A direct
-# launch shows it. (TCC permission grants bind to the interpreter either way;
-# the .app does not change that — ADR-0014 / #91.) nohup + & so the piped
-# `curl | sh` returns instead of blocking on the long-lived daemon.
+# --- 4. Start the daemon under launchd --------------------------------------
+# The daemon must run under launchd — NOT via `open` on the .app, and NOT via a
+# plain Terminal launch. Real-Mac QA (#54/#56/#59) pinned down two constraints:
+#   * Launching through the .app makes the daemon inherit the bundle's
+#     LaunchServices identity, and macOS then refuses to render its menu-bar
+#     status item (the tray icon never appears).
+#   * A Terminal-launched daemon (e.g. `nohup dictatem &` from this `curl | sh`)
+#     makes macOS attribute the daemon's permission-gated actions — the hotkey
+#     CGEventTap and the synthetic paste — to the *responsible* process,
+#     Terminal, which is not granted Input Monitoring / Accessibility. The
+#     hotkey and paste then silently die.
+# launchd is the responsible process for a LaunchAgent, so the grants bound to
+# the interpreter apply, and a launchd launch is a direct (non-bundle) launch
+# so the status item shows. (Grants bind to the interpreter regardless; the
+# .app does not change that — ADR-0014 / #91.)
 echo "Launching Dictatem..."
 launcher="$(command -v dictatem || echo "$HOME/.local/bin/dictatem")"
-nohup "$launcher" >/dev/null 2>&1 &
+uid="$(id -u)"
+plist="$HOME/Library/LaunchAgents/com.dictatem.daemon.plist"
+
+# Stop any already-running daemon so a re-install/upgrade restarts cleanly
+# (until the app-level single-instance guard lands, #92).
+launchctl bootout "gui/$uid/com.dictatem.daemon" 2>/dev/null || true
+pkill -f "$launcher" 2>/dev/null || true
+
+# The daemon owns autostart (ADR-0012): it writes the LaunchAgent on its first
+# run by reconciling config.startup.autostart (default on). On a fresh install
+# the plist does not exist yet, so a brief direct run registers it; we stop that
+# Terminal-parented instance once the plist appears and hand off to launchd.
+if [ ! -f "$plist" ]; then
+    "$launcher" >/dev/null 2>&1 &
+    boot_pid=$!
+    i=0
+    while [ ! -f "$plist" ] && [ "$i" -lt 40 ]; do
+        sleep 0.25
+        i=$((i + 1))
+    done
+    kill "$boot_pid" 2>/dev/null || true
+    sleep 1
+fi
+
+if [ -f "$plist" ]; then
+    # `if !` keeps a bootstrap failure from tripping `set -e`; fall back to a
+    # direct run so the install still leaves a daemon up.
+    if ! launchctl bootstrap "gui/$uid" "$plist"; then
+        nohup "$launcher" >/dev/null 2>&1 &
+    fi
+else
+    # Autostart is off (no plist written) — fall back to a direct run. The
+    # hotkey/paste will not work until the daemon runs under launchd; re-enable
+    # "Start at Login" from the tray to fix that.
+    nohup "$launcher" >/dev/null 2>&1 &
+fi
 
 # --- 5. Permissions + optional Ollama pointers ------------------------------
 echo ""

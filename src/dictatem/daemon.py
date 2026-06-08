@@ -1052,11 +1052,15 @@ def _run_install_macos_app() -> None:
             "Refreshed the start-at-login LaunchAgent (launches the daemon "
             "directly)."
         )
-    # NB: launch the daemon directly, never via the .app — launching through
-    # the bundle suppresses the menu-bar status item (#54). The .app is the
-    # icon/identity shell only.
-    print("Dictatem runs in the menu bar and starts at login. To start it now, "
-          "run: dictatem")
+    # The daemon must run under launchd, never via the .app (its status item is
+    # suppressed when bundle-associated, #54) and never straight from a terminal
+    # (macOS attributes its hotkey/paste permissions to the terminal, #56/#59).
+    # install.sh starts it via launchctl; otherwise it starts at the next login.
+    print(
+        "Dictatem runs in the menu bar and starts at login. It must run under "
+        "launchd — do not launch it straight from a terminal (its hotkey and "
+        "paste permissions would be attributed to the terminal)."
+    )
 
 
 def _platform_autostart_registrar() -> AutostartRegistrar | None:

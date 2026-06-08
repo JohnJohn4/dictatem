@@ -52,3 +52,14 @@ shape. Default stays `True`.
   win32 Run key, and `launchd` itself provides the single-instance guarantee
   the `open`-launch was relied on for. The `.app` survives only as the icon /
   identity shell and the future home of a signed bundle (#91).
+
+  A corollary (#56/#59): the daemon must run **under `launchd`**, not from a
+  terminal. macOS attributes a process's permission-gated actions — the hotkey
+  CGEventTap receiving events, and the synthetic paste's `CGEventPost` — to its
+  *responsible* process. A daemon launched from a terminal (`nohup dictatem &`)
+  is attributed to the **terminal**, which holds no Input-Monitoring /
+  Accessibility grant, so the hotkey and paste silently die even though the
+  interpreter itself is granted; `launchd` is its own responsible process, so
+  the grant applies. So `install.sh` bootstraps the daemon through
+  `launchctl` (registering the plist via a brief direct run first, since the
+  daemon writes it on first launch), rather than launching it inline.
