@@ -1250,6 +1250,16 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 
     app = QApplication(sys.argv)
 
+    if sys.platform == "darwin":
+        # Force the menu-bar accessory policy on the running process: the .app's
+        # LSUIElement does not apply because the daemon runs as the interpreter
+        # the shim execs into, not as the bundle (#61). Without this, an .app
+        # launch shows a Dock icon and NO top-right status item. Lazy import —
+        # the module binds AppKit and is macOS-only.
+        from dictatem.macapp.activation import set_accessory_activation_policy
+
+        set_accessory_activation_policy()
+
     audio_capture = SoundDeviceCapture(config)
 
     backend = FasterWhisperBackend(

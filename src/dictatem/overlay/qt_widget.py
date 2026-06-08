@@ -8,6 +8,7 @@ or in the test suite.  It is the thin rendering adapter that subscribes to
 from __future__ import annotations
 
 import math
+import sys
 from typing import TYPE_CHECKING
 
 from dictatem.overlay.state import (
@@ -47,6 +48,12 @@ class QtOverlayWidget(QWidget):
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        if sys.platform == "darwin":
+            # A Qt.Tool window is hidden whenever its app is not frontmost, and
+            # our daemon is a menu-bar accessory that never is — so on macOS the
+            # pill never appeared in QA (#56). This attribute keeps tool windows
+            # visible across app deactivation; it is a no-op on other platforms.
+            self.setAttribute(Qt.WidgetAttribute.WA_MacAlwaysShowToolWindow)
         self.setFixedSize(PILL_WIDTH, PILL_HEIGHT)
 
         self._timer = QTimer(self)
