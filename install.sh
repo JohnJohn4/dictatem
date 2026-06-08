@@ -3,7 +3,7 @@
 #
 # Run it piped, straight from raw GitHub:
 #
-#     curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.3.0/install.sh | sh
+#     curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.4.0/install.sh | sh
 #
 # It is a thin uv-tool provisioning script (ADR-0011), the macOS mirror of
 # install.ps1: it installs `uv` if absent, `uv tool install`s Dictatem from
@@ -18,7 +18,7 @@
 # and does NOT install, start, or pull Ollama (ADR-0008) — it only prints a
 # pointer to the README Ollama/Transform setup.
 #
-# This installs Dictatem pinned to the v0.3.0 release (the DICTATEM_TAG line
+# This installs Dictatem pinned to the v0.4.0 release (the DICTATEM_TAG line
 # below) for an auditable, reproducible install. It installs from the release
 # *tarball* over HTTPS, NOT a git+ URL, so a clean Mac needs no git — a git+
 # URL would trigger the Command Line Tools install prompt (#71, ADR-0015).
@@ -46,7 +46,7 @@ else
 fi
 
 # --- 2. Install Dictatem from the GitHub release tarball --------------------
-DICTATEM_TAG="v0.3.0"
+DICTATEM_TAG="v0.4.0"
 
 if [ -n "${DICTATEM_REF:-}" ]; then
     echo "DICTATEM_REF=${DICTATEM_REF} — installing from that ref, refreshing uv's copy of it."
