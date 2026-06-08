@@ -1,7 +1,7 @@
 [project]
 name = "dictatem"
-version = "0.3.0"
-description = "Local GPU-powered voice dictation daemon for Windows"
+version = "0.4.0"
+description = "Local voice dictation daemon for Windows and macOS"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.26",
@@ -70,6 +70,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "TC"]
 "src/dictatem/paste/mac_keystroke.py" = ["E402"]
 "src/dictatem/paste/mac_foreground.py" = ["E402"]
 "src/dictatem/permissions/mac_tcc.py" = ["E402"]
+"src/dictatem/macapp/activation.py" = ["E402"]
 
 [tool.pyright]
 pythonVersion = "3.11"
@@ -90,5 +91,6 @@ exclude = [
     "src/dictatem/paste/mac_foreground.py",
     "src/dictatem/permissions/mac_tcc.py",
     "src/dictatem/permissions/qt_dialog.py",
+    "src/dictatem/macapp/activation.py",
 ]
 typeCheckingMode = "standard"

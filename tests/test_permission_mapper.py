@@ -105,6 +105,13 @@ class TestCopy:
         assert "System Settings" in message
         assert "turn on Dictatem" in message
 
+    def test_notes_the_entry_is_listed_as_python(self, message: str) -> None:
+        # Until the signed bundle (#91) gives Dictatem its own identity, the
+        # running process is the interpreter, so the System Settings row is
+        # named "Python", not "Dictatem". The copy must say so, or the user
+        # hunts for a "Dictatem" row that isn't there (real-Mac QA #57).
+        assert "Python" in message
+
     def test_never_claims_dictatem_grants_anything(self, message: str) -> None:
         lowered = message.lower()
         for forbidden in (

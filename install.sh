@@ -3,7 +3,7 @@
 #
 # Run it piped, straight from raw GitHub:
 #
-#     curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.3.0/install.sh | sh
+#     curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.4.0/install.sh | sh
 #
 # It is a thin uv-tool provisioning script (ADR-0011), the macOS mirror of
 # install.ps1: it installs `uv` if absent, `uv tool install`s Dictatem from
@@ -18,7 +18,7 @@
 # and does NOT install, start, or pull Ollama (ADR-0008) — it only prints a
 # pointer to the README Ollama/Transform setup.
 #
-# This installs Dictatem pinned to the v0.3.0 release (the DICTATEM_TAG line
+# This installs Dictatem pinned to the v0.4.0 release (the DICTATEM_TAG line
 # below) for an auditable, reproducible install. It installs from the release
 # *tarball* over HTTPS, NOT a git+ URL, so a clean Mac needs no git — a git+
 # URL would trigger the Command Line Tools install prompt (#71, ADR-0015).
@@ -46,7 +46,7 @@ else
 fi
 
 # --- 2. Install Dictatem from the GitHub release tarball --------------------
-DICTATEM_TAG="v0.3.0"
+DICTATEM_TAG="v0.4.0"
 
 if [ -n "${DICTATEM_REF:-}" ]; then
     echo "DICTATEM_REF=${DICTATEM_REF} — installing from that ref, refreshing uv's copy of it."
@@ -63,9 +63,28 @@ fi
 # requirements for the same package and abort.
 requirement="dictatem[runtime] @ ${source_url}"
 
-echo "Installing ${requirement} ..."
+# Pin the tool environment to a uv-MANAGED CPython instead of whatever Python
+# the Mac happens to have. Real-Mac QA (#61) showed a discovered python.org
+# universal2 build Rosetta-mislaunching its x86_64 slice and crashing on the
+# arm64-only wheels; a managed single-arch arm64 build fixes that boot crash.
+# (It does NOT fix the TCC label — the daemon still shows as "python3.12" in
+# the privacy panes; a clean "Dictatem" identity needs a signed bundle and is
+# an accepted limitation, see ADR-0014's amendment / #91.) Keep the version
+# inside CI's tested matrix; the env override mirrors DICTATEM_REF for QA.
+DICTATEM_PYTHON="${DICTATEM_PYTHON:-3.12}"
+
+echo "Installing ${requirement} (on managed CPython ${DICTATEM_PYTHON}) ..."
 # $uv_flags is deliberately unquoted: empty by default, two words on override.
-uv tool install $uv_flags "$requirement"
+# The || block exists because --managed-python needs a recent uv: step 1 only
+# installs uv when ABSENT, and a stale pre-existing uv fails on the unknown
+# flag — a piped user never sees source comments, so print the remedy.
+uv tool install $uv_flags --managed-python --python "$DICTATEM_PYTHON" "$requirement" || {
+    echo ""
+    echo "uv tool install failed. If the error above calls '--managed-python'"
+    echo "unexpected, your pre-existing uv is too old: update it ('uv self update',"
+    echo "or 'brew upgrade uv' if it came from Homebrew) and re-run this installer."
+    exit 1
+}
 
 # Make the freshly installed `dictatem` launcher usable in THIS session — uv
 # only updates PATH for new sessions. `uv tool update-shell` ensures the tool
@@ -87,12 +106,83 @@ fi
 # start-at-login LaunchAgent's launch command.
 dictatem --install-macos-app
 
-# --- 4. Launch the daemon once ----------------------------------------------
-# Launch through the .app with /usr/bin/open, NOT by running `dictatem` from
-# this shell: macOS attributes a terminal-spawned process's permission prompts
-# to the *terminal app*, which would defeat the identity shell entirely.
+# --- 4. Start the daemon under launchd --------------------------------------
+# The daemon must run under launchd — NOT via `open` on the .app, and NOT via a
+# plain Terminal launch. Real-Mac QA (#54/#56/#59) pinned down two constraints:
+#   * Launching through the .app makes the daemon inherit the bundle's
+#     LaunchServices identity, and macOS then refuses to render its menu-bar
+#     status item (the tray icon never appears).
+#   * A Terminal-launched daemon (e.g. `nohup dictatem &` from this `curl | sh`)
+#     makes macOS attribute the daemon's permission-gated actions — the hotkey
+#     CGEventTap and the synthetic paste — to the *responsible* process,
+#     Terminal, which is not granted Input Monitoring / Accessibility. The
+#     hotkey and paste then silently die.
+# launchd is the responsible process for a LaunchAgent, so the grants bound to
+# the interpreter apply, and a launchd launch is a direct (non-bundle) launch
+# so the status item shows. (Grants bind to the interpreter regardless; the
+# .app does not change that — ADR-0014 / #91.)
 echo "Launching Dictatem..."
-open -g "$HOME/Applications/Dictatem.app"
+launcher="$(command -v dictatem || echo "$HOME/.local/bin/dictatem")"
+uid="$(id -u)"
+# launchctl target grammar differs by subcommand: bootout/print/kickstart take
+# a SERVICE target (gui/<uid>/<label>), but bootstrap takes the DOMAIN target
+# (gui/<uid>) followed by the plist path. Passing the service target to
+# bootstrap makes every retry fail and fall through to the broken
+# terminal-launch fallback (hotkey + paste then silently die) — fresh-Mac QA
+# caught exactly this on a clean install (#56/#59).
+domain="gui/$uid"
+service="gui/$uid/com.dictatem.daemon"
+plist="$HOME/Library/LaunchAgents/com.dictatem.daemon.plist"
+
+# Stop any running daemon (launchd-managed or a stray direct run) so a
+# re-install/upgrade restarts cleanly (until the single-instance guard, #92),
+# then WAIT for the launchd job to finish unloading: bootout is asynchronous,
+# so bootstrapping immediately would race it, fail, and fall through to the
+# broken terminal-launch fallback.
+launchctl bootout "$service" 2>/dev/null || true
+pkill -f "$launcher" 2>/dev/null || true
+i=0
+while launchctl print "$service" >/dev/null 2>&1 && [ "$i" -lt 40 ]; do
+    sleep 0.25
+    i=$((i + 1))
+done
+
+# Register the LaunchAgent if it does not exist yet: the daemon writes it on its
+# first run by reconciling config.startup.autostart (default on, ADR-0012). A
+# brief direct run is enough; stop it once the plist appears. The wait is
+# generous — a cold first run imports the ML/Qt stack before reconciling.
+if [ ! -f "$plist" ]; then
+    "$launcher" >/dev/null 2>&1 &
+    boot_pid=$!
+    i=0
+    while [ ! -f "$plist" ] && [ "$i" -lt 160 ]; do
+        sleep 0.25
+        i=$((i + 1))
+    done
+    kill "$boot_pid" 2>/dev/null || true
+    wait "$boot_pid" 2>/dev/null || true
+fi
+
+# Start the daemon under launchd (see the comment above for why a terminal
+# launch breaks the hotkey/paste). bootstrap loads the plist and RunAtLoad
+# starts it; retry a few times in case the unload has not fully settled.
+if [ -f "$plist" ]; then
+    i=0
+    while ! launchctl bootstrap "$domain" "$plist" 2>/dev/null && [ "$i" -lt 12 ]; do
+        sleep 0.5
+        i=$((i + 1))
+    done
+    if ! launchctl print "$service" >/dev/null 2>&1; then
+        # launchd would not take it — direct-run fallback so the install still
+        # leaves a daemon up (hotkey/paste limited until a launchd start).
+        nohup "$launcher" >/dev/null 2>&1 &
+    fi
+else
+    # Autostart is off (no plist written) — direct-run fallback. The hotkey and
+    # paste will not work until the daemon runs under launchd; re-enable "Start
+    # at Login" from the tray to fix that.
+    nohup "$launcher" >/dev/null 2>&1 &
+fi
 
 # --- 5. Permissions + optional Ollama pointers ------------------------------
 echo ""

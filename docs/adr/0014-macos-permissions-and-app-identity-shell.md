@@ -61,3 +61,83 @@ relaunch. It never tries to grant on the user's behalf.
   TCC trusts), not the bare venv binary, so a login-started daemon keeps its
   granted permissions — via `/usr/bin/open -g` (see ADR-0012's consequences for
   the launch-mechanism rationale).
+
+## Amendment (2026-06, real-Mac QA of #61): the shell needs a pinned interpreter
+
+QA on macOS 26 (arm64) found two ways the identity shell silently loses to the
+interpreter underneath it when `uv tool install` discovers a *system* Python
+instead of provisioning its own:
+
+- **Rosetta mislaunch.** A bundle whose `Contents/MacOS` executable is a shell
+  script has no Mach-O header for LaunchServices to read architectures from,
+  and LS launched the bundle under Rosetta (x86_64). `LSRequiresNativeExecution`,
+  `LSArchitecturePriority` and `lsregister -f` re-registration were all ignored
+  for the script-only bundle. The discovered python.org interpreter was a
+  `universal2` binary, so the translated shim handed it its x86_64 slice and
+  the daemon died importing arm64-only wheels — before logging. The shim now
+  carries a `sysctl.proc_translated` guard that re-execs itself natively via
+  `arch -arm64` (a no-op on Intel Macs, same-PID `exec` throughout).
+- **Identity theft by the framework build.** python.org framework builds run
+  through their embedded `Python.app` stub, so even when launched *through*
+  `Dictatem.app`, the process TCC saw was the interpreter's own bundle: the
+  privacy panes seeded "python3.14" (generic icon), the guided dialog wore the
+  Python rocket, and a Dock tile appeared despite `LSUIElement` — the
+  interposed stub's plist won. No plist key in our bundle can prevent this.
+
+These two failures split cleanly once tested on a real Mac (#61), and only one
+is fixable within this ADR's no-signing posture.
+
+The **Rosetta mislaunch** is fixed: `install.sh` pins the tool environment to a
+**uv-managed CPython** (`--managed-python --python <CI-tested version>`) — a
+plain, single-arch arm64 binary with no x86_64 slice to mislaunch — and the
+shim's `proc_translated` re-exec guard backs it up for a manually-run
+`--install-macos-app` against some other universal interpreter. QA confirmed the
+boot crash is gone: the daemon launches, the menu-bar icon appears, no Intel
+warning.
+
+The **identity** problem is NOT fixed by the pin, and QA proved it: the managed
+interpreter still presents to TCC as `python3.12` (generic icon) in the
+Accessibility and Input Monitoring panes — not "Dictatem". The cause is deeper
+than which interpreter runs: TCC attributes Accessibility / Input Monitoring to
+the **binary that calls the gated API**, keyed on its code signature, and the
+daemon's calls come from the Python interpreter the `.app` shim execs into. A
+locally-generated, unsigned (or ad-hoc-signed) shell-shim bundle cannot override
+that — ad-hoc `codesign --force --deep -s -` on the bundle was tested on the QA
+Mac and the panes still read `python3.12`. The only thing that makes the calling
+process present as "Dictatem" is a **code-signed bundle that owns the
+interpreter** (the Developer-ID-signed, py2app-style bundle Espanso and
+Hammerspoon ship) — exactly the signing tax ADR-0011 rejected, and even those
+tools have TCC-identity pain on macOS 26.
+
+**Accepted limitation (this revises the ADR's headline claim).** Dictatem ships
+with the `python3.12` label rather than holding go-live for a signed bundle. The
+grant is functional and, because the pinned managed interpreter is byte-stable
+across `uv tool upgrade`, it *survives upgrades* — only the displayed name and
+icon are wrong. An ad-hoc local bundle would be worse (content-hash identity
+churns on regeneration, breaking the grant every upgrade). A clean
+Developer-ID-signed bundle is tracked as a future enhancement (#91).
+
+A second QA finding (#54) forced a further retreat: the `.app` can no longer
+even *launch* the daemon. Launching through the bundle makes the daemon process
+inherit the bundle's LaunchServices identity, and macOS then silently refuses
+to render its **menu-bar status item** — the tray icon never appeared under any
+`.app`/`open`/Spotlight/login launch, while a directly-launched (non-bundle)
+process showed it fine (proven with a native `NSStatusItem`, so it is not a Qt
+bug). So every launch path now runs the uv-installed launcher **directly** (see
+ADR-0012's revised consequence); the menu-bar accessory behaviour that
+`LSUIElement` was meant to provide is set on the running process instead
+(`TransformProcessType` → UIElement, in `macapp.activation`). The `.app` is thus
+reduced to just the generated icon and the placeholder for the eventual signed
+bundle (#91) — it no longer launches anything and is not the recommended launch
+path. This means `--install-macos-app` keeps generating it, but `install.sh` and
+the LaunchAgent both bypass it.
+
+Rejected deeper fix: a tiny native Mach-O trampoline as `Contents/MacOS` would
+give LaunchServices a real architecture header, but compiling one at install
+time triggers the Xcode CLT prompt ADR-0015 exists to avoid, and shipping a
+prebuilt binary is the distributed-artifact posture ADR-0011 rejects (ad-hoc
+`codesign` on the script adds no arch header and fixes nothing here). The
+guard hardcodes `arch -arm64` because no truthful native-arch query exists
+from inside a translated process — `uname -m` and `hw.machine` both report
+x86_64 under Rosetta — and `proc_translated=1` today only ever means
+x86_64-on-arm64.

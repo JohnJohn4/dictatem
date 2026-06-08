@@ -1,6 +1,6 @@
 # dictatem
 
-Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, and your words are transcribed and pasted into whatever window has focus — instantly, offline, with no cloud dependency.
+Local, offline voice dictation for **Windows** and **macOS**. Press a global hotkey, speak, and your words are transcribed and pasted into whatever window has focus — instantly, with no cloud dependency. Transcription is GPU-accelerated on Windows (NVIDIA) and runs on the CPU on macOS.
 
 ## Features
 
@@ -29,33 +29,33 @@ Local GPU-powered voice dictation for Windows 11. Press a global hotkey, speak, 
 
 ### Install on Windows (recommended)
 
-Run this in PowerShell. It installs [`uv`](https://docs.astral.sh/uv/) if needed, auto-detects whether you have an NVIDIA GPU (picking the CUDA or CPU-lean dependency set accordingly; on Windows on ARM it installs under x64 emulation), installs Dictatem **pinned to the v0.3.0 release**, and launches it to the system tray:
+Run this in PowerShell. It installs [`uv`](https://docs.astral.sh/uv/) if needed, auto-detects whether you have an NVIDIA GPU (picking the CUDA or CPU-lean dependency set accordingly; on Windows on ARM it installs under x64 emulation), installs Dictatem **pinned to the v0.4.0 release**, and launches it to the system tray:
 
 ```powershell
-irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.3.0/install.ps1 | iex
+irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.4.0/install.ps1 | iex
 ```
 
-Piping a script from the internet into `iex` runs it immediately. If you'd rather read it first, open [that URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.3.0/install.ps1) in your browser and run it once you're satisfied.
+Piping a script from the internet into `iex` runs it immediately. If you'd rather read it first, open [that URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.4.0/install.ps1) in your browser and run it once you're satisfied.
 
 **Forcing CPU or GPU.** The script auto-detects an NVIDIA GPU; to override, set `DICTATEM_GPU` before running — `$env:DICTATEM_GPU='cpu'` (CPU-lean) or `$env:DICTATEM_GPU='gpu'` (CUDA). This only chooses the *dependency set*, not the runtime device. On a machine that has an NVIDIA GPU, Dictatem still transcribes on the GPU by default — so forcing `cpu` there installs the lean set but the daemon will still try CUDA and fail to load the model (the CUDA libraries aren't installed). Force `cpu` only on a genuinely GPU-less machine, or also set `device = "cpu"` in your config.
 
-**Updating.** Re-run the one-liner with a newer version tag in the URL (e.g. `.../v0.3.0/install.ps1`); see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest) for the current tag.
+**Updating.** Re-run the one-liner with a newer version tag in the URL (e.g. `.../v0.4.0/install.ps1`); see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest) for the current tag.
 
 The script never installs or starts Ollama and never downloads a Whisper model. The model lazy-downloads on first dictation, so your **first dictation after launch** (or after the idle-unload timer frees VRAM) pauses a few seconds while the model loads — subsequent dictations are immediate. [Trigger Words](#trigger-words) stay off until you set Ollama up yourself ([Ollama / Transform setup](#ollama--transform-setup)).
 
 ### Install on macOS
 
-> **Note:** macOS support ships with the next tagged release — the pinned one-liner below only goes live then (v0.3.0 predates `install.sh`, so its URL does not resolve yet). To try macOS support today, run the script from `main` with a ref override: `curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/main/install.sh | DICTATEM_REF=main sh`.
+> **macOS support is new (initial release).** The core flow — the one-line install, the global hotkey, transcription, paste, the menu-bar icon, and start-at-login under launchd — is validated on Apple Silicon (macOS 26). A few secondary flows are still being confirmed on-device and are tracked in [#94](https://github.com/JohnJohn4/dictatem/issues/94) (tap/Esc hotkey semantics, app-to-app paste, login persistence, uninstall, Trigger Words); one known rough edge is [#93](https://github.com/JohnJohn4/dictatem/issues/93) (an occasional missed paste right after a restart). Please file anything you hit.
 
-Run this in Terminal. It installs [`uv`](https://docs.astral.sh/uv/) if needed, installs Dictatem **pinned to the v0.3.0 release** (the CPU dependency set — Macs have no CUDA), generates the `~/Applications/Dictatem.app` launcher, and starts it in the menu bar:
+Run this in Terminal. It installs [`uv`](https://docs.astral.sh/uv/) if needed, installs Dictatem **pinned to the v0.4.0 release** (the CPU dependency set — Macs have no CUDA), generates the `~/Applications/Dictatem.app` launcher, and starts it in the menu bar:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.3.0/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.4.0/install.sh | sh
 ```
 
-Piping a script from the internet into `sh` runs it immediately. If you'd rather read it first, open [that URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.3.0/install.sh) in your browser and run it once you're satisfied.
+Piping a script from the internet into `sh` runs it immediately. If you'd rather read it first, open [that URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.4.0/install.sh) in your browser and run it once you're satisfied.
 
-**The `Dictatem.app` matters.** macOS binds permission grants to the app that asks for them. The generated, unsigned `~/Applications/Dictatem.app` exists so you grant "**Dictatem**" — not "Python" — and so the grants survive upgrades (see [ADR-0014](docs/adr/0014-macos-permissions-and-app-identity-shell.md); it is generated locally by the installer, so it never hits Gatekeeper). **Always launch Dictatem through the app** — Spotlight "Dictatem", or `open -g ~/Applications/Dictatem.app`. Running `dictatem` straight from a terminal works, but macOS then attributes the permission prompts to your *terminal app* instead.
+**How Dictatem launches (and the permission identity).** The installer registers a per-user **LaunchAgent** and starts the daemon through **launchd**, which also auto-starts it at login — you normally never launch it by hand. If you need to restart it, run `launchctl kickstart -k gui/$(id -u)/com.dictatem.daemon`. **Do not** start it from Spotlight or by opening `~/Applications/Dictatem.app` (macOS then suppresses the menu-bar icon), and **do not** run `dictatem` from a bare terminal (macOS attributes the Accessibility / Input Monitoring grants to your *terminal app*, so the hotkey and paste silently fail). One heads-up on the grant identity: because the daemon runs as the uv-managed CPython interpreter, the System Settings privacy panes list the entry as **"python3.12"**, not "Dictatem" — grant `python3.12` there. A signed, "Dictatem"-labelled bundle that fixes the label (and the Dock/identity) is planned ([#91](https://github.com/JohnJohn4/dictatem/issues/91), [ADR-0014](docs/adr/0014-macos-permissions-and-app-identity-shell.md)).
 
 **Permissions.** On first launch Dictatem walks you through the two grants macOS makes you flip by hand — **Accessibility** (typing/pasting the dictated text) and **Input Monitoring** (hearing the global hotkey) — with dialogs that deep-link into the exact System Settings panes; each grant takes effect after a one-time relaunch. **Microphone** is the standard macOS prompt on your first dictation. Until the grants are in, the daemon still runs — record from the tray menu.
 

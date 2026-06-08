@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 from typing import TYPE_CHECKING
 
 from PySide6.QtWidgets import QMessageBox
@@ -55,6 +56,15 @@ def show_permission_dialogs(guidances: Sequence[PermissionGuidance]) -> None:
             "Open System Settings", QMessageBox.ButtonRole.AcceptRole
         )
         box.addButton("Later", QMessageBox.ButtonRole.RejectRole)
+        if sys.platform == "darwin":
+            # The daemon is a menu-bar accessory app, which macOS never
+            # auto-activates — without this the dialog opens behind the
+            # frontmost app and vanishes on the first click elsewhere (#57).
+            from dictatem.macapp.activation import activate_app
+
+            activate_app()
+        box.raise_()
+        box.activateWindow()
         box.exec()
         if box.clickedButton() is open_button:
             _open_settings(guidance.settings_url)

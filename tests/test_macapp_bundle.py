@@ -77,15 +77,13 @@ class TestResolveLauncher:
 
 
 class TestLaunchArguments:
-    """The canonical .app launch command (ADR-0012/0014): open, backgrounded."""
+    """The canonical launch command (ADR-0012/0014, revised): the daemon
+    launcher run DIRECTLY, never via the .app — launching through the bundle
+    suppresses the menu-bar status item (#54)."""
 
-    def test_launches_via_open_in_background(self) -> None:
-        args = launch_arguments(Path("/Users/me/Applications/Dictatem.app"))
-        assert args == [
-            "/usr/bin/open",
-            "-g",
-            "/Users/me/Applications/Dictatem.app",
-        ]
+    def test_launches_the_daemon_launcher_directly(self) -> None:
+        args = launch_arguments(Path("/Users/me/.local/bin/dictatem"))
+        assert args == ["/Users/me/.local/bin/dictatem"]
 
 
 class TestRenderExecShim:
@@ -98,6 +96,18 @@ class TestRenderExecShim:
     def test_execs_the_quoted_launcher_forwarding_args(self) -> None:
         shim = render_exec_shim(Path("/Users/me/My Tools/dictatem"))
         assert 'exec "/Users/me/My Tools/dictatem" "$@"' in shim
+
+    def test_reexecs_natively_before_the_launcher_when_translated(self) -> None:
+        # macOS 26 LaunchServices launches script-only bundles under Rosetta
+        # (#61): the shim must detect translation and re-exec itself arm64
+        # BEFORE handing a universal interpreter its x86_64 slice.
+        shim = render_exec_shim(Path("/x/dictatem"))
+        guard = (
+            '[ "$(/usr/sbin/sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]'
+            ' && exec /usr/bin/arch -arm64 /bin/sh "$0" "$@"'
+        )
+        assert guard in shim
+        assert shim.index(guard) < shim.index('exec "/x/dictatem"')
 
     def test_ends_with_a_newline(self) -> None:
         assert render_exec_shim(Path("/x/dictatem")).endswith("\n")
@@ -209,11 +219,14 @@ class TestInstallAppBundle:
         )
         stale.enable()
 
-        bundle, refreshed = self._install(tmp_path, icns)
+        _, refreshed = self._install(tmp_path, icns)
 
         assert refreshed is True
         agent = plistlib.loads((agents_dir / f"{BUNDLE_ID}.plist").read_bytes())
-        assert agent["ProgramArguments"] == launch_arguments(bundle)
+        # Rewritten to launch the daemon launcher directly (#54), not the .app.
+        assert agent["ProgramArguments"] == launch_arguments(
+            Path("/Users/me/.local/bin/dictatem")
+        )
 
 
 class TestRemoveAppBundle:
