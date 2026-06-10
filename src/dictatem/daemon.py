@@ -706,6 +706,7 @@ class DaemonCore:
         titles = {
             FailureReason.NOT_RUNNING: "Ollama Not Running",
             FailureReason.MODEL_MISSING: "Ollama Model Missing",
+            FailureReason.SERVER_ERROR: "Ollama Server Error",
             FailureReason.UNKNOWN: "Transform Failed",
         }
         return titles[reason], message

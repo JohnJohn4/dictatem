@@ -29,17 +29,19 @@ Local, offline voice dictation for **Windows** and **macOS**. Press a global hot
 
 ### Install on Windows (recommended)
 
-Run this in PowerShell. It installs [`uv`](https://docs.astral.sh/uv/) if needed, auto-detects whether you have an NVIDIA GPU (picking the CUDA or CPU-lean dependency set accordingly; on Windows on ARM it installs under x64 emulation), installs Dictatem **pinned to the v0.4.0 release**, and launches it to the system tray:
+Run this in PowerShell. It installs [`uv`](https://docs.astral.sh/uv/) if needed, auto-detects whether you have an NVIDIA GPU (picking the CUDA or CPU-lean dependency set accordingly; on Windows on ARM it installs under x64 emulation), installs Dictatem **pinned to the v0.4.0 release**, and launches it (the tray icon appears a few seconds later):
 
 ```powershell
-irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.4.0/install.ps1 | iex
+Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.4.0/install.ps1 | iex
 ```
 
 Piping a script from the internet into `iex` runs it immediately. If you'd rather read it first, open [that URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.4.0/install.ps1) in your browser and run it once you're satisfied.
 
+**On a managed / work machine.** The leading `Set-ExecutionPolicy -Scope Process Bypass -Force` clears a restrictive PowerShell execution policy **for this window only** — it needs no admin and reverts when you close the terminal, so you don't have to flip the policy by hand. The installer also persists `dictatem` to your **user** `PATH`, so it's found in a brand-new terminal with no manual PATH edit. Everything runs as your own user (no `sudo` / elevation), which is what you want where admin rights are locked down. The tray icon can take a few seconds to appear on first launch while Windows/your AV scans the freshly installed files — that's expected, not a failure.
+
 **Forcing CPU or GPU.** The script auto-detects an NVIDIA GPU; to override, set `DICTATEM_GPU` before running — `$env:DICTATEM_GPU='cpu'` (CPU-lean) or `$env:DICTATEM_GPU='gpu'` (CUDA). This only chooses the *dependency set*, not the runtime device. On a machine that has an NVIDIA GPU, Dictatem still transcribes on the GPU by default — so forcing `cpu` there installs the lean set but the daemon will still try CUDA and fail to load the model (the CUDA libraries aren't installed). Force `cpu` only on a genuinely GPU-less machine, or also set `device = "cpu"` in your config.
 
-**Updating.** Re-run the one-liner with a newer version tag in the URL (e.g. `.../v0.4.0/install.ps1`); see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest) for the current tag.
+**Updating.** Re-run the one-liner with a newer version tag in the URL (e.g. `.../v0.4.0/install.ps1`); see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest) for the current tag. It's safe to re-run while Dictatem is running — the installer stops the old daemon first (so the upgrade isn't blocked by a file lock) and relaunches the new version for you.
 
 The script never installs or starts Ollama and never downloads a Whisper model. The model lazy-downloads on first dictation, so your **first dictation after launch** (or after the idle-unload timer frees VRAM) pauses a few seconds while the model loads — subsequent dictations are immediate. [Trigger Words](#trigger-words) stay off until you set Ollama up yourself ([Ollama / Transform setup](#ollama--transform-setup)).
 
@@ -248,8 +250,33 @@ Trigger Words are enabled by default in config (`[transform].enabled = true`), b
 |---|---|
 | Ollama unreachable at `base_url` (not running, not installed, or wrong URL) | Names `base_url`; says to make sure Ollama is running and points to this setup section |
 | Server running but model not pulled | Run `ollama pull <model>` |
+| HTTP 500 — `llama-server` crashed (common on multi-GPU PCs) | Names the HTTP 500 server error and points to [Multi-GPU HTTP 500](#multi-gpu-http-500-llama-server-crash) below |
 
 dictatem diagnoses this from the network response, not from a local `ollama` binary — so a server running in WSL, a container, or on another host (reachable via `[transform].base_url`) is handled correctly.
+
+### Multi-GPU HTTP 500 (`llama-server` crash)
+
+On a PC with **both an NVIDIA and an AMD GPU**, Ollama can try (and fail) to initialise the AMD compute path, crashing `llama-server` mid-request. A Trigger Fire then fails with `HTTP 500` and the Ollama log shows the crash — `llama-server process has terminated … The system detected an overrun of a stack-based buffer … GGML_ASSERT`. The fix is to force Ollama onto CUDA and disable the AMD/Vulkan path:
+
+```powershell
+setx OLLAMA_LLM_LIBRARY "cuda"
+setx OLLAMA_IGPU_ENABLE "0"
+setx CUDA_VISIBLE_DEVICES "0"
+setx OLLAMA_VULKAN "false"
+# Only if your models live outside Ollama's default location:
+setx OLLAMA_MODELS "<your models dir>"
+```
+
+Then **fully restart Ollama** — `setx` only affects newly started processes, so quit the Ollama tray app and confirm it's gone in Task Manager — and re-test with `ollama run <model> --verbose`. dictatem never sets these for you (it only talks to Ollama — [ADR-0008](docs/adr/0008-dictatem-does-not-manage-ollama-lifecycle.md)); they're yours to apply.
+
+### Performance on Windows: native Ollama vs WSL
+
+If you run Ollama inside **WSL**, switching to the **native Windows** build is worth it for Dictatem on a single-GPU machine where VRAM is tight:
+
+- **~2 GB less VRAM.** The WSL2 GPU-paravirtualization layer adds roughly 2 GB of overhead on top of the model itself — on a 16 GB card that can be the margin between the model staying fully GPU-resident and spilling layers to the CPU (much slower generation) when Whisper is loaded at the same time.
+- **~5–10× faster cold loads.** Native Windows reads the multi-GB model straight off NVMe (~5–10 s); WSL reads it through its virtual disk layer (~50 s measured for an ~8 GB model).
+
+Native Ollama serves on the same `http://localhost:11434`, so **no Dictatem config change** is needed — install the Windows Ollama build, stop the WSL one, and re-pull the model natively (`ollama pull <model>`).
 
 ## Trigger Words
 

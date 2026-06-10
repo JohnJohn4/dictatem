@@ -612,6 +612,44 @@ class TestActionableFailureMessaging:
         assert "llama3.2:1b" in message
         assert "ollama pull llama3.2:1b" in message
 
+    def test_http_500_surfaces_server_error_pointing_to_readme(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        lifecycle: TranscribeLifecycle,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+        transform_lifecycle: TransformLifecycle,
+        trigger_detector: TriggerDetector,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+    ) -> None:
+        # A crashed llama-server (HTTP 500) must not read as a bare
+        # "Transform failed" — it gets its own title and points at the README
+        # multi-GPU troubleshooting entry (#103).
+        core = _make_core(
+            sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
+            clipboard=clipboard, keystroke=keystroke, foreground=foreground,
+            transform_lifecycle=transform_lifecycle,
+            trigger_detector=trigger_detector,
+        )
+        self._run_failure(
+            core=core, backend=backend, transform_backend=transform_backend,
+            failure=OllamaFailure.http_status(500),
+        )
+
+        assert tray.notifications, "expected a tray notification"
+        title, message = tray.notifications[-1]
+        assert title == "Ollama Server Error"
+        assert "500" in message
+        assert "README" in message
+        # Document untouched + overlay flashed.
+        assert keystroke.total_backspaces == 0
+        assert any(c[0] == "show_error" for c in overlay.calls)
+
     def test_failure_without_structured_signal_still_notifies(
         self,
         sm: StateMachine,

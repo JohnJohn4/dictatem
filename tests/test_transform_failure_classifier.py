@@ -93,15 +93,48 @@ class TestModelMissing:
         assert "ollama pull llama3.2:1b" in msg
 
 
-class TestUnknown:
-    def test_http_500_is_unknown(self) -> None:
+class TestServerError:
+    def test_http_500_is_server_error(self) -> None:
+        # A crashed llama-server answers 500 (e.g. the multi-GPU AMD/Vulkan
+        # path). This is distinct from a missing model (404) — the model is
+        # fine, the server died — so it gets its own actionable reason.
         reason, _msg = classify_transform_failure(
             failure=OllamaFailure.http_status(500),
             model_name="gemma4:e4b",
             base_url=_BASE_URL,
         )
+        assert reason is FailureReason.SERVER_ERROR
+
+    def test_server_error_message_names_the_status(self) -> None:
+        _reason, msg = classify_transform_failure(
+            failure=OllamaFailure.http_status(500),
+            model_name="gemma4:e4b",
+            base_url=_BASE_URL,
+        )
+        assert "500" in msg
+
+    def test_server_error_message_points_to_readme(self) -> None:
+        # The actionable fix (multi-GPU env-var workaround) lives in the README
+        # troubleshooting section — the message must send the user there.
+        _reason, msg = classify_transform_failure(
+            failure=OllamaFailure.http_status(500),
+            model_name="gemma4:e4b",
+            base_url=_BASE_URL,
+        )
+        assert "README" in msg
+
+    def test_other_5xx_stays_unknown(self) -> None:
+        # Only 500 (the llama-server crash signature) gets the dedicated
+        # branch; a 503 from a proxy is still the generic unknown path.
+        reason, _msg = classify_transform_failure(
+            failure=OllamaFailure.http_status(503),
+            model_name="gemma4:e4b",
+            base_url=_BASE_URL,
+        )
         assert reason is FailureReason.UNKNOWN
 
+
+class TestUnknown:
     def test_timeout_is_unknown(self) -> None:
         reason, _msg = classify_transform_failure(
             failure=OllamaFailure.timeout(),
@@ -120,7 +153,7 @@ class TestUnknown:
 
     def test_unknown_message_is_non_empty(self) -> None:
         _reason, msg = classify_transform_failure(
-            failure=OllamaFailure.http_status(500),
+            failure=OllamaFailure.timeout(),
             model_name="gemma4:e4b",
             base_url=_BASE_URL,
         )
