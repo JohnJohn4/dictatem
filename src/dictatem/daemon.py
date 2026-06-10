@@ -1408,6 +1408,42 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     tray_icon.set_autostart_available(autostart_registrar is not None)
     tray_icon.on_quit = lambda: daemon.on_tray_quit(app.quit)
 
+    # Tray "Check for Updates…" (#100). Resolve the latest GitHub release off the
+    # UI thread and, if newer, re-run the install one-liner at that tag — which
+    # stops the daemon, picks the right GPU/CPU extra, installs, and relaunches
+    # (ADR-0011/0015; the same verified upgrade path as #98), not a bundled
+    # updater. Kept alive for the event loop's lifetime, like the hook below.
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _installed_version
+
+    from dictatem.upgrade.core import GITHUB_REPO
+    from dictatem.upgrade.github import fetch_latest_tag
+    from dictatem.upgrade.qt_update_check import UpdateChecker
+
+    def _current_version() -> str:
+        try:
+            return _installed_version("dictatem")
+        except PackageNotFoundError:
+            return ""
+
+    def _start_upgrade(tag: str) -> None:
+        if sys.platform == "win32":
+            from dictatem.upgrade.win32_upgrader import spawn_upgrade
+
+            spawn_upgrade(tag)
+        else:
+            # No Windows `…\Scripts` file lock to dance around off-win32; the
+            # in-app upgrade is Windows-only until a macOS installer path lands.
+            logger.info("In-app upgrade is Windows-only for now; tag=%s", tag)
+
+    _update_checker = UpdateChecker(
+        current_version=_current_version(),
+        fetch_latest_tag=lambda: fetch_latest_tag(repo=GITHUB_REPO),
+        notify=tray_icon.show_notification,
+        start_upgrade=_start_upgrade,
+    )
+    tray_icon.on_upgrade = _update_checker.check
+
     bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:
         classifier = HotkeyClassifier(

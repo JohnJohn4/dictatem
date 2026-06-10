@@ -35,6 +35,9 @@ class MenuItem(enum.Enum):
     AUTOSTART = "autostart"
     SHOW_LOG = "show_log"
     RESTART = "restart"
+    # "Check for Updates…" — resolves the latest GitHub release and, if newer,
+    # re-runs the install one-liner at that tag (ADR-0011/0015). Always enabled.
+    UPGRADE = "upgrade"
     QUIT = "quit"
 
 

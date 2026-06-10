@@ -25,6 +25,7 @@ _MENU_LABELS: dict[MenuItem, str] = {
     MenuItem.AUTOSTART: "Start at Login",
     MenuItem.SHOW_LOG: "Show Log",
     MenuItem.RESTART: "Restart",
+    MenuItem.UPGRADE: "Check for Updates…",
     MenuItem.QUIT: "Quit",
 }
 
@@ -127,6 +128,7 @@ class QtTrayIcon:
         self.on_autostart_toggled: Callable[[bool], None] | None = None
         self.on_show_log: Callable[[], None] | None = None
         self.on_restart: Callable[[], None] | None = None
+        self.on_upgrade: Callable[[], None] | None = None
         self.on_quit: Callable[[], None] | None = None
 
         # Re-tint live when the OS theme changes. colorSchemeChanged fires on a
@@ -162,6 +164,7 @@ class QtTrayIcon:
             MenuItem.UNLOAD: lambda: self.on_unload() if self.on_unload else None,
             MenuItem.SHOW_LOG: lambda: self._open_log(),
             MenuItem.RESTART: lambda: self.on_restart() if self.on_restart else None,
+            MenuItem.UPGRADE: lambda: self.on_upgrade() if self.on_upgrade else None,
             MenuItem.QUIT: lambda: self.on_quit() if self.on_quit else None,
         }
 
