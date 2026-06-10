@@ -1456,9 +1456,18 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         # callback would otherwise be collected); app.exec() below keeps the
         # reference alive until the daemon exits.
         _hook = adapters.install_keyboard_hook(bridge.enqueue_key_event)
+        # Tell the user what to press, derived from the live config and formatted
+        # for this platform (#104). Only when a hook is live — advertising a
+        # hotkey the platform can't fire would mislead.
+        from dictatem.tray.hotkey_hint import hotkey_hint_label
+
+        tray_icon.set_hotkey_hint(
+            hotkey_hint_label(config.hotkey.modifiers, platform=sys.platform)
+        )
     else:
         # No global-hotkey adapter on this platform yet (macOS: #56). Recording
-        # runs from the tray menu, so no classifier/bridge machinery is built.
+        # runs from the tray menu, so no classifier/bridge machinery is built and
+        # the hotkey hint stays hidden.
         logger.info("No global-hotkey adapter on this platform — use the tray menu")
 
     silence_timer = QTimer()

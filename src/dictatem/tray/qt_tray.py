@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 _MENU_LABELS: dict[MenuItem, str] = {
+    # Placeholder; the real text is set from config via set_hotkey_hint (#104).
+    MenuItem.HOTKEY_HINT: "Hotkey",
     MenuItem.START: "Start Recording",
     MenuItem.STOP: "Stop Recording",
     MenuItem.PRELOAD: "Preload Model",
@@ -170,6 +172,18 @@ class QtTrayIcon:
 
         for item in MenuItem:
             action = QAction(_MENU_LABELS[item], self._parent)
+            if item is MenuItem.HOTKEY_HINT:
+                # Non-interactive header showing the activation hotkey (#104).
+                # Disabled (greyed, unclickable) with a trailing separator; both
+                # stay hidden until the daemon sets the text from config, so no
+                # placeholder ever flashes.
+                action.setEnabled(False)
+                self._actions[item] = action
+                self._menu.addAction(action)
+                self._hotkey_separator = self._menu.addSeparator()
+                action.setVisible(False)
+                self._hotkey_separator.setVisible(False)
+                continue
             if item is MenuItem.AUTOSTART:
                 # Checkable "Start at Login" toggle. triggered passes the new
                 # checked state straight through to the daemon, which flips the
@@ -184,6 +198,19 @@ class QtTrayIcon:
     def _on_autostart_triggered(self, checked: bool) -> None:
         if self.on_autostart_toggled is not None:
             self.on_autostart_toggled(checked)
+
+    def set_hotkey_hint(self, text: str) -> None:
+        """Set the disabled activation-hotkey header (#104).
+
+        Empty *text* hides the header and its separator — used where there is no
+        global-hotkey adapter, so the tray never advertises a hotkey that can't
+        fire. The text comes from ``tray.hotkey_hint.hotkey_hint_label``.
+        """
+        action = self._actions[MenuItem.HOTKEY_HINT]
+        if text:
+            action.setText(text)
+        action.setVisible(bool(text))
+        self._hotkey_separator.setVisible(bool(text))
 
     def set_autostart_checked(self, checked: bool) -> None:
         """Reflect the current ``config.startup.autostart`` flag in the menu."""
