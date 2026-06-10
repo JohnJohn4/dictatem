@@ -38,8 +38,14 @@ class FailureReason(Enum):
     MODEL_MISSING = auto()
     """Server reachable but the configured model is not pulled (HTTP 404)."""
 
+    SERVER_ERROR = auto()
+    """Server reachable and the model is present, but the request crashed it
+    (HTTP 500). The classic signature is ``llama-server`` terminating with a
+    stack-buffer overrun on a multi-GPU PC (Ollama trying the AMD/Vulkan path);
+    the fix is the env-var workaround in the README troubleshooting section."""
+
     UNKNOWN = auto()
-    """Any other failure (5xx, timeout, malformed response, etc.)."""
+    """Any other failure (other 5xx, timeout, malformed response, etc.)."""
 
 
 def classify_transform_failure(
@@ -61,6 +67,21 @@ def classify_transform_failure(
             FailureReason.MODEL_MISSING,
             f"The model '{model_name}' isn't available in Ollama. "
             f"Run `ollama pull {model_name}`, then try again.",
+        )
+
+    if failure.kind is FailureKind.HTTP_STATUS and failure.status_code == 500:
+        # Ollama reached the model server but it crashed mid-request. The known
+        # cause is a multi-GPU PC where Ollama tries the AMD/Vulkan path; the
+        # env-var workaround and restart steps live in the README. We point
+        # there rather than acting on it ourselves (ADR-0008: never manage
+        # Ollama). We branch on 500 specifically — the llama-server crash
+        # signature — and leave other 5xx in the generic UNKNOWN bucket.
+        return (
+            FailureReason.SERVER_ERROR,
+            "Ollama returned a server error (HTTP 500) — the local model "
+            "server likely crashed. On a multi-GPU PC this is usually the "
+            "AMD/Vulkan path; see the README \"Ollama / Transform setup\" "
+            "troubleshooting for the fix.",
         )
 
     if failure.kind in (FailureKind.CONNECTION_REFUSED, FailureKind.URL_ERROR):

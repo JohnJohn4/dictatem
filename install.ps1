@@ -1,8 +1,10 @@
 # Dictatem one-line installer (Windows).
 #
-# Run it piped, straight from raw GitHub:
+# Run it piped, straight from raw GitHub (the leading Set-ExecutionPolicy is a
+# process-scoped bypass so a restrictive machine policy doesn't block it — it
+# needs no admin and reverts when the window closes):
 #
-#     irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.4.0/install.ps1 | iex
+#     Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.4.0/install.ps1 | iex
 #
 # It is a thin uv-tool provisioning script (ADR-0011): it installs `uv` if
 # absent, picks the CPU or GPU dependency set by auto-detecting an NVIDIA GPU,
@@ -100,6 +102,114 @@ if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 
     $forceArgs = @('--force')
 }
 
+# --- 2.9 Stop any running daemon before (re)installing (#98) --------------
+# Re-running the installer to UPGRADE fails while the old daemon is running:
+# Windows won't let uv remove the tool dir whose loaded .exe/.dll is in use, so
+# `uv tool install` aborts with "failed to remove directory ...\Scripts: Access
+# is denied". Sibling of #69 (same lock, uninstall side). Stop the daemon first;
+# step 4 relaunches the freshly installed version. No elevation — same-user
+# processes — so this works where `sudo` is disabled on managed machines.
+function Stop-DictatemDaemon {
+    # Identify Dictatem processes by EXECUTABLE PATH, never by image name: the
+    # daemon runs as a generic `pythonw.exe`, so name-matching would risk
+    # killing unrelated Python. A process is a *root* iff its exe is the
+    # `~/.local/bin/dictatem.exe` trampoline or lives under the uv tool's
+    # `dictatem` env dir. Then walk root->descendants, because the launcher
+    # (`Scripts\pythonw.exe`) re-execs the base CPython as a child (#43, the two
+    # `pythonw.exe`), and THAT child is the real daemon — its exe lives outside
+    # the tool dir, so path-matching alone would orphan it: the old daemon would
+    # survive the upgrade, keep `Lib`/`Scripts` file-locked, AND fight the
+    # relaunched one. Best-effort throughout: any failure leaves install to
+    # proceed exactly as before.
+    # `Select-Object -Last 1` keeps only the path line: uv prints diagnostics to
+    # stderr (already dropped by 2>$null), but if a future uv ever wrote an
+    # extra stdout line these captures would become arrays, and `Join-Path` on
+    # an array throws (DriveNotFoundException) — which, under
+    # $ErrorActionPreference='Stop', would abort the whole install instead of
+    # just skipping the best-effort daemon-stop.
+    $targets = @()
+    $toolDir = (uv tool dir 2>$null | Select-Object -Last 1)
+    if ($toolDir) { $targets += (Join-Path $toolDir 'dictatem') }
+    $toolBin = (uv tool dir --bin 2>$null | Select-Object -Last 1)
+    if ($toolBin) { $targets += (Join-Path $toolBin 'dictatem.exe') }
+    if ($targets.Count -eq 0) { return }
+
+    try {
+        $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+    } catch {
+        return  # WMI unavailable — skip; the install proceeds as it did before.
+    }
+    if ($procs.Count -eq 0) { return }
+
+    $byId = @{}
+    $byParent = @{}
+    foreach ($p in $procs) {
+        $byId[[int]$p.ProcessId] = $p
+        $ppid = [int]$p.ParentProcessId
+        if (-not $byParent.ContainsKey($ppid)) {
+            $byParent[$ppid] = New-Object System.Collections.Generic.List[int]
+        }
+        $byParent[$ppid].Add([int]$p.ProcessId)
+    }
+
+    $roots = New-Object System.Collections.Generic.List[int]
+    foreach ($p in $procs) {
+        $exe = $p.ExecutablePath
+        if (-not $exe) { continue }
+        foreach ($t in $targets) {
+            if ($exe -ieq $t -or
+                $exe.StartsWith("$t\", [System.StringComparison]::OrdinalIgnoreCase)) {
+                $roots.Add([int]$p.ProcessId)
+                break
+            }
+        }
+    }
+    if ($roots.Count -eq 0) { return }  # nothing running — fresh-install path
+
+    # Breadth-first walk from the path-matched roots. Guard each hop with
+    # creation time (a real child cannot predate its parent) so a recycled
+    # parent PID can never drag an unrelated process into the kill set.
+    $kill = New-Object System.Collections.Generic.HashSet[int]
+    $queue = New-Object System.Collections.Generic.Queue[int]
+    foreach ($r in $roots) { $queue.Enqueue($r) }
+    while ($queue.Count -gt 0) {
+        $id = $queue.Dequeue()
+        if (-not $kill.Add($id)) { continue }
+        if (-not $byParent.ContainsKey($id)) { continue }
+        $parentStart = $byId[$id].CreationDate
+        foreach ($childId in $byParent[$id]) {
+            $child = $byId[$childId]
+            if ($null -ne $parentStart -and $null -ne $child.CreationDate -and
+                $child.CreationDate -lt $parentStart) {
+                continue  # stale/recycled parent PID — not a genuine child
+            }
+            $queue.Enqueue($childId)
+        }
+    }
+
+    $stopped = New-Object System.Collections.Generic.List[int]
+    foreach ($id in $kill) {
+        try {
+            Stop-Process -Id $id -Force -ErrorAction Stop
+            $stopped.Add($id)
+        } catch {
+            # Already exiting, or denied — best effort, keep going.
+        }
+    }
+    if ($stopped.Count -gt 0) {
+        Write-Host "Stopped the running Dictatem daemon before (re)installing (PID(s): $($stopped -join ', '))."
+        # Wait for full exit so the loaded .exe/.dll handles release; otherwise
+        # uv still can't remove the old tool dir.
+        try {
+            Wait-Process -Id $stopped -Timeout 10 -ErrorAction SilentlyContinue
+        } catch {
+            # Timed out or already gone — proceed regardless (best effort).
+        }
+    }
+}
+
+Stop-DictatemDaemon
+
 # --- 3. Install Dictatem from the GitHub release tarball -----------------
 # Install from the tag's source tarball over HTTPS, NOT a git+ URL: `uv tool
 # install` resolves git+ URLs by shelling out to the `git` executable, so a git+
@@ -131,16 +241,77 @@ if ($LASTEXITCODE -ne 0) {
 # only updates PATH for new sessions. `uv tool update-shell` ensures the tool
 # bin dir is on PATH persistently; prepend it here so the launch below works.
 uv tool update-shell
-$toolBin = (uv tool dir --bin 2>$null)
+$toolBin = (uv tool dir --bin 2>$null | Select-Object -Last 1)
 if ($toolBin) {
     $env:Path = "$toolBin;$env:Path"
 }
+
+# Persist the tool-bin dir to the USER PATH ourselves (#99). On some managed
+# machines `uv tool update-shell` doesn't reliably land the bin dir in the user
+# PATH, so `dictatem` isn't found in a fresh shell and the user gets told to
+# "add it to PATH" by hand. Writing the User-scope PATH needs no admin, so it
+# works where `sudo` is disabled. We add both the uv tool-bin dir and
+# `~/.local/bin` (where uv itself and the `dictatem` trampoline live) — they're
+# usually the same dir, but we don't assume it.
+function Add-ToUserPath {
+    param([string]$Dir)
+    if (-not $Dir) { return }
+    try {
+        # Edit HKCU\Environment directly rather than via
+        # [Environment]::SetEnvironmentVariable(...,'User'): that API EXPANDS any
+        # %VARS% it reads and writes the result back as a plain REG_SZ, which on
+        # a default/managed Windows user PATH (REG_EXPAND_SZ, e.g.
+        # `%USERPROFILE%\AppData\Local\Microsoft\WindowsApps`) bakes those refs
+        # to literals and flips the value type — a silent regression. Reading
+        # with DoNotExpandEnvironmentNames and re-writing the original value kind
+        # leaves existing entries byte-for-byte intact.
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+        if ($null -eq $key) {
+            $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Environment')
+        }
+        $rawPath = [string]$key.GetValue(
+            'Path', '',
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        # Preserve the existing value type (REG_EXPAND_SZ vs REG_SZ); default to
+        # ExpandString when no Path value exists yet.
+        $kind = [Microsoft.Win32.RegistryValueKind]::ExpandString
+        if ($rawPath) {
+            try { $kind = $key.GetValueKind('Path') } catch { }
+        }
+        # Idempotent: compare the EXPANDED form of each stored entry against the
+        # (already literal) target dir, ignoring case and a trailing slash, so a
+        # dir stored as `%USERPROFILE%\.local\bin` still counts as present.
+        $needle = $Dir.TrimEnd('\')
+        foreach ($entry in ($rawPath -split ';')) {
+            if (-not $entry) { continue }
+            $expanded = [Environment]::ExpandEnvironmentVariables($entry).TrimEnd('\')
+            if ($expanded -ieq $needle) { $key.Close(); return }
+        }
+        if ($rawPath) { $newPath = "$Dir;$rawPath" } else { $newPath = $Dir }
+        $key.SetValue('Path', $newPath, $kind)
+        $key.Close()
+        Write-Host "Added $Dir to your user PATH (persists in new shells)."
+    } catch {
+        # A locked-down registry ACL must not fail the install — uv tool
+        # update-shell above has already made its own attempt.
+        Write-Host "Note: couldn't persist $Dir to your user PATH automatically (uv tool update-shell already tried)."
+    }
+}
+
+Add-ToUserPath $toolBin
+Add-ToUserPath "$env:USERPROFILE\.local\bin"
 
 # --- 4. Launch the daemon once -------------------------------------------
 Write-Host 'Launching Dictatem...'
 Start-Process -FilePath 'dictatem'
 
-# --- 5. Point at the optional Ollama/Transform setup ---------------------
+# --- 5. Report status + point at the optional Ollama/Transform setup ------
+# Don't claim the tray icon is already up (#102): the daemon is only just
+# starting — Qt's event loop, and on managed machines an AV/EDR scan of the
+# freshly written exe + CUDA DLLs on first launch, mean the icon can take a few
+# seconds to appear. Saying "running in the system tray" before it's visible
+# reads as a glitch, so set expectations instead.
 Write-Host ''
-Write-Host 'Dictatem is installed and running in the system tray.'
+Write-Host 'Dictatem is installed and starting now.'
+Write-Host 'The tray icon will appear in a few seconds — on a managed/work machine the first launch can be slower while Windows scans the new files.'
 Write-Host 'Optional Trigger Words (local-LLM rewrites) need Ollama set up yourself — see the README "Ollama / Transform setup" section: https://github.com/JohnJohn4/dictatem#ollama--transform-setup'
