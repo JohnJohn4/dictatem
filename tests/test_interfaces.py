@@ -15,6 +15,7 @@ EXPECTED_PROTOCOLS = [
     "TranscriberBackend",
     "TransformBackend",
     "AutostartRegistrar",
+    "DaemonStopper",
     "OverlayRenderer",
     "TrayRenderer",
 ]
@@ -70,6 +71,9 @@ class TestProtocolSignatures:
         assert callable(getattr(interfaces.AutostartRegistrar, "enable", None))
         assert callable(getattr(interfaces.AutostartRegistrar, "disable", None))
         assert callable(getattr(interfaces.AutostartRegistrar, "is_enabled", None))
+
+    def test_daemon_stopper_methods(self) -> None:
+        assert callable(getattr(interfaces.DaemonStopper, "stop_running_daemons", None))
 
     def test_overlay_renderer_methods(self) -> None:
         assert callable(getattr(interfaces.OverlayRenderer, "show", None))

@@ -229,6 +229,28 @@ class AutostartRegistrar(Protocol):
 
 
 @runtime_checkable
+class DaemonStopper(Protocol):
+    """Terminate any running Dictatem daemon so the install dir unlocks (#69).
+
+    ``dictatem --uninstall`` (and the tray Upgrade, #100) must stop the running
+    daemon before ``uv tool uninstall``/``uv tool install`` touches the locked
+    ``…\\uv\\tools\\dictatem\\Scripts`` directory, which Windows otherwise refuses
+    with ``Access is denied``. The match *decision* is pure
+    (``process.daemon_stop``); this Protocol is only the I/O seam — enumerate
+    processes, terminate the path-matched ones, exclude the current process — with
+    an in-memory fake in tests.
+    """
+
+    def stop_running_daemons(self) -> list[int]:
+        """Terminate matching daemon processes best-effort; return stopped PIDs.
+
+        Best-effort: a process that cannot be opened or terminated is skipped,
+        never raised, so uninstall/upgrade always proceeds to its final step.
+        """
+        ...
+
+
+@runtime_checkable
 class OverlayRenderer(Protocol):
     """Render the on-screen recording/transcribing overlay pill."""
 

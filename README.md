@@ -90,14 +90,14 @@ If you have an NVIDIA GPU and want the fastest transcription, use `runtime-gpu`.
 
 ### Uninstalling
 
-Dictatem owns its start-at-login entry, so removing it cleanly is a two-step process — a bare `uv tool uninstall` would orphan that entry. **Quit Dictatem from the tray first** (right-click the tray icon → Quit), then:
+Dictatem owns its start-at-login entry, so removing it cleanly is a two-step process — a bare `uv tool uninstall` would orphan that entry. Run:
 
 ```powershell
-dictatem --uninstall        # step 1: removes the autostart entry (a dialog confirms and shows step 2)
+dictatem --uninstall        # step 1: removes the autostart entry AND stops the running daemon (a dialog confirms and shows step 2)
 uv tool uninstall dictatem  # step 2: removes the tool (dismiss the step 1 dialog first)
 ```
 
-Quitting first matters: while the daemon is running its files are in use, so `uv tool uninstall` can otherwise fail with `Access is denied`. `dictatem --uninstall` runs windowless, so it confirms step 1 in a pop-up dialog rather than the terminal. Your config under `~/.dictatem` is left untouched. (A future release will stop the daemon automatically so this is just two lines — issue #69.)
+You don't need to quit Dictatem first: step 1 removes the autostart entry and then stops the running daemon, so step 2 isn't blocked by the `…\Scripts` file lock that would otherwise fail with `Access is denied`. `dictatem --uninstall` runs windowless, so it confirms step 1 in a pop-up dialog rather than the terminal. Your config under `~/.dictatem` is left untouched.
 
 On macOS the same two steps apply, in Terminal — step 1 also removes the daemon-owned `~/Applications/Dictatem.app` and its start-at-login LaunchAgent (they must go first: after step 2 the `.app`'s launch target no longer exists), and prints its confirmation to the terminal:
 

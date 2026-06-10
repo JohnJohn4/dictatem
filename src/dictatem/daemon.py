@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         AudioCapture,
         AutostartRegistrar,
         ClipboardIO,
+        DaemonStopper,
         ForegroundTracker,
         HardwareProbe,
         KeystrokeSender,
@@ -999,6 +1000,20 @@ def _run_uninstall() -> None:
         lines.append("Some cleanup failed — check the daemon log.")
         lines.append("You can still finish removing Dictatem with:")
         lines.append("    uv tool uninstall dictatem")
+
+    # Stop the running daemon so step 2 (`uv tool uninstall`) isn't blocked by
+    # the `…\Scripts` file lock (#69). Autostart was removed first (above, per
+    # ADR-0012). Best-effort: failures are logged, never surfaced, so the
+    # remaining-step guidance always shows.
+    stopper = _platform_daemon_stopper()
+    if stopper is not None:
+        try:
+            stopped = stopper.stop_running_daemons()
+            if stopped:
+                logger.info("Stopped running daemon process(es): %s", stopped)
+        except Exception:
+            logger.error("Failed to stop the running daemon during uninstall", exc_info=True)
+
     _show_uninstall_message("\n".join(lines))
 
 
@@ -1095,6 +1110,24 @@ def _platform_autostart_registrar() -> AutostartRegistrar | None:
             agents_dir=default_agents_dir(),
             program_arguments=launch_arguments(launcher),
         )
+    return None
+
+
+def _platform_daemon_stopper() -> DaemonStopper | None:
+    """Build this platform's daemon stopper, or None where none is needed.
+
+    Windows is the only platform with the ``…\\Scripts`` file-lock problem the
+    stopper solves (#69): the loaded interpreter blocks ``uv tool uninstall``.
+    On macOS the daemon launches differently and uninstall is a separate flow, so
+    there is no stopper to build (``None``) — uninstall there just prints its
+    two-step guidance. Mirrors :func:`_platform_autostart_registrar`; the win32
+    adapter is imported lazily so ``dictatem.daemon`` stays importable anywhere
+    (``test_import_safety``).
+    """
+    if sys.platform == "win32":
+        from dictatem.process.win32_stopper import Win32DaemonStopper
+
+        return Win32DaemonStopper()
     return None
 
 
