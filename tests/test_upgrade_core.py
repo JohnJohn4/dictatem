@@ -41,6 +41,10 @@ class TestParseVersion:
     def test_empty_is_none(self) -> None:
         assert parse_version("") is None
 
+    def test_unicode_digit_is_none_not_a_crash(self) -> None:
+        # str.isdigit() is True for '²' but int('²') raises — must stay None.
+        assert parse_version("v1.²") is None
+
 
 class TestIsNewer:
     def test_higher_minor_is_newer(self) -> None:
@@ -114,6 +118,13 @@ class TestDecideUpgrade:
     def test_unparseable_latest_tag_is_unknown(self) -> None:
         decision = decide_upgrade("0.4.0", "nightly")
         assert decision.kind is UpgradeKind.UNKNOWN
+
+    def test_unreadable_current_version_is_unknown_not_up_to_date(self) -> None:
+        # Editable/dev checkout: version("dictatem") raises -> current is "".
+        # Must not falsely report "up to date (v)" and swallow a real upgrade.
+        decision = decide_upgrade("", "v0.5.0")
+        assert decision.kind is UpgradeKind.UNKNOWN
+        assert "(v)" not in decision.message
 
 
 class TestInstallOneLinerUrl:

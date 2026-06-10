@@ -11,6 +11,10 @@ the *decision* is unit-tested through the pure matcher and ``FakeDaemonStopper``
 and the native enumerate/terminate behaviour is verified by manual QA on Windows.
 Best-effort throughout: a process we cannot open or kill is skipped, never raised,
 so the uninstall/upgrade always reaches its final step.
+
+``install.ps1`` implements the same path-matched daemon-stop for the *installer*
+side of the lock (#98); keep the match targets here (the uv tools dir + the
+``uv tool dir --bin`` trampoline) in sync with it.
 """
 
 from __future__ import annotations
@@ -62,6 +66,30 @@ def _resolve_tool_dir() -> str | None:
         if parent.name.lower() == "dictatem" and parent.parent.name.lower() == "tools":
             return str(parent)
     return None
+
+
+def _resolve_trampoline() -> str:
+    """Full path of the ``dictatem.exe`` launcher trampoline in uv's bin dir.
+
+    Resolved via ``uv tool dir --bin`` so it honours a custom ``UV_TOOL_BIN_DIR``
+    (matching how ``install.ps1`` finds it); falls back to uv's documented default
+    ``~/.local/bin``. Secondary to the tool-dir match — the running daemon's
+    interpreter lives under the tool dir and is caught there regardless.
+    """
+    try:
+        result = subprocess.run(
+            ["uv", "tool", "dir", "--bin"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            creationflags=_CREATE_NO_WINDOW,
+        )
+        bin_dir = result.stdout.strip()
+        if result.returncode == 0 and bin_dir:
+            return str(Path(bin_dir) / "dictatem.exe")
+    except (OSError, subprocess.SubprocessError):
+        logger.debug("`uv tool dir --bin` unavailable; using ~/.local/bin")
+    return str(Path.home() / ".local" / "bin" / "dictatem.exe")
 
 
 def _process_image_path(pid: int) -> str:
@@ -120,12 +148,11 @@ class Win32DaemonStopper:
                 "Could not locate the uv tools dictatem dir; skipping daemon stop"
             )
             return []
-        trampoline = str(Path.home() / ".local" / "bin" / "dictatem.exe")
         targets = pids_to_stop(
             _enumerate_processes(),
             self_pid=os.getpid(),
             tool_dir=tool_dir,
-            extra_exes=(trampoline,),
+            extra_exes=(_resolve_trampoline(),),
         )
         stopped = [pid for pid in targets if _terminate(pid)]
         if stopped:

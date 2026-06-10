@@ -225,6 +225,15 @@ class QtTrayIcon:
         """
         self._actions[MenuItem.AUTOSTART].setVisible(available)
 
+    def set_upgrade_available(self, available: bool) -> None:
+        """Show or hide the "Check for Updates…" item (#100).
+
+        Hidden where there is no in-app upgrade path yet (non-Windows): the action
+        would otherwise promise "Updating… will restart" and then silently no-op.
+        Visibility survives ``update_state``, which only toggles enablement.
+        """
+        self._actions[MenuItem.UPGRADE].setVisible(available)
+
     def update_state(self, state: TrayState) -> None:
         # The tray glyph is static brand identity (ADR-0006); only menu-item
         # enable/disable tracks TrayState. The icon does not change with state.

@@ -36,7 +36,9 @@ def parse_version(text: str) -> tuple[int, ...] | None:
         return None
     stripped = text[1:] if text[0] in "vV" else text
     parts = stripped.split(".")
-    if not all(part.isdigit() for part in parts):
+    # `isascii()` guards the Unicode-digit trap: str.isdigit() is True for chars
+    # like '²' that int() rejects, which would raise instead of returning None.
+    if not all(part.isascii() and part.isdigit() for part in parts):
         return None
     return tuple(int(part) for part in parts)
 
@@ -103,7 +105,9 @@ def _display_version(current: str) -> str:
 def decide_upgrade(current_version: str, latest_tag: str | None) -> UpgradeDecision:
     """Decide what the tray Upgrade action should do.
 
-    * No / unparseable *latest_tag* → ``UNKNOWN`` (the check couldn't complete).
+    * No / unparseable *latest_tag*, or an unreadable *current_version* (e.g. an
+      editable/dev checkout where the package version can't be resolved) →
+      ``UNKNOWN``: we can't compare, so never claim "up to date".
     * *latest_tag* strictly newer than *current_version* → ``UPGRADE_AVAILABLE``,
       carrying the tag to install.
     * Otherwise (same, or a dev build ahead of the latest release) →
@@ -113,6 +117,14 @@ def decide_upgrade(current_version: str, latest_tag: str | None) -> UpgradeDecis
         return UpgradeDecision(
             kind=UpgradeKind.UNKNOWN,
             message="Couldn't check for updates. See the Releases page on GitHub.",
+        )
+    if parse_version(current_version) is None:
+        # We resolved a real latest tag but can't read our own version — comparing
+        # would falsely report "up to date (v)". Be honest that we don't know.
+        return UpgradeDecision(
+            kind=UpgradeKind.UNKNOWN,
+            message="Couldn't determine the installed version. "
+            "See the Releases page on GitHub.",
         )
     if is_newer(latest_tag, current_version):
         return UpgradeDecision(

@@ -75,7 +75,10 @@ class UpdateChecker(QObject):
 
     def _on_finished(self, decision: UpgradeDecision) -> None:
         # Back on the Qt main thread (queued signal): safe to touch the tray.
-        self._busy = False
         self._notify("Dictatem", decision.message)
         if decision.kind is UpgradeKind.UPGRADE_AVAILABLE and decision.tag:
             self._start_upgrade(decision.tag)
+            # Stay busy: the installer will stop and replace this daemon shortly;
+            # a second check would only race a second installer on the locked dir.
+            return
+        self._busy = False

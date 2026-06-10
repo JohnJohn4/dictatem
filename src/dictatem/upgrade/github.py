@@ -30,6 +30,6 @@ def fetch_latest_tag(*, repo: str = GITHUB_REPO, timeout_s: float = 6.0) -> str 
             "User-Agent": "dictatem-update-check",
         },
     )
-    with urllib.request.urlopen(request, timeout=timeout_s) as response:  # noqa: S310
+    with urllib.request.urlopen(request, timeout=timeout_s) as response:
         body = response.read().decode("utf-8")
     return parse_latest_tag(body)

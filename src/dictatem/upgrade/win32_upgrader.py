@@ -35,7 +35,7 @@ def spawn_upgrade(tag: str) -> None:
     # Mirror the README one-liner: clear the policy for this process, then
     # download-and-run the pinned installer.
     inline = f"Set-ExecutionPolicy -Scope Process Bypass -Force; irm {url} | iex"
-    subprocess.Popen(  # noqa: S603
+    subprocess.Popen(
         [
             "powershell",
             "-NoProfile",

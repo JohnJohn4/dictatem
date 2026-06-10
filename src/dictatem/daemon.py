@@ -1443,6 +1443,9 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         start_upgrade=_start_upgrade,
     )
     tray_icon.on_upgrade = _update_checker.check
+    # In-app upgrade re-runs install.ps1 (Windows-only). Hide the item elsewhere
+    # so it never promises a restart it can't deliver (_start_upgrade no-ops).
+    tray_icon.set_upgrade_available(sys.platform == "win32")
 
     bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:
