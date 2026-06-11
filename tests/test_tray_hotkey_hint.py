@@ -64,19 +64,19 @@ class TestFormatHotkeyEdgeCases:
 
 
 class TestHotkeyHintLabel:
-    def test_windows_label_conveys_hold_and_tap(self) -> None:
+    def test_windows_label_states_chord_and_purpose(self) -> None:
+        # Compact header (#112): just the chord + purpose; the hold/tap teaching
+        # moved to the Usage Guide (ADR-0019) so the line no longer drives width.
         label = hotkey_hint_label(("win", "alt"), platform="win32")
-        assert label == "Hotkey: Win+Alt (hold to talk · tap to toggle)"
+        assert label == "Win+Alt to dictate"
 
     def test_macos_label_uses_symbols(self) -> None:
         label = hotkey_hint_label(("win", "alt"), platform="darwin")
-        assert label.startswith("Hotkey: ⌥⌘")
-        assert "hold to talk" in label
-        assert "tap to toggle" in label
+        assert label == "⌥⌘ to dictate"
 
     def test_custom_modifiers_change_the_hint(self) -> None:
         label = hotkey_hint_label(("ctrl", "shift"), platform="win32")
-        assert "Ctrl+Shift" in label
+        assert label == "Ctrl+Shift to dictate"
 
     def test_empty_modifiers_yield_empty_label(self) -> None:
         # No usable chord → no hint (the tray hides the header item).
