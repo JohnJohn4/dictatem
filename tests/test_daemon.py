@@ -73,6 +73,76 @@ class TestMainUninstallFlag:
             daemon.main(argv=["--bogus"])
 
 
+class TestRunUninstallStopsDaemon:
+    """`_run_uninstall` stops the running daemon after autostart removal (#69),
+    so the user's remaining `uv tool uninstall` isn't blocked by the file lock.
+    The platform registrar/stopper/dialog are stubbed so this runs on any CI OS.
+    """
+
+    @staticmethod
+    def _stub_dialog(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+        shown: list[str] = []
+        monkeypatch.setattr(daemon, "_show_uninstall_message", shown.append)
+        return shown
+
+    def test_invokes_platform_daemon_stopper(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.fakes import FakeAutostartRegistrar, FakeDaemonStopper
+
+        stopper = FakeDaemonStopper(stopped=[4321])
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(
+            daemon, "_platform_autostart_registrar",
+            lambda: FakeAutostartRegistrar(enabled=True),
+        )
+        monkeypatch.setattr(daemon, "_platform_daemon_stopper", lambda: stopper)
+        shown = self._stub_dialog(monkeypatch)
+
+        daemon._run_uninstall()
+
+        assert stopper.call_count == 1
+        # The dialog still surfaces the remaining `uv tool uninstall` step.
+        assert "uv tool uninstall dictatem" in shown[0]
+
+    def test_stopper_failure_does_not_block_guidance(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from tests.fakes import FakeAutostartRegistrar
+
+        class _BoomStopper:
+            def stop_running_daemons(self) -> list[int]:
+                raise RuntimeError("boom")
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(
+            daemon, "_platform_autostart_registrar",
+            lambda: FakeAutostartRegistrar(enabled=True),
+        )
+        monkeypatch.setattr(daemon, "_platform_daemon_stopper", lambda: _BoomStopper())
+        shown = self._stub_dialog(monkeypatch)
+
+        daemon._run_uninstall()  # must not raise
+
+        assert "uv tool uninstall dictatem" in shown[0]
+
+    def test_none_stopper_is_skipped(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # A platform with no stopper still completes the uninstall guidance.
+        from tests.fakes import FakeAutostartRegistrar
+
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(
+            daemon, "_platform_autostart_registrar",
+            lambda: FakeAutostartRegistrar(enabled=True),
+        )
+        monkeypatch.setattr(daemon, "_platform_daemon_stopper", lambda: None)
+        shown = self._stub_dialog(monkeypatch)
+
+        daemon._run_uninstall()
+
+        assert "uv tool uninstall dictatem" in shown[0]
+
+
 class TestMainInstallMacosAppFlag:
     def test_install_macos_app_runs_glue_not_daemon(
         self, monkeypatch: pytest.MonkeyPatch

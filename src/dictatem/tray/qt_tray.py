@@ -18,6 +18,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 _MENU_LABELS: dict[MenuItem, str] = {
+    # Placeholder; the real text is set from config via set_hotkey_hint (#104).
+    MenuItem.HOTKEY_HINT: "Hotkey",
     MenuItem.START: "Start Recording",
     MenuItem.STOP: "Stop Recording",
     MenuItem.PRELOAD: "Preload Model",
@@ -25,6 +27,7 @@ _MENU_LABELS: dict[MenuItem, str] = {
     MenuItem.AUTOSTART: "Start at Login",
     MenuItem.SHOW_LOG: "Show Log",
     MenuItem.RESTART: "Restart",
+    MenuItem.UPGRADE: "Check for Updates…",
     MenuItem.QUIT: "Quit",
 }
 
@@ -127,6 +130,7 @@ class QtTrayIcon:
         self.on_autostart_toggled: Callable[[bool], None] | None = None
         self.on_show_log: Callable[[], None] | None = None
         self.on_restart: Callable[[], None] | None = None
+        self.on_upgrade: Callable[[], None] | None = None
         self.on_quit: Callable[[], None] | None = None
 
         # Re-tint live when the OS theme changes. colorSchemeChanged fires on a
@@ -162,11 +166,24 @@ class QtTrayIcon:
             MenuItem.UNLOAD: lambda: self.on_unload() if self.on_unload else None,
             MenuItem.SHOW_LOG: lambda: self._open_log(),
             MenuItem.RESTART: lambda: self.on_restart() if self.on_restart else None,
+            MenuItem.UPGRADE: lambda: self.on_upgrade() if self.on_upgrade else None,
             MenuItem.QUIT: lambda: self.on_quit() if self.on_quit else None,
         }
 
         for item in MenuItem:
             action = QAction(_MENU_LABELS[item], self._parent)
+            if item is MenuItem.HOTKEY_HINT:
+                # Non-interactive header showing the activation hotkey (#104).
+                # Disabled (greyed, unclickable) with a trailing separator; both
+                # stay hidden until the daemon sets the text from config, so no
+                # placeholder ever flashes.
+                action.setEnabled(False)
+                self._actions[item] = action
+                self._menu.addAction(action)
+                self._hotkey_separator = self._menu.addSeparator()
+                action.setVisible(False)
+                self._hotkey_separator.setVisible(False)
+                continue
             if item is MenuItem.AUTOSTART:
                 # Checkable "Start at Login" toggle. triggered passes the new
                 # checked state straight through to the daemon, which flips the
@@ -182,6 +199,19 @@ class QtTrayIcon:
         if self.on_autostart_toggled is not None:
             self.on_autostart_toggled(checked)
 
+    def set_hotkey_hint(self, text: str) -> None:
+        """Set the disabled activation-hotkey header (#104).
+
+        Empty *text* hides the header and its separator — used where there is no
+        global-hotkey adapter, so the tray never advertises a hotkey that can't
+        fire. The text comes from ``tray.hotkey_hint.hotkey_hint_label``.
+        """
+        action = self._actions[MenuItem.HOTKEY_HINT]
+        if text:
+            action.setText(text)
+        action.setVisible(bool(text))
+        self._hotkey_separator.setVisible(bool(text))
+
     def set_autostart_checked(self, checked: bool) -> None:
         """Reflect the current ``config.startup.autostart`` flag in the menu."""
         self._actions[MenuItem.AUTOSTART].setChecked(checked)
@@ -194,6 +224,15 @@ class QtTrayIcon:
         Visibility survives ``update_state``, which only toggles enablement.
         """
         self._actions[MenuItem.AUTOSTART].setVisible(available)
+
+    def set_upgrade_available(self, available: bool) -> None:
+        """Show or hide the "Check for Updates…" item (#100).
+
+        Hidden where there is no in-app upgrade path yet (non-Windows): the action
+        would otherwise promise "Updating… will restart" and then silently no-op.
+        Visibility survives ``update_state``, which only toggles enablement.
+        """
+        self._actions[MenuItem.UPGRADE].setVisible(available)
 
     def update_state(self, state: TrayState) -> None:
         # The tray glyph is static brand identity (ADR-0006); only menu-item

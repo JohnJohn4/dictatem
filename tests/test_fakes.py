@@ -10,6 +10,7 @@ from dictatem.interfaces import (
     AudioCapture,
     AutostartRegistrar,
     ClipboardIO,
+    DaemonStopper,
     ForegroundTracker,
     KeyboardHook,
     KeystrokeSender,
@@ -22,6 +23,7 @@ from tests.fakes import (
     FakeAudioCapture,
     FakeAutostartRegistrar,
     FakeClipboardIO,
+    FakeDaemonStopper,
     FakeForegroundTracker,
     FakeKeyboardHook,
     FakeKeystrokeSender,
@@ -178,6 +180,21 @@ class TestFakeAutostartRegistrar:
         reg.disable()
         assert reg.enable_calls == 1
         assert reg.disable_calls == 2
+
+
+class TestFakeDaemonStopper:
+    def test_satisfies_protocol(self) -> None:
+        assert isinstance(FakeDaemonStopper(), DaemonStopper)
+
+    def test_returns_configured_stopped_pids(self) -> None:
+        stopper = FakeDaemonStopper(stopped=[101, 202])
+        assert stopper.stop_running_daemons() == [101, 202]
+
+    def test_records_call_count(self) -> None:
+        stopper = FakeDaemonStopper()
+        stopper.stop_running_daemons()
+        stopper.stop_running_daemons()
+        assert stopper.call_count == 2
 
 
 class TestFakeOverlayRenderer:

@@ -41,7 +41,7 @@ Piping a script from the internet into `iex` runs it immediately. If you'd rathe
 
 **Forcing CPU or GPU.** The script auto-detects an NVIDIA GPU; to override, set `DICTATEM_GPU` before running — `$env:DICTATEM_GPU='cpu'` (CPU-lean) or `$env:DICTATEM_GPU='gpu'` (CUDA). This only chooses the *dependency set*, not the runtime device. On a machine that has an NVIDIA GPU, Dictatem still transcribes on the GPU by default — so forcing `cpu` there installs the lean set but the daemon will still try CUDA and fail to load the model (the CUDA libraries aren't installed). Force `cpu` only on a genuinely GPU-less machine, or also set `device = "cpu"` in your config.
 
-**Updating.** Re-run the one-liner with a newer version tag in the URL (e.g. `.../v0.4.0/install.ps1`); see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest) for the current tag. It's safe to re-run while Dictatem is running — the installer stops the old daemon first (so the upgrade isn't blocked by a file lock) and relaunches the new version for you.
+**Updating.** Easiest is the tray menu: right-click the tray icon → **Check for Updates…**. Dictatem compares the running version against the latest GitHub release and, if a newer one exists, re-runs the installer for you (stopping the old daemon, re-detecting the GPU/CPU dependency set the same way a fresh install does, and relaunching). You can also update manually by re-running the one-liner with a newer version tag in the URL (e.g. `.../v0.4.0/install.ps1`); see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest) for the current tag. Either way it's safe while Dictatem is running — the installer stops the old daemon first (so the upgrade isn't blocked by a file lock) and relaunches the new version for you. If you originally forced the set with `DICTATEM_GPU`, set it again before a manual re-run (the tray upgrade re-detects rather than remembering the override).
 
 The script never installs or starts Ollama and never downloads a Whisper model. The model lazy-downloads on first dictation, so your **first dictation after launch** (or after the idle-unload timer frees VRAM) pauses a few seconds while the model loads — subsequent dictations are immediate. [Trigger Words](#trigger-words) stay off until you set Ollama up yourself ([Ollama / Transform setup](#ollama--transform-setup)).
 
@@ -90,14 +90,14 @@ If you have an NVIDIA GPU and want the fastest transcription, use `runtime-gpu`.
 
 ### Uninstalling
 
-Dictatem owns its start-at-login entry, so removing it cleanly is a two-step process — a bare `uv tool uninstall` would orphan that entry. **Quit Dictatem from the tray first** (right-click the tray icon → Quit), then:
+Dictatem owns its start-at-login entry, so removing it cleanly is a two-step process — a bare `uv tool uninstall` would orphan that entry. Run:
 
 ```powershell
-dictatem --uninstall        # step 1: removes the autostart entry (a dialog confirms and shows step 2)
+dictatem --uninstall        # step 1: removes the autostart entry AND stops the running daemon (a dialog confirms and shows step 2)
 uv tool uninstall dictatem  # step 2: removes the tool (dismiss the step 1 dialog first)
 ```
 
-Quitting first matters: while the daemon is running its files are in use, so `uv tool uninstall` can otherwise fail with `Access is denied`. `dictatem --uninstall` runs windowless, so it confirms step 1 in a pop-up dialog rather than the terminal. Your config under `~/.dictatem` is left untouched. (A future release will stop the daemon automatically so this is just two lines — issue #69.)
+You don't need to quit Dictatem first: step 1 removes the autostart entry and then stops the running daemon, so step 2 isn't blocked by the `…\Scripts` file lock that would otherwise fail with `Access is denied`. `dictatem --uninstall` runs windowless, so it confirms step 1 in a pop-up dialog rather than the terminal. Your config under `~/.dictatem` is left untouched.
 
 On macOS the same two steps apply, in Terminal — step 1 also removes the daemon-owned `~/Applications/Dictatem.app` and its start-at-login LaunchAgent (they must go first: after step 2 the `.app`'s launch target no longer exists), and prints its confirmation to the terminal:
 

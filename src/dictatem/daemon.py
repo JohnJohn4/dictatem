@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         AudioCapture,
         AutostartRegistrar,
         ClipboardIO,
+        DaemonStopper,
         ForegroundTracker,
         HardwareProbe,
         KeystrokeSender,
@@ -999,6 +1000,20 @@ def _run_uninstall() -> None:
         lines.append("Some cleanup failed — check the daemon log.")
         lines.append("You can still finish removing Dictatem with:")
         lines.append("    uv tool uninstall dictatem")
+
+    # Stop the running daemon so step 2 (`uv tool uninstall`) isn't blocked by
+    # the `…\Scripts` file lock (#69). Autostart was removed first (above, per
+    # ADR-0012). Best-effort: failures are logged, never surfaced, so the
+    # remaining-step guidance always shows.
+    stopper = _platform_daemon_stopper()
+    if stopper is not None:
+        try:
+            stopped = stopper.stop_running_daemons()
+            if stopped:
+                logger.info("Stopped running daemon process(es): %s", stopped)
+        except Exception:
+            logger.error("Failed to stop the running daemon during uninstall", exc_info=True)
+
     _show_uninstall_message("\n".join(lines))
 
 
@@ -1095,6 +1110,24 @@ def _platform_autostart_registrar() -> AutostartRegistrar | None:
             agents_dir=default_agents_dir(),
             program_arguments=launch_arguments(launcher),
         )
+    return None
+
+
+def _platform_daemon_stopper() -> DaemonStopper | None:
+    """Build this platform's daemon stopper, or None where none is needed.
+
+    Windows is the only platform with the ``…\\Scripts`` file-lock problem the
+    stopper solves (#69): the loaded interpreter blocks ``uv tool uninstall``.
+    On macOS the daemon launches differently and uninstall is a separate flow, so
+    there is no stopper to build (``None``) — uninstall there just prints its
+    two-step guidance. Mirrors :func:`_platform_autostart_registrar`; the win32
+    adapter is imported lazily so ``dictatem.daemon`` stays importable anywhere
+    (``test_import_safety``).
+    """
+    if sys.platform == "win32":
+        from dictatem.process.win32_stopper import Win32DaemonStopper
+
+        return Win32DaemonStopper()
     return None
 
 
@@ -1375,6 +1408,45 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     tray_icon.set_autostart_available(autostart_registrar is not None)
     tray_icon.on_quit = lambda: daemon.on_tray_quit(app.quit)
 
+    # Tray "Check for Updates…" (#100). Resolve the latest GitHub release off the
+    # UI thread and, if newer, re-run the install one-liner at that tag — which
+    # stops the daemon, picks the right GPU/CPU extra, installs, and relaunches
+    # (ADR-0011/0015; the same verified upgrade path as #98), not a bundled
+    # updater. Kept alive for the event loop's lifetime, like the hook below.
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _installed_version
+
+    from dictatem.upgrade.core import GITHUB_REPO
+    from dictatem.upgrade.github import fetch_latest_tag
+    from dictatem.upgrade.qt_update_check import UpdateChecker
+
+    def _current_version() -> str:
+        try:
+            return _installed_version("dictatem")
+        except PackageNotFoundError:
+            return ""
+
+    def _start_upgrade(tag: str) -> None:
+        if sys.platform == "win32":
+            from dictatem.upgrade.win32_upgrader import spawn_upgrade
+
+            spawn_upgrade(tag)
+        else:
+            # No Windows `…\Scripts` file lock to dance around off-win32; the
+            # in-app upgrade is Windows-only until a macOS installer path lands.
+            logger.info("In-app upgrade is Windows-only for now; tag=%s", tag)
+
+    _update_checker = UpdateChecker(
+        current_version=_current_version(),
+        fetch_latest_tag=lambda: fetch_latest_tag(repo=GITHUB_REPO),
+        notify=tray_icon.show_notification,
+        start_upgrade=_start_upgrade,
+    )
+    tray_icon.on_upgrade = _update_checker.check
+    # In-app upgrade re-runs install.ps1 (Windows-only). Hide the item elsewhere
+    # so it never promises a restart it can't deliver (_start_upgrade no-ops).
+    tray_icon.set_upgrade_available(sys.platform == "win32")
+
     bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:
         classifier = HotkeyClassifier(
@@ -1387,9 +1459,18 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         # callback would otherwise be collected); app.exec() below keeps the
         # reference alive until the daemon exits.
         _hook = adapters.install_keyboard_hook(bridge.enqueue_key_event)
+        # Tell the user what to press, derived from the live config and formatted
+        # for this platform (#104). Only when a hook is live — advertising a
+        # hotkey the platform can't fire would mislead.
+        from dictatem.tray.hotkey_hint import hotkey_hint_label
+
+        tray_icon.set_hotkey_hint(
+            hotkey_hint_label(config.hotkey.modifiers, platform=sys.platform)
+        )
     else:
         # No global-hotkey adapter on this platform yet (macOS: #56). Recording
-        # runs from the tray menu, so no classifier/bridge machinery is built.
+        # runs from the tray menu, so no classifier/bridge machinery is built and
+        # the hotkey hint stays hidden.
         logger.info("No global-hotkey adapter on this platform — use the tray menu")
 
     silence_timer = QTimer()

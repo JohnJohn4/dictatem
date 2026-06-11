@@ -25,6 +25,10 @@ class IconVariant(enum.Enum):
 
 
 class MenuItem(enum.Enum):
+    # Non-interactive header showing the activation hotkey (#104). Always
+    # disabled; its label is set from config by the daemon, hidden where there
+    # is no global-hotkey adapter. Kept first so it reads as a menu title.
+    HOTKEY_HINT = "hotkey_hint"
     START = "start"
     STOP = "stop"
     PRELOAD = "preload"
@@ -35,6 +39,9 @@ class MenuItem(enum.Enum):
     AUTOSTART = "autostart"
     SHOW_LOG = "show_log"
     RESTART = "restart"
+    # "Check for Updates…" — resolves the latest GitHub release and, if newer,
+    # re-runs the install one-liner at that tag (ADR-0011/0015). Always enabled.
+    UPGRADE = "upgrade"
     QUIT = "quit"
 
 
@@ -58,6 +65,9 @@ class TrayState:
         return IconVariant.Idle
 
     def menu_item_enabled(self, item: MenuItem) -> bool:
+        if item is MenuItem.HOTKEY_HINT:
+            # A non-interactive header — always disabled (greyed, unclickable).
+            return False
         if item is MenuItem.STOP:
             return self.is_recording
         if item is MenuItem.UNLOAD:
