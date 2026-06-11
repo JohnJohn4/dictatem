@@ -81,7 +81,9 @@ not, **export a QA handoff** to `docs/agents/qa-handoffs/03-docs-discoverability
 
 > Note: Session 2 left one small manual-QA item — **#126 vocabulary recognition
 > lift** needs a real model on Windows to confirm `hotwords` actually improves
-> recognition. Roll it into this session's QA pass or the same handoff.
+> recognition. The procedure is already written up at
+> [`../qa-handoffs/02-vocabulary-recognition-qa.md`](../qa-handoffs/02-vocabulary-recognition-qa.md) —
+> the user has it queued; surface its result if it lands during your session.
 
 ## When done — hand off
 
