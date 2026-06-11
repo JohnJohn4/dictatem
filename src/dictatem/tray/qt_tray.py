@@ -29,6 +29,8 @@ _MENU_LABELS: dict[MenuItem, str] = {
     MenuItem.RESTART: "Restart",
     MenuItem.UPGRADE: "Check for Updates…",
     MenuItem.QUIT: "Quit",
+    # Placeholder; the real text is set from config via set_version_label (#100).
+    MenuItem.VERSION: "Version",
 }
 
 # Draw a native pixmap at each of these side lengths and add them all to the
@@ -184,6 +186,18 @@ class QtTrayIcon:
                 action.setVisible(False)
                 self._hotkey_separator.setVisible(False)
                 continue
+            if item is MenuItem.VERSION:
+                # Non-interactive footer showing the installed version (#100), so
+                # the user can confirm which build they're on. A leading separator
+                # sets it off from Quit; both stay hidden until the daemon sets the
+                # text.
+                action.setEnabled(False)
+                self._version_separator = self._menu.addSeparator()
+                self._actions[item] = action
+                self._menu.addAction(action)
+                action.setVisible(False)
+                self._version_separator.setVisible(False)
+                continue
             if item is MenuItem.AUTOSTART:
                 # Checkable "Start at Login" toggle. triggered passes the new
                 # checked state straight through to the daemon, which flips the
@@ -211,6 +225,18 @@ class QtTrayIcon:
             action.setText(text)
         action.setVisible(bool(text))
         self._hotkey_separator.setVisible(bool(text))
+
+    def set_version_label(self, text: str) -> None:
+        """Set the disabled installed-version footer (#100).
+
+        Empty *text* hides the footer and its separator (e.g. when the version
+        can't be resolved). The daemon supplies ``"Dictatem v<version>"``.
+        """
+        action = self._actions[MenuItem.VERSION]
+        if text:
+            action.setText(text)
+        action.setVisible(bool(text))
+        self._version_separator.setVisible(bool(text))
 
     def set_autostart_checked(self, checked: bool) -> None:
         """Reflect the current ``config.startup.autostart`` flag in the menu."""
