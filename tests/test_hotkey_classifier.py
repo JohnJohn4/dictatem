@@ -320,3 +320,198 @@ class TestConfigurableModifiers:
 
         _decision, event = c.process_event(Key.LEFT_META, KeyAction.KEY_UP, 150)
         assert event == HotkeyEvent.TAP
+
+
+class TestMouseIdentities:
+    """Mouse buttons are neutral Key identities in the same combo as modifiers.
+
+    See ADR-0020. ``mouse4``/``mouse5`` are the side buttons and ``middle`` is
+    the wheel click; each resolves to a ``Key`` the classifier reasons about
+    exactly like a modifier group.
+    """
+
+    def test_standalone_mouse4_tap(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse4",))
+
+        c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 0)
+
+        _decision, event = c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 100)
+        assert event == HotkeyEvent.TAP
+
+    def test_standalone_mouse4_hold_start(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse4",))
+
+        c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 0)
+
+        event = c.tick(210)
+        assert event == HotkeyEvent.HOLD_START
+
+    def test_standalone_mouse4_hold_end(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse4",))
+
+        c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 0)
+        c.tick(210)
+
+        _decision, event = c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 500)
+        assert event == HotkeyEvent.HOLD_END
+
+    def test_standalone_mouse5_tap(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse5",))
+
+        c.process_event(Key.MOUSE_5, KeyAction.KEY_DOWN, 0)
+
+        _decision, event = c.process_event(Key.MOUSE_5, KeyAction.KEY_UP, 100)
+        assert event == HotkeyEvent.TAP
+
+    def test_standalone_middle_tap(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("middle",))
+
+        c.process_event(Key.MOUSE_MIDDLE, KeyAction.KEY_DOWN, 0)
+
+        _decision, event = c.process_event(Key.MOUSE_MIDDLE, KeyAction.KEY_UP, 100)
+        assert event == HotkeyEvent.TAP
+
+    def test_ctrl_mouse4_combined_tap(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "mouse4"))
+
+        c.process_event(Key.LEFT_CTRL, KeyAction.KEY_DOWN, 0)
+        c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 10)
+
+        _decision, event = c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 150)
+        assert event == HotkeyEvent.TAP
+
+    def test_ctrl_mouse4_combined_hold_start(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "mouse4"))
+
+        c.process_event(Key.LEFT_CTRL, KeyAction.KEY_DOWN, 0)
+        c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 10)
+
+        event = c.tick(210)
+        assert event == HotkeyEvent.HOLD_START
+
+    def test_ctrl_mouse4_requires_ctrl(self) -> None:
+        """Bare Mouse4 must NOT form the ctrl+mouse4 combo."""
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "mouse4"))
+
+        c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 0)
+
+        _decision, event = c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 100)
+        assert event is None
+        assert c.combo_held is False
+
+
+class TestMouseSuppression:
+    """Conditional suppression of mouse-button events (ADR-0020).
+
+    A mouse-button press SUPPRESSES iff it completes/sustains the configured
+    combo; modifier keys always pass through. The matching button-up is
+    suppressed iff its down was, keeping the down/up pair balanced.
+    """
+
+    def test_standalone_mouse4_press_suppressed(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse4",))
+
+        decision, _event = c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 0)
+        assert decision == HookDecision.SUPPRESS
+
+    def test_standalone_mouse4_up_suppressed(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse4",))
+
+        c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 0)
+        decision, _event = c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 100)
+        assert decision == HookDecision.SUPPRESS
+
+    def test_combined_mouse4_press_suppressed_while_ctrl_held(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "mouse4"))
+
+        c.process_event(Key.LEFT_CTRL, KeyAction.KEY_DOWN, 0)
+        decision, _event = c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 10)
+        assert decision == HookDecision.SUPPRESS
+
+    def test_combined_mouse4_up_suppressed_while_ctrl_held(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "mouse4"))
+
+        c.process_event(Key.LEFT_CTRL, KeyAction.KEY_DOWN, 0)
+        c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 10)
+        decision, _event = c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 150)
+        assert decision == HookDecision.SUPPRESS
+
+    def test_bare_mouse4_press_passes_through_when_combo_needs_ctrl(self) -> None:
+        """Bare Mouse4 (no Ctrl) must pass through so browser-back still works."""
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "mouse4"))
+
+        decision, _event = c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 0)
+        assert decision == HookDecision.PASS_THROUGH
+
+    def test_bare_mouse4_up_passes_through_when_down_did(self) -> None:
+        """A down that passed through means its up must pass through too."""
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "mouse4"))
+
+        c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 0)
+        decision, _event = c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 100)
+        assert decision == HookDecision.PASS_THROUGH
+
+    def test_up_pairs_with_its_down_when_ctrl_released_first(self) -> None:
+        """If the down was suppressed, its up is suppressed even if the combo
+        already broke (Ctrl released) before the button-up arrives."""
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "mouse4"))
+
+        c.process_event(Key.LEFT_CTRL, KeyAction.KEY_DOWN, 0)
+        down, _ = c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 10)
+        assert down == HookDecision.SUPPRESS
+
+        # Ctrl is released before the mouse button comes up.
+        c.process_event(Key.LEFT_CTRL, KeyAction.KEY_UP, 20)
+        decision, _event = c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 30)
+        assert decision == HookDecision.SUPPRESS
+
+    def test_up_passes_through_when_down_passed_even_if_ctrl_pressed_later(
+        self,
+    ) -> None:
+        """A bare-Mouse4 down passes through; pressing Ctrl afterwards must not
+        retroactively suppress the matching up (down/up stay paired)."""
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "mouse4"))
+
+        down, _ = c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 0)
+        assert down == HookDecision.PASS_THROUGH
+
+        c.process_event(Key.LEFT_CTRL, KeyAction.KEY_DOWN, 10)
+        decision, _event = c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 20)
+        assert decision == HookDecision.PASS_THROUGH
+
+    def test_modifier_key_in_mouse_combo_passes_through(self) -> None:
+        """Modifier keys always pass through even in a mouse combo."""
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "mouse4"))
+
+        decision, _event = c.process_event(Key.LEFT_CTRL, KeyAction.KEY_DOWN, 0)
+        assert decision == HookDecision.PASS_THROUGH
+
+    def test_mouse4_not_in_combo_passes_through(self) -> None:
+        """A mouse button that is not configured at all passes through."""
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "win"))
+
+        decision, _event = c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 0)
+        assert decision == HookDecision.PASS_THROUGH
+
+    def test_unconfigured_mouse_button_passes_through_while_combo_held(self) -> None:
+        """An unbound mouse button must pass through even while a keyboard-only
+        combo is held — only the *configured* trigger button is suppressed."""
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl",))
+
+        c.process_event(Key.LEFT_CTRL, KeyAction.KEY_DOWN, 0)  # combo now held
+        down, _ = c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 10)
+        assert down == HookDecision.PASS_THROUGH
+        up, _ = c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 20)
+        assert up == HookDecision.PASS_THROUGH
+
+    def test_repeat_mouse_down_does_not_unbalance_pairing(self) -> None:
+        """A duplicate down (auto-repeat) is ignored and the single up still
+        pairs with the original suppressed down."""
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse4",))
+
+        first, _ = c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 0)
+        assert first == HookDecision.SUPPRESS
+        # Duplicate down ignored.
+        c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 10)
+        up, _ = c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 50)
+        assert up == HookDecision.SUPPRESS
