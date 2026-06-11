@@ -152,6 +152,17 @@ identity and is **independent of the [Status Dot](#status-dot)**: it does not
 encode recording state. Swapping the Tray Icon has no effect on the Status
 Dot, and vice versa.
 
+### Usage Guide
+
+The read-only, in-app help window opened from the [Tray Icon](#tray-icon)
+menu's "How to use Dictatem…" item. It teaches the critical workflows —
+dictating ([Tap](#tap) vs [Hold](#hold)), [Trigger Words](#trigger-word), and
+first-use model loading — and reflects the **live configuration**: the actual
+[Hotkey Combo](#hotkey-combo) and the user's configured
+[Trigger Words](#trigger-word), not static examples. It carries no controls; it
+grows by appending a section as each feature lands, so there is one place to
+learn Dictatem rather than a help item per feature.
+
 ## Hardware
 
 ### Hardware Tier
