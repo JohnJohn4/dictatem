@@ -38,6 +38,34 @@ class TestDictatingSection:
         assert "pill" in html
 
 
+class TestTriggerWordsSection:
+    def test_lists_configured_trigger_words(self) -> None:
+        html = usage_guide_html(
+            ("win", "alt"), platform="win32", trigger_words=["fix", "rewrite"]
+        )
+        assert "Trigger words" in html
+        assert "fix" in html
+        assert "rewrite" in html
+
+    def test_explains_the_same_window_rail(self) -> None:
+        html = usage_guide_html(
+            ("win", "alt"), platform="win32", trigger_words=["fix"]
+        )
+        assert "same window" in html
+
+    def test_empty_state_when_no_trigger_words(self) -> None:
+        html = usage_guide_html(("win", "alt"), platform="win32", trigger_words=[])
+        assert "haven't added any trigger words" in html
+        assert "~/.dictatem/prompts/" in html
+
+    def test_trigger_words_are_html_escaped(self) -> None:
+        html = usage_guide_html(
+            ("win", "alt"), platform="win32", trigger_words=["a&b"]
+        )
+        assert "a&amp;b" in html
+        assert "a&b" not in html
+
+
 class TestFirstUseSection:
     def test_explains_model_load_and_preload(self) -> None:
         html = usage_guide_html(("win", "alt"), platform="win32")
@@ -51,6 +79,7 @@ class TestDocumentShape:
         assert html.startswith("<html>")
         assert html.endswith("</html>")
 
-    def test_dictating_precedes_first_use(self) -> None:
+    def test_sections_are_ordered_dictating_triggers_first_use(self) -> None:
         html = usage_guide_html(("win", "alt"), platform="win32")
-        assert html.index("Dictating") < html.index("First use")
+        assert html.index("Dictating") < html.index("Trigger words")
+        assert html.index("Trigger words") < html.index("First use")

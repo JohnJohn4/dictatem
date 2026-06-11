@@ -14,8 +14,12 @@ first-use model loading.
 from __future__ import annotations
 
 import html
+from typing import TYPE_CHECKING
 
 from dictatem.tray.hotkey_hint import format_hotkey
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 def _dictating_section(combo: str) -> str:
@@ -32,6 +36,25 @@ def _dictating_section(combo: str) -> str:
     )
 
 
+def _trigger_words_section(trigger_words: Sequence[str]) -> str:
+    section = (
+        "<h3>Trigger words</h3>"
+        "<p>Right after dictating, say a single word like <i>summarize</i> on its "
+        "own. Instead of typing it, Dictatem runs that word's transform and "
+        "replaces what you just pasted with the result. It only fires in the "
+        "<b>same window</b>, within a few minutes of the paste.</p>"
+    )
+    if trigger_words:
+        words = ", ".join(html.escape(word) for word in trigger_words)
+        section += f"<p><i>Your trigger words: {words}</i></p>"
+    else:
+        section += (
+            "<p><i>You haven't added any trigger words yet — drop a prompt file "
+            "in <code>~/.dictatem/prompts/</code>.</i></p>"
+        )
+    return section
+
+
 def _first_use_section() -> str:
     return (
         "<h3>First use</h3>"
@@ -41,12 +64,24 @@ def _first_use_section() -> str:
     )
 
 
-def usage_guide_html(modifiers: tuple[str, ...], *, platform: str) -> str:
+def usage_guide_html(
+    modifiers: tuple[str, ...],
+    *,
+    platform: str,
+    trigger_words: Sequence[str] = (),
+) -> str:
     """Build the full Usage Guide document as an HTML string.
 
     The dictating section interpolates the live chord formatted for *platform*
-    (Windows ``Win+Alt`` / macOS ``⌥⌘``); see ``format_hotkey``.
+    (Windows ``Win+Alt`` / macOS ``⌥⌘``); see ``format_hotkey``. *trigger_words*
+    is the user's configured aliases (the daemon's alias map keys) — listed in
+    the trigger-words section, or replaced by an empty-state pointer when none
+    are configured.
     """
     combo = format_hotkey(modifiers, platform=platform)
-    sections = [_dictating_section(combo), _first_use_section()]
+    sections = [
+        _dictating_section(combo),
+        _trigger_words_section(trigger_words),
+        _first_use_section(),
+    ]
     return "<html><body>" + "".join(sections) + "</body></html>"
