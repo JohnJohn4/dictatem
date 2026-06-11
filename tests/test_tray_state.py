@@ -95,19 +95,20 @@ class TestMenuItemEnabled:
             assert state.menu_item_enabled(item) is True, f"{item} should be enabled even in error"
 
 
-    def test_hotkey_hint_is_always_disabled(self) -> None:
-        # The hotkey header is a non-interactive label, never clickable.
+    def test_hotkey_hint_and_version_are_always_disabled(self) -> None:
+        # The hotkey header and version footer are non-interactive labels.
         for state in (
             TrayState(is_recording=False, is_model_loaded=False, has_error=False),
             TrayState(is_recording=True, is_model_loaded=True, has_error=True),
         ):
             assert state.menu_item_enabled(MenuItem.HOTKEY_HINT) is False
+            assert state.menu_item_enabled(MenuItem.VERSION) is False
 
 
 class TestMenuItemOrder:
     def test_enum_order_matches_documented_spec(self) -> None:
         expected = ["HOTKEY_HINT", "START", "STOP", "PRELOAD", "UNLOAD",
-                    "AUTOSTART", "SHOW_LOG", "RESTART", "UPGRADE", "QUIT"]
+                    "AUTOSTART", "SHOW_LOG", "RESTART", "UPGRADE", "QUIT", "VERSION"]
         actual = [m.name for m in MenuItem]
         assert actual == expected
 

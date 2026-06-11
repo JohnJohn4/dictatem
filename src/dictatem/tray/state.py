@@ -43,6 +43,10 @@ class MenuItem(enum.Enum):
     # re-runs the install one-liner at that tag (ADR-0011/0015). Always enabled.
     UPGRADE = "upgrade"
     QUIT = "quit"
+    # Non-interactive footer showing the installed version, so the user can
+    # confirm which build they're on (e.g. after an upgrade). Always disabled;
+    # its label is set from importlib.metadata by the daemon.
+    VERSION = "version"
 
 
 @dataclass
@@ -65,8 +69,8 @@ class TrayState:
         return IconVariant.Idle
 
     def menu_item_enabled(self, item: MenuItem) -> bool:
-        if item is MenuItem.HOTKEY_HINT:
-            # A non-interactive header — always disabled (greyed, unclickable).
+        if item is MenuItem.HOTKEY_HINT or item is MenuItem.VERSION:
+            # Non-interactive header/footer labels — always disabled.
             return False
         if item is MenuItem.STOP:
             return self.is_recording

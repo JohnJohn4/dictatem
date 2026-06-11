@@ -174,6 +174,14 @@ function Stop-DictatemDaemon {
     foreach ($r in $roots) { $queue.Enqueue($r) }
     while ($queue.Count -gt 0) {
         $id = $queue.Dequeue()
+        # Never stop ourselves. The tray "Check for Updates" upgrade (#100)
+        # launches this installer as a CHILD of the daemon, so the daemon's
+        # process tree includes this very PowerShell; without this guard the kill
+        # loop below would terminate the installer mid-run — the daemon dies but
+        # the upgrade never installs or relaunches. (Mirrors the Python stopper's
+        # os.getpid() exclusion.) The daemon itself is still reached via the root
+        # walk, independent of us.
+        if ($id -eq $PID) { continue }
         if (-not $kill.Add($id)) { continue }
         if (-not $byParent.ContainsKey($id)) { continue }
         $parentStart = $byId[$id].CreationDate

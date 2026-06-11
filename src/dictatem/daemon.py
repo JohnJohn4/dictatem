@@ -1446,6 +1446,10 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # In-app upgrade re-runs install.ps1 (Windows-only). Hide the item elsewhere
     # so it never promises a restart it can't deliver (_start_upgrade no-ops).
     tray_icon.set_upgrade_available(sys.platform == "win32")
+    # Footer showing the installed version, so the user can confirm which build
+    # they're on (e.g. after an upgrade). Hidden if the version can't be read.
+    _ver = _current_version()
+    tray_icon.set_version_label(f"Dictatem v{_ver}" if _ver else "")
 
     bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:
