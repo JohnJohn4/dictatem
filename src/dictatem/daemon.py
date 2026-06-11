@@ -1341,7 +1341,8 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     transform_lifecycle = TransformLifecycle(backend=transform_backend)
     prompts_dir = Path.home() / ".dictatem" / "prompts"
     bootstrap_prompts(prompts_dir, default_prompts_dir())
-    trigger_detector = TriggerDetector(load_prompts_dir(prompts_dir))
+    prompt_aliases = load_prompts_dir(prompts_dir)
+    trigger_detector = TriggerDetector(prompt_aliases)
 
     overlay_state = OverlayState(
         clock=time.monotonic,
@@ -1450,6 +1451,18 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # they're on (e.g. after an upgrade). Hidden if the version can't be read.
     _ver = _current_version()
     tray_icon.set_version_label(f"Dictatem v{_ver}" if _ver else "")
+
+    # Usage Guide (ADR-0019): build the read-only help content from live config
+    # so the "How to use Dictatem…" item reflects the actual activation chord.
+    from dictatem.tray.usage_guide import usage_guide_html
+
+    tray_icon.set_usage_guide_html(
+        usage_guide_html(
+            config.hotkey.modifiers,
+            platform=sys.platform,
+            trigger_words=sorted(prompt_aliases),
+        )
+    )
 
     bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:

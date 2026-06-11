@@ -7,7 +7,15 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QRectF, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPixmap
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QMenu,
+    QSystemTrayIcon,
+    QTextBrowser,
+    QVBoxLayout,
+    QWidget,
+)
 
 from dictatem.assets import asset_path
 from dictatem.logpaths import default_daemon_log_path
@@ -26,6 +34,7 @@ _MENU_LABELS: dict[MenuItem, str] = {
     MenuItem.UNLOAD: "Unload Model",
     MenuItem.AUTOSTART: "Start at Login",
     MenuItem.SHOW_LOG: "Show Log",
+    MenuItem.HELP: "How to use Dictatem…",
     MenuItem.RESTART: "Restart",
     MenuItem.UPGRADE: "Check for Updates…",
     MenuItem.QUIT: "Quit",
@@ -124,6 +133,11 @@ class QtTrayIcon:
         self._menu = QMenu()
         self._actions: dict[MenuItem, QAction] = {}
 
+        # Usage Guide (ADR-0019): HTML set once from live config by the daemon,
+        # rendered lazily into a single-instance window on first menu click.
+        self._usage_guide_html = ""
+        self._usage_guide_window: QDialog | None = None
+
         self.on_start: Callable[[], None] | None = None
         self.on_stop: Callable[[], None] | None = None
         self.on_preload: Callable[[], None] | None = None
@@ -167,6 +181,7 @@ class QtTrayIcon:
             MenuItem.PRELOAD: lambda: self.on_preload() if self.on_preload else None,
             MenuItem.UNLOAD: lambda: self.on_unload() if self.on_unload else None,
             MenuItem.SHOW_LOG: lambda: self._open_log(),
+            MenuItem.HELP: lambda: self._open_usage_guide(),
             MenuItem.RESTART: lambda: self.on_restart() if self.on_restart else None,
             MenuItem.UPGRADE: lambda: self.on_upgrade() if self.on_upgrade else None,
             MenuItem.QUIT: lambda: self.on_quit() if self.on_quit else None,
@@ -238,6 +253,19 @@ class QtTrayIcon:
         action.setVisible(bool(text))
         self._version_separator.setVisible(bool(text))
 
+    def set_usage_guide_html(self, html: str) -> None:
+        """Set the Usage Guide window's content (ADR-0019).
+
+        The daemon builds this once from live config via
+        ``tray.usage_guide.usage_guide_html``. If the window is already open,
+        refresh its content in place so a later set is reflected.
+        """
+        self._usage_guide_html = html
+        if self._usage_guide_window is not None:
+            browser = self._usage_guide_window.findChild(QTextBrowser)
+            if browser is not None:
+                browser.setHtml(html)
+
     def set_autostart_checked(self, checked: bool) -> None:
         """Reflect the current ``config.startup.autostart`` flag in the menu."""
         self._actions[MenuItem.AUTOSTART].setChecked(checked)
@@ -278,3 +306,35 @@ class QtTrayIcon:
             # Qt's cross-platform "open with the OS default app" — no
             # per-platform branch (os.startfile is Windows-only).
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path)))
+
+    def _open_usage_guide(self) -> None:
+        """Open the read-only Usage Guide window, or raise it if already open.
+
+        Single-instance and non-modal (ADR-0019): clicking the menu item again
+        brings the existing window to the front rather than spawning a second.
+        The window only hosts the HTML; its content is built from live config
+        by the daemon (``tray.usage_guide``).
+        """
+        if self._usage_guide_window is not None:
+            self._usage_guide_window.show()
+            self._usage_guide_window.raise_()
+            self._usage_guide_window.activateWindow()
+            return
+
+        window = QDialog(self._parent)
+        window.setWindowTitle("How to use Dictatem")
+        window.setWindowIcon(self._app_icon)
+        window.resize(420, 480)
+
+        browser = QTextBrowser(window)
+        browser.setOpenExternalLinks(True)
+        browser.setHtml(self._usage_guide_html)
+
+        layout = QVBoxLayout(window)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(browser)
+
+        self._usage_guide_window = window
+        window.show()
+        window.raise_()
+        window.activateWindow()

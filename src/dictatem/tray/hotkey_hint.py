@@ -37,13 +37,15 @@ def format_hotkey(modifiers: tuple[str, ...], *, platform: str) -> str:
 
 
 def hotkey_hint_label(modifiers: tuple[str, ...], *, platform: str) -> str:
-    """The full disabled-header label, e.g. ``Hotkey: Win+Alt (hold to talk …)``.
+    """The compact disabled-header label, e.g. ``Win+Alt to dictate``.
 
-    Conveys both activation styles — hold-to-talk and tap-to-toggle — so a new
-    user learns what to press and how. Returns ``""`` when there is no usable
-    chord, signalling the tray to hide the header item.
+    States the activation chord and its purpose at a glance — narrow enough that
+    it no longer drives the tray popup's width. The full hold-to-talk /
+    tap-to-toggle teaching lives in the Usage Guide instead (CONTEXT.md /
+    ADR-0019). Returns ``""`` when there is no usable chord, signalling the tray
+    to hide the header item.
     """
     combo = format_hotkey(modifiers, platform=platform)
     if not combo:
         return ""
-    return f"Hotkey: {combo} (hold to talk · tap to toggle)"
+    return f"{combo} to dictate"

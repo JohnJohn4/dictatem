@@ -38,6 +38,11 @@ class MenuItem(enum.Enum):
     # by TrayState (which tracks enable/disable only). See ADR-0012.
     AUTOSTART = "autostart"
     SHOW_LOG = "show_log"
+    # "How to use Dictatem…" — opens the read-only in-app Usage Guide window
+    # (CONTEXT.md / ADR-0019). Always enabled; its content is set from live
+    # config by the daemon via set_usage_guide_html. Grouped next to SHOW_LOG
+    # since both open a separate surface rather than acting on recording.
+    HELP = "help"
     RESTART = "restart"
     # "Check for Updates…" — resolves the latest GitHub release and, if newer,
     # re-runs the install one-liner at that tag (ADR-0011/0015). Always enabled.
