@@ -7,20 +7,26 @@ interpreter is loaded, so the step otherwise fails with
 ``Access is denied. (os error 5)`` (reproduced on a managed laptop, #69).
 
 The *decision* — given a snapshot of running processes and where Dictatem is
-installed, which PIDs are daemons safe to terminate — is pure logic with no OS
-calls, so the full match table is unit-testable on any OS. The win32 adapter
-(``win32_stopper``) supplies the snapshot and terminates the matches; this module
-is the testable core, mirroring ``autostart.reconcile``.
+installed, which PIDs are the daemon's processes safe to terminate — is pure logic
+with no OS calls, so the full match table is unit-testable on any OS. The win32
+adapter (``win32_stopper``) supplies the snapshot (via WMI) and terminates the
+matches; this module is the testable core, mirroring ``autostart.reconcile``.
 
-Matching is by **full executable path**, never PID: a process matches when its
-exe lives under the uv tools dictatem dir (the ``Scripts`` interpreter that holds
-the lock) or equals the ``~/.local/bin/dictatem(.exe)`` trampoline. Path matching
-sidesteps any PID-recycling risk, and the invoking process (``os.getpid()``) is
-always excluded so a clean-stop never terminates itself mid-flight.
+**Why a tree walk, not just a path match.** The uv gui-script launcher under
+``…\\Scripts\\pythonw.exe`` re-execs the *base* CPython as a child (the two
+``pythonw.exe`` of #43), and **that child is the real daemon** — its exe lives
+*outside* the tool dir (e.g. ``…\\Python313\\pythonw.exe``), so path-matching
+alone would orphan it: the daemon survives, keeps the tool-env DLLs loaded, and
+``uv tool uninstall`` still fails with ``Access is denied``. So we path-match the
+*roots* (exe under the tool dir, or the ``~/.local/bin/dictatem(.exe)``
+trampoline) and then walk root→descendants, exactly like ``install.ps1``'s
+``Stop-DictatemDaemon``. The invoking process (``os.getpid()``) is always
+excluded so a clean-stop never terminates itself mid-flight.
 """
 
 from __future__ import annotations
 
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -32,13 +38,17 @@ if TYPE_CHECKING:
 class ProcessInfo:
     """One running process from the OS snapshot.
 
-    *exe_path* is the process's full executable path, or ``""`` when the adapter
-    could not read it (e.g. access denied for a process owned by another user) —
-    an unreadable path never matches.
+    *exe_path* is the full executable path, or ``""`` when the adapter could not
+    read it. *parent_pid* enables the root→descendant walk. *create_time* is an
+    opaque, lexicographically-orderable timestamp (the WMI ``CreationDate``
+    string) used only to reject a recycled parent PID — a genuine child cannot
+    predate its parent; ``None`` disables that guard for the process.
     """
 
     pid: int
+    parent_pid: int
     exe_path: str
+    create_time: str | None = None
 
 
 def _normalize(path: str) -> str:
@@ -74,24 +84,54 @@ def pids_to_stop(
     *,
     self_pid: int,
     tool_dir: str,
-    extra_exes: tuple[str, ...] = (),
+    trampolines: tuple[str, ...] = (),
 ) -> list[int]:
-    """PIDs of running Dictatem daemons to terminate, excluding *self_pid*.
+    """PIDs of the running Dictatem daemon to terminate, excluding *self_pid*.
 
-    A process matches when its executable lives under *tool_dir* (the uv tools
-    dictatem dir whose ``Scripts`` interpreter holds the lock) or equals one of
-    *extra_exes* (the ``~/.local/bin/dictatem(.exe)`` trampoline — an exact path
-    match, so a different uv tool in the same bin dir is not caught). *self_pid*
-    is always excluded so the invoking ``--uninstall``/daemon process is never
-    terminated. Input order is preserved.
+    A process is a **root** when its executable lives under *tool_dir* (the uv
+    tools dictatem dir whose ``Scripts`` interpreter holds the lock) or equals one
+    of *trampolines* (the ``~/.local/bin/dictatem(.exe)`` launcher — an exact path
+    match, so a different uv tool in the same bin dir is not caught). The result
+    is every root **and all its descendants** (the launcher's re-exec'd base
+    interpreter, whose own exe is outside the tool dir), found by walking
+    ``parent_pid`` links from the roots. A descendant that predates its parent is
+    skipped (a recycled parent PID can't be a genuine child). *self_pid* is always
+    excluded. Input order is preserved.
     """
-    extra_normalized = {_normalize(exe) for exe in extra_exes if exe}
-    matched: list[int] = []
-    for proc in processes:
-        if proc.pid == self_pid or not proc.exe_path:
+    procs = list(processes)
+    by_pid = {p.pid: p for p in procs}
+    children: dict[int, list[ProcessInfo]] = defaultdict(list)
+    for p in procs:
+        children[p.parent_pid].append(p)
+
+    tramp = {_normalize(t) for t in trampolines if t}
+
+    def _is_root(p: ProcessInfo) -> bool:
+        return bool(p.exe_path) and (
+            is_path_under(p.exe_path, tool_dir) or _normalize(p.exe_path) in tramp
+        )
+
+    seen: set[int] = set()
+    queue: deque[int] = deque(p.pid for p in procs if _is_root(p))
+    while queue:
+        pid = queue.popleft()
+        if pid in seen:
             continue
-        if is_path_under(proc.exe_path, tool_dir) or (
-            _normalize(proc.exe_path) in extra_normalized
-        ):
-            matched.append(proc.pid)
-    return matched
+        seen.add(pid)
+        parent = by_pid.get(pid)
+        for child in children.get(pid, ()):
+            if child.pid in seen:
+                continue
+            # A genuine child cannot have started before its parent; a child that
+            # does is a stale/recycled parent PID, not really ours — skip it.
+            if (
+                parent is not None
+                and parent.create_time is not None
+                and child.create_time is not None
+                and child.create_time < parent.create_time
+            ):
+                continue
+            queue.append(child.pid)
+
+    seen.discard(self_pid)
+    return [p.pid for p in procs if p.pid in seen]
