@@ -24,10 +24,13 @@ push-to-talk mode and stops on release.
 
 ### Hotkey Combo
 
-The set of modifier keys that, pressed together, arm dictation. Configured by
-name via `[hotkey].modifiers` (default `["win", "alt"]`) and matched against
-**platform-neutral modifier identities**, so the same configuration means the
-same thing on every OS while each platform maps its own physical keys:
+The set of **trigger inputs** — modifier keys and/or a single mouse button —
+that, pressed together, arm dictation. Configured by name via
+`[hotkey].modifiers` (default `["win", "alt"]`; the field name is kept for
+back-compat even though the set may now include a mouse button) and matched
+against **platform-neutral identities**, so the same configuration means the
+same thing on every OS while each platform maps its own physical keys and
+buttons:
 
 | Modifier name | Identity | Windows key | macOS key |
 | --- | --- | --- | --- |
@@ -36,13 +39,30 @@ same thing on every OS while each platform maps its own physical keys:
 | `ctrl` | Ctrl | Ctrl | Control |
 | `shift` | Shift | Shift | Shift |
 
+A trigger input may also be a single **mouse button**: `mouse4` or `mouse5`
+(the two side buttons) or `middle` (the wheel click). Left and right click are
+never available — they are primary interaction. A mouse button may be used
+**standalone** (`["mouse4"]`) or **combined** with modifiers
+(`["ctrl", "mouse4"]`).
+
+The configurable vocabulary is a **curated allow-list**: only the names above
+are accepted; anything else is rejected on load and falls back to the default.
+Dictatem has no free-form key binding and no settings UI — the combo is
+opinionated by default and configurable only as an escape hatch
+(discoverability over configurability).
+
+While a mouse button is actively completing the combo it is **suppressed** — it
+does not also fire its usual action (e.g. browser-back) — whereas modifier keys
+always pass through.
+
 `meta` is the canonical cross-platform name for the OS key; `win` is a
 permanent alias kept for existing Windows configs. The default combo is
-therefore Win+Alt on Windows and Option+Command on macOS. The keyboard hook on
-each platform translates native key codes into these identities; the
+therefore Win+Alt on Windows and Option+Command on macOS. The keyboard and
+mouse hooks on each platform translate native codes into these identities; the
 [Tap](#tap)/[Hold](#hold) classifier reasons only about identities and never
-sees a raw OS key code. See
-[ADR-0010](docs/adr/0010-hotkey-modifiers-are-configurable.md).
+sees a raw OS code. See
+[ADR-0010](docs/adr/0010-hotkey-modifiers-are-configurable.md) and
+[ADR-0020](docs/adr/0020-mouse-buttons-are-trigger-inputs.md).
 
 ### Last Paste
 
@@ -119,6 +139,51 @@ Transform output then itself becomes the new [Last Paste](#last-paste),
 which allows trigger words to compose (e.g. running `"summarize"` twice
 further condenses the result).
 
+### Vocabulary
+
+User-supplied terms — names, jargon, acronyms, non-English words — that **bias
+transcription recognition** toward those spellings. Declared one per line in
+`~/.dictatem/vocabulary.md`. The terms are fed to the transcription model as
+recognition hints: they influence how audio is *heard*, and do not by themselves
+rewrite the transcribed text (contrast [Replacement](#replacement)). Keeping the
+list focused matters — an over-long list can degrade recognition.
+
+### Replacement
+
+A **deterministic, post-transcription substitution** applied to regular
+dictation before it is pasted: each rule rewrites a matched source string to a
+target, matched **case-insensitively on whole words**. Declared one per line as
+`source => target` in `~/.dictatem/replacements.md`; an **empty target deletes**
+the match and collapses the surrounding whitespace, which is the literal-minded
+way to drop unambiguous filler words (`um`, `uh`). Replacements never involve the
+LLM, distinguishing them from a [Transform](#transform) (an LLM operation invoked
+by a [Trigger Word](#trigger-word)).
+
+Dictatem does **not** silently clean up speech by default: the shipped
+`replacements.md` carries only commented-out examples, so words are altered only
+by rules the user has consciously enabled. Ambiguous fillers (`like`,
+`you know`) are deliberately *not* removed this way — they are real words in
+context and need LLM judgement, not a blind rule. See
+[ADR-0024](docs/adr/0024-replacements-are-opt-in-no-silent-autocorrect.md).
+
+### Clipboard Fallback
+
+A dictation is **never silently lost**. Dictatem types transcribed text into the
+focused window via keystrokes — it does not paste through the clipboard (see
+[ADR-0004](docs/adr/0004-trigger-fire-types-via-sendinput-not-clipboard.md)) —
+but when there is **no foreground target** to type into, the text is placed on
+the **clipboard** instead and the [Overlay Pill](#overlay-pill) shows a brief
+notice, so the user can paste it where they meant to. The most recent dictation
+can also be copied on demand from the [Tray Icon](#tray-icon) menu
+("Copy last dictation").
+
+Dictatem deliberately does **not** detect whether the focused control is
+editable: typing blind is what lets it work in every application without per-app
+knowledge. The automatic fallback therefore fires only on the cheaply-known
+"no foreground window" case; for the rarer "focused, but not a text field" case,
+the on-demand copy is the recovery. See
+[ADR-0023](docs/adr/0023-dictation-is-never-lost-clipboard-fallback.md).
+
 ## UI surfaces
 
 ### Overlay Pill
@@ -162,6 +227,13 @@ first-use model loading — and reflects the **live configuration**: the actual
 [Trigger Words](#trigger-word), not static examples. It carries no controls; it
 grows by appending a section as each feature lands, so there is one place to
 learn Dictatem rather than a help item per feature.
+
+It also **auto-opens once the first time Dictatem runs** (after any first-run
+permission flow has settled), so a new user meets it without hunting through the
+tray menu; thereafter it opens only on demand. Because it reflects live config
+and is the single place usage is taught, it is also where the user learns to
+**change the [Hotkey Combo](#hotkey-combo)** — Dictatem has no settings UI (see
+[ADR-0011](docs/adr/0011-install-via-thin-uv-tool-script.md)).
 
 ## Hardware
 
