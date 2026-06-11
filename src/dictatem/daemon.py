@@ -1451,6 +1451,14 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     _ver = _current_version()
     tray_icon.set_version_label(f"Dictatem v{_ver}" if _ver else "")
 
+    # Usage Guide (ADR-0019): build the read-only help content from live config
+    # so the "How to use Dictatem…" item reflects the actual activation chord.
+    from dictatem.tray.usage_guide import usage_guide_html
+
+    tray_icon.set_usage_guide_html(
+        usage_guide_html(config.hotkey.modifiers, platform=sys.platform)
+    )
+
     bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:
         classifier = HotkeyClassifier(
