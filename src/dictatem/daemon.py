@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from dictatem.state import StateMachine
     from dictatem.transcribe.latency_monitor import LatencyMonitor
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
+    from dictatem.transcribe.replacements import Replacement
     from dictatem.transform.detector import TriggerDetector
     from dictatem.transform.lifecycle import TransformLifecycle
 
@@ -269,6 +270,7 @@ class DaemonCore:
         latency_monitor: LatencyMonitor | None = None,
         autostart_registrar: AutostartRegistrar | None = None,
         persist_autostart: Callable[[bool], None] | None = None,
+        replacements: list[Replacement] | None = None,
     ) -> None:
         self._sm = state_machine
         self._audio_capture = audio_capture
@@ -313,6 +315,11 @@ class DaemonCore:
         self._llm_warm_thread: threading.Thread | None = None
         # Monotonic-ms deadline until which the LLM is presumed warm (#74).
         self._llm_warm_until_ms: int = 0
+        # --- Replacements (deterministic find/replace, ADR-0024 / #125) ---
+        # Applied to REGULAR dictation only, just before it becomes the text to
+        # paste. Trigger Word utterances are intercepted before this point, so
+        # they (and the Transform output) are never rewritten.
+        self._replacements = replacements or []
         # --- Latency tip (one-shot, see ADR-0007) ---
         self._latency_monitor = latency_monitor
         # --- Autostart toggle (see ADR-0012) ---
@@ -546,16 +553,22 @@ class DaemonCore:
                     self._execute_commands(commands, now_ms=now_ms)
                     return
 
-                # Trigger Word detection — see CONTEXT.md#trigger-fire.
+                # Trigger Word detection — see CONTEXT.md#trigger-fire. Detect
+                # BEFORE applying Replacements so a Replacement rule can never
+                # rewrite (or mask) a Trigger Word; the trigger path is
+                # intercepted here and bypasses find/replace entirely (#125).
                 prompt = self._detect_trigger(result)  # type: ignore[arg-type]
                 if prompt is None:
                     self._transcription_active = False
+                    # Regular dictation only: apply deterministic Replacements
+                    # (ADR-0024) just before this text becomes the paste payload.
+                    text = self._apply_replacements(result)  # type: ignore[arg-type]
                     logger.info(
                         "Transcription complete (%d chars): %r",
-                        len(result),  # type: ignore[arg-type]
-                        result[:80] + ("..." if len(result) > 80 else ""),  # type: ignore[index,operator]
+                        len(text),
+                        text[:80] + ("..." if len(text) > 80 else ""),
                     )
-                    self._last_text = result  # type: ignore[assignment]
+                    self._last_text = text
                     commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
                     self._execute_commands(commands, now_ms=now_ms)
                 else:
@@ -563,6 +576,20 @@ class DaemonCore:
         except Exception:
             logger.error("Unhandled error processing transcription result", exc_info=True)
             self._recover_to_idle()
+
+    def _apply_replacements(self, text: str) -> str:
+        """Apply deterministic Replacements to regular-dictation *text* (#125).
+
+        A no-op when no rules are configured. Pure logic lives in
+        ``transcribe.replacements``; this is the thin daemon seam. Only reached
+        on the regular-dictation branch, so Trigger Words and Transform output
+        are never touched.
+        """
+        if not self._replacements:
+            return text
+        from dictatem.transcribe.replacements import apply_replacements
+
+        return apply_replacements(text, self._replacements)
 
     def _detect_trigger(self, text: str) -> str | None:
         """Return the prompt body for *text* if it is a Trigger Word.
@@ -1212,6 +1239,14 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
     from dictatem.transcribe.latency_monitor import LatencyMonitor
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
+    from dictatem.transcribe.replacements import (
+        bootstrap_replacements,
+        load_replacements,
+    )
+    from dictatem.transcribe.vocabulary import (
+        bootstrap_vocabulary,
+        load_vocabulary,
+    )
     from dictatem.transform.detector import TriggerDetector
     from dictatem.transform.lifecycle import TransformLifecycle
     from dictatem.transform.ollama_backend import OllamaBackend
@@ -1313,12 +1348,23 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 
     audio_capture = SoundDeviceCapture(config)
 
+    # Vocabulary + Replacements live in their own line-based files under
+    # ~/.dictatem (ADR-0024), bootstrapped on first run with opt-in/commented
+    # defaults. Vocabulary biases recognition BEFORE text exists; Replacements
+    # rewrite regular dictation AFTER transcription (Trigger Words excluded).
+    dictatem_dir = Path.home() / ".dictatem"
+    bootstrap_vocabulary(dictatem_dir / "vocabulary.md")
+    bootstrap_replacements(dictatem_dir / "replacements.md")
+    vocabulary = load_vocabulary(dictatem_dir / "vocabulary.md")
+    replacements = load_replacements(dictatem_dir / "replacements.md")
+
     backend = FasterWhisperBackend(
         model_name=effective_model,
         compute_type=effective_compute_type,
         device=effective_device,
         language=config.model.language,
         vad_filter=config.model.vad_filter,
+        vocabulary=vocabulary,
     )
     lifecycle = TranscribeLifecycle(
         backend=backend,
@@ -1396,6 +1442,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         latency_monitor=latency_monitor,
         autostart_registrar=autostart_registrar,
         persist_autostart=_persist_autostart,
+        replacements=replacements,
     )
 
     tray_icon.on_start = daemon.on_tray_start_recording

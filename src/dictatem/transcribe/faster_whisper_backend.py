@@ -72,12 +72,21 @@ class FasterWhisperBackend:
         device: str = "cuda",
         language: str | None = None,
         vad_filter: bool = True,
+        vocabulary: list[str] | None = None,
     ) -> None:
         self._model_name = model_name
         self._compute_type = compute_type
         self._device = device
         self._language = language
         self._vad_filter = vad_filter
+        # Vocabulary recognition hints (#126). Fed to faster-whisper as
+        # ``hotwords`` when the installed version supports it, else
+        # ``initial_prompt``. The kwarg dict is resolved once at load time
+        # (when the real ``transcribe`` signature is known) by the pure
+        # ``select_recognition_hint``; empty when no terms are configured, so
+        # the transcribe call is byte-for-byte unchanged.
+        self._vocabulary = vocabulary or []
+        self._recognition_hint: dict[str, str] = {}
         self._model: object | None = None
         self._progress_callback: Callable[[int, int], None] | None = None
 
@@ -85,11 +94,29 @@ class FasterWhisperBackend:
         _register_cuda_dll_directories()
         from faster_whisper import WhisperModel  # type: ignore[import-not-found]
 
+        from dictatem.transcribe.vocabulary import (
+            backend_supports_hotwords,
+            select_recognition_hint,
+        )
+
         self._model = WhisperModel(
             self._model_name,
             device=self._device,
             compute_type=self._compute_type,
         )
+        # Detect the capability on the actual model instance, then bake the
+        # hint kwargs so every transcribe call reuses them.
+        supports = backend_supports_hotwords(self._model.transcribe)  # type: ignore[union-attr]
+        self._recognition_hint = select_recognition_hint(
+            self._vocabulary, supports_hotwords=supports
+        )
+        if self._vocabulary:
+            hint_kind = next(iter(self._recognition_hint), "none")
+            logger.info(
+                "Vocabulary: %d term(s) fed to faster-whisper via %s",
+                len(self._vocabulary),
+                hint_kind,
+            )
 
     def unload_model(self) -> None:
         self._model = None
@@ -104,6 +131,7 @@ class FasterWhisperBackend:
                 audio,
                 language=self._language,
                 vad_filter=self._vad_filter,
+                **self._recognition_hint,
             )
             return "".join(seg.text for seg in segments)
         except Exception as exc:
