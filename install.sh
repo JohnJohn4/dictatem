@@ -3,7 +3,7 @@
 #
 # Run it piped, straight from raw GitHub:
 #
-#     curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.5.4/install.sh | sh
+#     curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.5.5/install.sh | sh
 #
 # It is a thin uv-tool provisioning script (ADR-0011), the macOS mirror of
 # install.ps1: it installs `uv` if absent, `uv tool install`s Dictatem from
@@ -18,7 +18,7 @@
 # and does NOT install, start, or pull Ollama (ADR-0008) — it only prints a
 # pointer to the README Ollama/Transform setup.
 #
-# This installs Dictatem pinned to the v0.5.4 release (the DICTATEM_TAG line
+# This installs Dictatem pinned to the v0.5.5 release (the DICTATEM_TAG line
 # below) for an auditable, reproducible install. It installs from the release
 # *tarball* over HTTPS, NOT a git+ URL, so a clean Mac needs no git — a git+
 # URL would trigger the Command Line Tools install prompt (#71, ADR-0015).
@@ -46,7 +46,7 @@ else
 fi
 
 # --- 2. Install Dictatem from the GitHub release tarball --------------------
-DICTATEM_TAG="v0.5.4"
+DICTATEM_TAG="v0.5.5"
 
 if [ -n "${DICTATEM_REF:-}" ]; then
     echo "DICTATEM_REF=${DICTATEM_REF} — installing from that ref, refreshing uv's copy of it."
@@ -73,18 +73,66 @@ requirement="dictatem[runtime] @ ${source_url}"
 # inside CI's tested matrix; the env override mirrors DICTATEM_REF for QA.
 DICTATEM_PYTHON="${DICTATEM_PYTHON:-3.12}"
 
+# Recover a half-removed / invalid tool env before installing (parity with
+# install.ps1, #110). A prior upgrade that aborted mid-removal can leave the env
+# at `<uv tools dir>/dictatem` invalid — its `bin/python` gone — and uv then
+# refuses every later install ("Invalid environment ... missing Python
+# executable"). File locking makes this far rarer on macOS than Windows, but the
+# recovery is cheap and idempotent. `uv tool uninstall` clears even an invalid
+# env (uv validates on install, not on uninstall), so we clear a broken env (and
+# force-remove any leftover the ledger no longer tracks) before installing.
+dictatem_env_dir() {
+    _tools="$(uv tool dir 2>/dev/null || true)"
+    [ -n "$_tools" ] && printf '%s/dictatem' "$_tools"
+}
+
+# True (exit 0) only when a Dictatem env dir EXISTS but its Python is gone — the
+# half-removed shape. A healthy env and a clean machine both return non-zero, so
+# recovery never touches a working install.
+dictatem_env_broken() {
+    _env="$(dictatem_env_dir)"
+    [ -n "$_env" ] && [ -d "$_env" ] && [ ! -e "$_env/bin/python" ]
+}
+
+repair_dictatem_env() {
+    echo "Found a broken/leftover Dictatem tool environment — clearing it before installing..."
+    uv tool uninstall dictatem >/dev/null 2>&1 || true
+    _env="$(dictatem_env_dir)"
+    [ -n "$_env" ] && [ -d "$_env" ] && rm -rf "$_env" 2>/dev/null || true
+    _bin="$(uv tool dir --bin 2>/dev/null || true)"
+    [ -n "$_bin" ] && rm -f "$_bin/dictatem" 2>/dev/null || true
+}
+
+# Heal a pre-broken env before the first attempt so uv doesn't bail on its
+# "Invalid environment" validation. Idempotent — a healthy env is left untouched.
+if dictatem_env_broken; then repair_dictatem_env; fi
+
 echo "Installing ${requirement} (on managed CPython ${DICTATEM_PYTHON}) ..."
 # $uv_flags is deliberately unquoted: empty by default, two words on override.
-# The || block exists because --managed-python needs a recent uv: step 1 only
+# The else block exists because --managed-python needs a recent uv: step 1 only
 # installs uv when ABSENT, and a stale pre-existing uv fails on the unknown
 # flag — a piped user never sees source comments, so print the remedy.
-uv tool install $uv_flags --managed-python --python "$DICTATEM_PYTHON" "$requirement" || {
+if uv tool install $uv_flags --managed-python --python "$DICTATEM_PYTHON" "$requirement"; then
+    :  # installed cleanly
+elif dictatem_env_broken; then
+    # The install corrupted the env mid-run (#110) — clear it and retry ONCE.
+    # Gated on the broken-env check, not a blind retry: an unrelated failure
+    # (network, build, or the stale-uv case below) skips this branch.
+    echo "uv tool install failed — recovering the broken tool environment and retrying once..."
+    repair_dictatem_env
+    uv tool install $uv_flags --managed-python --python "$DICTATEM_PYTHON" "$requirement" || {
+        echo ""
+        echo "uv tool install failed after recovering the environment. See the error"
+        echo "above; Dictatem was not installed."
+        exit 1
+    }
+else
     echo ""
     echo "uv tool install failed. If the error above calls '--managed-python'"
     echo "unexpected, your pre-existing uv is too old: update it ('uv self update',"
     echo "or 'brew upgrade uv' if it came from Homebrew) and re-run this installer."
     exit 1
-}
+fi
 
 # Make the freshly installed `dictatem` launcher usable in THIS session — uv
 # only updates PATH for new sessions. `uv tool update-shell` ensures the tool

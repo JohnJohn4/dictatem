@@ -4,7 +4,7 @@
 # process-scoped bypass so a restrictive machine policy doesn't block it — it
 # needs no admin and reverts when the window closes):
 #
-#     Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.5.4/install.ps1 | iex
+#     Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.5.5/install.ps1 | iex
 #
 # It is a thin uv-tool provisioning script (ADR-0011): it installs `uv` if
 # absent, picks the CPU or GPU dependency set by auto-detecting an NVIDIA GPU,
@@ -15,7 +15,7 @@
 # and does NOT install, start, or pull Ollama (ADR-0008) — it only prints a
 # pointer to the README Ollama/Transform setup.
 #
-# This installs Dictatem pinned to the v0.5.4 release (the line marked below)
+# This installs Dictatem pinned to the v0.5.5 release (the line marked below)
 # for an auditable, reproducible install. It installs from the release *tarball*
 # over HTTPS, NOT a git+ URL, so the user does NOT need `git` on their machine
 # (#71). When cutting a new release, bump that tag and the README one-liner URL
@@ -257,21 +257,77 @@ function Stop-DictatemDaemon {
 
 Stop-DictatemDaemon
 
+# --- 2.95 Recover a half-removed / invalid tool env (#110) ----------------
+# A prior upgrade that aborted mid-removal can leave the tool env at
+# `…\uv\tools\dictatem` HALF-REMOVED: `Scripts\python.exe` is already deleted
+# but the loaded `pythonw.exe` survived (a running daemon held a file lock, so
+# uv hit "Access is denied" and bailed). uv then refuses EVERY later install —
+# it validates the existing env first and errors with "Invalid environment …
+# missing Python executable at …\Scripts\python.exe" (exit 2). Older installers
+# (pre-#98 daemon-stop) corrupted envs this way; their users only escape it by
+# upgrading through this script, so it must self-heal. `uv tool uninstall`
+# cleanly clears even an invalid env (uv validates on install, not on uninstall
+# — proven in v0.5.x QA), so we clear the broken env, then install fresh.
+function Get-DictatemToolEnvDir {
+    $toolDir = (uv tool dir 2>$null | Select-Object -Last 1)
+    if (-not $toolDir) { return $null }
+    return (Join-Path $toolDir 'dictatem')
+}
+
+function Test-DictatemEnvBroken {
+    # True when a Dictatem tool env dir EXISTS but is invalid the way uv reports
+    # on (re)install: the env is present yet its Python executable is gone — the
+    # exact half-removed shape from #110. A healthy env (python.exe present) and
+    # a clean machine (no env dir) both return false, so recovery never touches
+    # a working install.
+    $envDir = Get-DictatemToolEnvDir
+    if (-not $envDir -or -not (Test-Path -LiteralPath $envDir)) { return $false }
+    return -not (Test-Path -LiteralPath (Join-Path $envDir 'Scripts\python.exe'))
+}
+
+function Repair-DictatemToolEnv {
+    # Best-effort: clear a broken/leftover Dictatem tool env so the next
+    # `uv tool install` recreates it from scratch. `uv tool uninstall` removes
+    # even an invalid env and its trampoline; force-remove whatever it leaves
+    # behind (an env uv's ledger no longer tracks won't be touched by uninstall).
+    # The daemon was already stopped above, so the files are unlocked. Nothing
+    # here throws — a failure just falls through to the install attempt.
+    Write-Host 'Found a broken/leftover Dictatem tool environment — clearing it before installing...'
+    try { uv tool uninstall dictatem 2>$null | Out-Null } catch { }
+    $envDir = Get-DictatemToolEnvDir
+    if ($envDir -and (Test-Path -LiteralPath $envDir)) {
+        try { Remove-Item -LiteralPath $envDir -Recurse -Force -ErrorAction Stop } catch { }
+    }
+    $toolBin = (uv tool dir --bin 2>$null | Select-Object -Last 1)
+    if ($toolBin) {
+        $tramp = (Join-Path $toolBin 'dictatem.exe')
+        if (Test-Path -LiteralPath $tramp) {
+            try { Remove-Item -LiteralPath $tramp -Force -ErrorAction Stop } catch { }
+        }
+    }
+}
+
 # --- 3. Install Dictatem from the GitHub release tarball -----------------
 # Install from the tag's source tarball over HTTPS, NOT a git+ URL: `uv tool
 # install` resolves git+ URLs by shelling out to the `git` executable, so a git+
 # install fails on machines without git (#71, ADR-0015). uv fetches the tarball
 # with its own HTTP client and builds it with hatchling; Dictatem is pure-Python,
-# so no git and no compiler are needed. Pinned to the v0.5.4 release for an
+# so no git and no compiler are needed. Pinned to the v0.5.5 release for an
 # auditable, reproducible install; when cutting a new release, bump this tag AND
 # the README one-liner URL.
-$source = 'https://github.com/JohnJohn4/dictatem/archive/refs/tags/v0.5.4.tar.gz'
+$source = 'https://github.com/JohnJohn4/dictatem/archive/refs/tags/v0.5.5.tar.gz'
 
 # A single PEP 508 direct-reference requirement: the extras and the source URL
 # must travel together on one argument. Splitting the URL into `--from` and the
 # `dictatem[extras]` into a positional makes uv treat them as two conflicting
 # requirements for the same package and abort.
 $requirement = "dictatem[$extras] @ $source"
+
+# Heal a pre-broken env before the first attempt, so uv doesn't bail on its
+# "Invalid environment" validation (#110). Idempotent: a healthy env is left
+# untouched. `--force` (ARM64 only) overwrites a valid env but does NOT recover
+# an invalid one, so this runs on every arch.
+if (Test-DictatemEnvBroken) { Repair-DictatemToolEnv }
 
 Write-Host "Installing dictatem[$extras] from $source ..."
 # @forceArgs / @pythonArgs are empty on x64 (no behaviour change there); on ARM64
@@ -281,7 +337,21 @@ uv tool install @forceArgs @pythonArgs $requirement
 # so guard explicitly — otherwise a failed install falls through to the launch
 # below and surfaces as a misleading "cannot find the file" error.
 if ($LASTEXITCODE -ne 0) {
-    throw "uv tool install failed (exit code $LASTEXITCODE). See the error above; Dictatem was not installed."
+    # The install itself can corrupt the env mid-run if a process slipped past
+    # Stop-DictatemDaemon and still held pythonw.exe: uv deletes python.exe, then
+    # aborts on the lock, leaving the same half-removed shape (#110). If the env
+    # is now broken, clear it and retry ONCE. Gated on the broken-env check — not
+    # a blind retry — so an unrelated failure (network, build) never nukes a
+    # healthy env: it falls straight through to the throw, preserving prior
+    # behaviour.
+    if (Test-DictatemEnvBroken) {
+        Write-Host "uv tool install failed (exit code $LASTEXITCODE) — recovering the broken tool environment and retrying once..."
+        Repair-DictatemToolEnv
+        uv tool install @forceArgs @pythonArgs $requirement
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "uv tool install failed (exit code $LASTEXITCODE). See the error above; Dictatem was not installed."
+    }
 }
 
 # Make the freshly installed `dictatem` launcher usable in THIS session — uv
