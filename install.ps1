@@ -4,7 +4,7 @@
 # process-scoped bypass so a restrictive machine policy doesn't block it — it
 # needs no admin and reverts when the window closes):
 #
-#     Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.4.0/install.ps1 | iex
+#     Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.5.0/install.ps1 | iex
 #
 # It is a thin uv-tool provisioning script (ADR-0011): it installs `uv` if
 # absent, picks the CPU or GPU dependency set by auto-detecting an NVIDIA GPU,
@@ -15,7 +15,7 @@
 # and does NOT install, start, or pull Ollama (ADR-0008) — it only prints a
 # pointer to the README Ollama/Transform setup.
 #
-# This installs Dictatem pinned to the v0.4.0 release (the line marked below)
+# This installs Dictatem pinned to the v0.5.0 release (the line marked below)
 # for an auditable, reproducible install. It installs from the release *tarball*
 # over HTTPS, NOT a git+ URL, so the user does NOT need `git` on their machine
 # (#71). When cutting a new release, bump that tag and the README one-liner URL
@@ -215,10 +215,10 @@ Stop-DictatemDaemon
 # install` resolves git+ URLs by shelling out to the `git` executable, so a git+
 # install fails on machines without git (#71, ADR-0015). uv fetches the tarball
 # with its own HTTP client and builds it with hatchling; Dictatem is pure-Python,
-# so no git and no compiler are needed. Pinned to the v0.4.0 release for an
+# so no git and no compiler are needed. Pinned to the v0.5.0 release for an
 # auditable, reproducible install; when cutting a new release, bump this tag AND
 # the README one-liner URL.
-$source = 'https://github.com/JohnJohn4/dictatem/archive/refs/tags/v0.4.0.tar.gz'
+$source = 'https://github.com/JohnJohn4/dictatem/archive/refs/tags/v0.5.0.tar.gz'
 
 # A single PEP 508 direct-reference requirement: the extras and the source URL
 # must travel together on one argument. Splitting the URL into `--from` and the
