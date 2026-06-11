@@ -310,11 +310,11 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 <!-- entries below -->
 
 ### S2 — Pure-logic feature cores — 2026-06-11
-- **Shipped:** three feature cores via two parallel worktree agents + TDD. Two PRs open (unmerged, for user review).
+- **Shipped:** three feature cores via two parallel worktree agents + TDD. Both PRs merged to `main` (#133, #134); suite green at 950 passed post-merge.
 - **Issues:** PR **#133** closes #118 (mouse buttons in `HotkeyClassifier` — `Key.MOUSE_4/5/MIDDLE`, curated allow-list `{…, mouse4, mouse5, middle}`, conditional down/up-paired suppression; pure, unblocks #120/#121). PR **#134** closes #125 + #126 (ADR-0024 — pure `transcribe/replacements.py` + `transcribe/vocabulary.py`; replacements apply to **regular dictation only**, after trigger detection; vocabulary → `hotwords`/`initial_prompt`; both `~/.dictatem/*.md` bootstrapped opt-in).
 - **PRs:** #133 (`feat/mouse-trigger-classifier`), #134 (`feat/vocabulary-replacements`). Both reviewed (diff + checks); #134's own `/code-review` caught + fixed a whole-word boundary bug.
 - **Tests:** full suite **924 passed, 4 skipped** (baseline 863; +26 from #118, +61 from #125/126). `pyright` 0 new errors, `ruff` clean.
-- **QA owed:** #126 vocabulary recognition-lift needs a real model on Windows (manual-QA per the issue) — fold into Session 3's QA pass.
+- **QA owed:** #126 vocabulary recognition-lift — exported as [`qa-handoffs/02-vocabulary-recognition-qa.md`](qa-handoffs/02-vocabulary-recognition-qa.md) (real model on Windows; run from the dev clone). **Pending user run.**
 - **Follow-ups / notes:** #133 & #134 touch disjoint files → merge in any order, no rebase. Flagged decisions (both non-blocking, accepted): #118 uses a `set` for down/up pairing (fine for real single-down hooks) + unconfigured buttons pass through; #126 joins multi-word vocab terms with spaces (boundary ambiguity acceptable for the focused opt-in list). Next: **S3 — docs & discoverability** (#67/#127/#122/#123).
 
 ### S1 — Triage & close-out — 2026-06-11
