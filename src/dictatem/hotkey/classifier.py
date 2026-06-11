@@ -29,6 +29,12 @@ class Key(enum.Enum):
     RIGHT_CTRL = "right_ctrl"
     LEFT_SHIFT = "left_shift"
     RIGHT_SHIFT = "right_shift"
+    # Mouse buttons are trigger inputs in the same combo as modifiers (ADR-0020).
+    # ``MOUSE_4``/``MOUSE_5`` are the two side buttons; ``MOUSE_MIDDLE`` is the
+    # wheel click. Left/right click are never trigger inputs (primary interaction).
+    MOUSE_4 = "mouse_4"
+    MOUSE_5 = "mouse_5"
+    MOUSE_MIDDLE = "mouse_middle"
     ESCAPE = "escape"
     LEFT = "left"
     UP = "up"
@@ -42,16 +48,23 @@ ALT_KEYS = frozenset({Key.LEFT_ALT, Key.RIGHT_ALT})
 CTRL_KEYS = frozenset({Key.LEFT_CTRL, Key.RIGHT_CTRL})
 SHIFT_KEYS = frozenset({Key.LEFT_SHIFT, Key.RIGHT_SHIFT})
 ARROW_KEYS = frozenset({Key.LEFT, Key.UP, Key.RIGHT, Key.DOWN})
+# Mouse-button identities, kept distinct from modifier keys: a mouse button is
+# conditionally suppressed (ADR-0020) whereas a modifier always passes through.
+MOUSE_KEYS = frozenset({Key.MOUSE_4, Key.MOUSE_5, Key.MOUSE_MIDDLE})
 
-# Modifier name → neutral Key group. ``meta`` is the canonical name for the OS
-# key (Windows key / Command); ``win`` is a permanent alias for it. See
-# ADR-0010, ADR-0018, and ``CONTEXT.md#hotkey-combo``.
+# Trigger-input name → neutral Key group. ``meta`` is the canonical name for the
+# OS key (Windows key / Command); ``win`` is a permanent alias for it. Mouse
+# buttons join the same map so the classifier reasons about them exactly like
+# modifier keys. See ADR-0010, ADR-0018, ADR-0020, and ``CONTEXT.md#hotkey-combo``.
 _MODIFIER_MAP: dict[str, frozenset[Key]] = {
     "meta": META_KEYS,
     "win": META_KEYS,
     "alt": ALT_KEYS,
     "ctrl": CTRL_KEYS,
     "shift": SHIFT_KEYS,
+    "mouse4": frozenset({Key.MOUSE_4}),
+    "mouse5": frozenset({Key.MOUSE_5}),
+    "middle": frozenset({Key.MOUSE_MIDDLE}),
 }
 
 
@@ -86,6 +99,9 @@ class HotkeyClassifier:
         self._active = False
         self._combo_pressed_at: int | None = None
         self._hold_emitted = False
+        # Mouse buttons whose DOWN was suppressed; their matching UP is
+        # suppressed too, to keep the down/up pair balanced (ADR-0020).
+        self._suppressed_mouse_down: set[Key] = set()
 
     def set_active(self, active: bool) -> None:
         self._active = active
@@ -131,10 +147,24 @@ class HotkeyClassifier:
         if is_combo and key in ARROW_KEYS:
             return HookDecision.SUPPRESS, None
 
+        # A trigger mouse button is suppressed iff its press completes/sustains
+        # the combo, so a bare button (e.g. Mouse4 = browser-back) still works
+        # when the combo also needs a held modifier (ADR-0020). The matching UP
+        # is paired off the recorded DOWN decision.
+        if key in MOUSE_KEYS and self._is_trigger_button(key):
+            if is_combo:
+                self._suppressed_mouse_down.add(key)
+                return HookDecision.SUPPRESS, None
+            self._suppressed_mouse_down.discard(key)
+
         if key is Key.ESCAPE and self._active:
             return HookDecision.PASS_THROUGH, HotkeyEvent.ESC
 
         return HookDecision.PASS_THROUGH, None
+
+    def _is_trigger_button(self, key: Key) -> bool:
+        """True if *key* is a mouse button bound in the configured combo."""
+        return any(key in group for group in self._modifier_groups)
 
     def _on_key_up(
         self, key: Key, timestamp_ms: int
@@ -146,16 +176,23 @@ class HotkeyClassifier:
         self._keys_down.discard(key)
         is_combo = self.combo_held
 
+        # Pair the mouse-button UP with its recorded DOWN decision, regardless of
+        # whether the combo broke in between (ADR-0020).
+        mouse_decision = HookDecision.PASS_THROUGH
+        if key in MOUSE_KEYS and key in self._suppressed_mouse_down:
+            self._suppressed_mouse_down.discard(key)
+            mouse_decision = HookDecision.SUPPRESS
+
         if was_combo and not is_combo and self._combo_pressed_at is not None:
             pressed_at = self._combo_pressed_at
             self._combo_pressed_at = None
 
             if self._hold_emitted:
                 self._hold_emitted = False
-                return HookDecision.PASS_THROUGH, HotkeyEvent.HOLD_END
+                return mouse_decision, HotkeyEvent.HOLD_END
 
             elapsed = timestamp_ms - pressed_at
             if elapsed < self._tap_threshold_ms:
-                return HookDecision.PASS_THROUGH, HotkeyEvent.TAP
+                return mouse_decision, HotkeyEvent.TAP
 
-        return HookDecision.PASS_THROUGH, None
+        return mouse_decision, None

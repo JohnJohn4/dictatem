@@ -18,10 +18,15 @@ VALID_OVERLAY_POSITIONS = frozenset({
     "top-left", "top-right", "bottom-left", "bottom-right",
 })
 
-# "meta" is the canonical cross-platform name for the OS key (Windows key on
-# Windows, Command on macOS); "win" is a permanent alias for it. See ADR-0010,
-# ADR-0018, and CONTEXT.md#hotkey-combo.
-VALID_MODIFIER_NAMES = frozenset({"meta", "win", "alt", "ctrl", "shift"})
+# Curated allow-list of trigger-input names for [hotkey].modifiers. "meta" is
+# the canonical cross-platform name for the OS key (Windows key on Windows,
+# Command on macOS); "win" is a permanent alias for it. "mouse4"/"mouse5" are the
+# side buttons and "middle" the wheel click — first-class trigger inputs in the
+# same combo as modifiers (left/right click are never accepted). See ADR-0010,
+# ADR-0018, ADR-0020, and CONTEXT.md#hotkey-combo.
+VALID_MODIFIER_NAMES = frozenset({
+    "meta", "win", "alt", "ctrl", "shift", "mouse4", "mouse5", "middle",
+})
 
 VALID_LOG_LEVELS = frozenset({
     "debug", "info", "warning", "error", "critical",

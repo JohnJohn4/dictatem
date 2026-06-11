@@ -574,3 +574,55 @@ class TestHotkeyModifiersValidation:
         path.write_text('[hotkey]\nmodifiers = ["win", "alt", "ctrl", "shift"]\n')
         cfg = load_config(path)
         assert cfg.hotkey.modifiers == ("win", "alt", "ctrl", "shift")
+
+    def test_standalone_mouse4_accepted(self, tmp_path: Path) -> None:
+        """A mouse button is a first-class trigger input (ADR-0020)."""
+        path = tmp_path / "config.toml"
+        path.write_text('[hotkey]\nmodifiers = ["mouse4"]\n')
+        cfg = load_config(path)
+        assert cfg.hotkey.modifiers == ("mouse4",)
+
+    def test_mouse5_accepted(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text('[hotkey]\nmodifiers = ["mouse5"]\n')
+        cfg = load_config(path)
+        assert cfg.hotkey.modifiers == ("mouse5",)
+
+    def test_middle_accepted(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text('[hotkey]\nmodifiers = ["middle"]\n')
+        cfg = load_config(path)
+        assert cfg.hotkey.modifiers == ("middle",)
+
+    def test_combined_modifier_and_mouse_accepted(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text('[hotkey]\nmodifiers = ["ctrl", "mouse4"]\n')
+        cfg = load_config(path)
+        assert cfg.hotkey.modifiers == ("ctrl", "mouse4")
+
+    def test_left_click_name_rejected(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture
+    ) -> None:
+        """Left/right click are primary interaction and never accepted."""
+        path = tmp_path / "config.toml"
+        path.write_text('[hotkey]\nmodifiers = ["left"]\n')
+        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert cfg.hotkey.modifiers == ("win", "alt")
+        assert any(
+            "modifiers" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        )
+
+    def test_mixed_mouse_and_unknown_falls_back_to_default(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text('[hotkey]\nmodifiers = ["mouse4", "turbo"]\n')
+        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert cfg.hotkey.modifiers == ("win", "alt")
+        assert any(
+            "modifiers" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        )
