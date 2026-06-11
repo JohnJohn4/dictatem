@@ -104,6 +104,17 @@ class TestPidsToStop:
         assert 9424 not in result
         assert set(result) == {3112, 4532}
 
+    def test_excludes_self_subtree_not_just_self(self) -> None:
+        # If self is mid-tree (e.g. the tray upgrade's installer launched as a
+        # daemon child), its OWN children (the uv processes it spawned) must not
+        # be killed either — only self's ancestors (the daemon) come down.
+        result = pids_to_stop(
+            _daemon_tree(), self_pid=4532, tool_dir=_TOOL_DIR, trampolines=(_TRAMPOLINE,)
+        )
+        assert 4532 not in result  # self
+        assert 9424 not in result  # self's child
+        assert set(result) == {3112}  # only self's ancestor (the trampoline root)
+
     def test_unrelated_process_not_caught(self) -> None:
         # A shell that merely mentions the path (not a descendant of a root) and
         # the explorer parent must not be swept up.

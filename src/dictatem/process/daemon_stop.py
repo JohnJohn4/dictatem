@@ -95,8 +95,13 @@ def pids_to_stop(
     is every root **and all its descendants** (the launcher's re-exec'd base
     interpreter, whose own exe is outside the tool dir), found by walking
     ``parent_pid`` links from the roots. A descendant that predates its parent is
-    skipped (a recycled parent PID can't be a genuine child). *self_pid* is always
-    excluded. Input order is preserved.
+    skipped (a recycled parent PID can't be a genuine child).
+
+    *self_pid* — and everything *self_pid* launched (its subtree) — is excluded:
+    the invoking ``--uninstall``/upgrade process can sit inside the matched tree,
+    and the tray upgrade runs the installer as a child of the daemon, so killing
+    *self_pid* or its children would abort the very operation. The daemon is still
+    reached via the root walk, independent of us. Input order is preserved.
     """
     procs = list(processes)
     by_pid = {p.pid: p for p in procs}
@@ -115,7 +120,9 @@ def pids_to_stop(
     queue: deque[int] = deque(p.pid for p in procs if _is_root(p))
     while queue:
         pid = queue.popleft()
-        if pid in seen:
+        # Skip ourselves and never descend into our own subtree — see the
+        # *self_pid* note above.
+        if pid == self_pid or pid in seen:
             continue
         seen.add(pid)
         parent = by_pid.get(pid)
@@ -133,5 +140,4 @@ def pids_to_stop(
                 continue
             queue.append(child.pid)
 
-    seen.discard(self_pid)
     return [p.pid for p in procs if p.pid in seen]
