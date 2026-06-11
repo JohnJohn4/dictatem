@@ -24,31 +24,26 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Session 2 — Pure-logic feature cores (TDD).**
+**Next up: Session 3 — Docs & discoverability.**
 
-Session 1 closed the dead weight: #82, #83, #34, and #51 were all verified
-already-shipped and closed with evidence (see the ledger). The backlog is now 27
-real issues. This session builds the three **pure, fully unit-testable** feature
-cores — no adapters, no Qt, no native hooks — so it is the cleanest red-green TDD
-run on the board:
+➡️ **Full handoff: [`docs/agents/handoffs/session-03-docs-discoverability.md`](handoffs/session-03-docs-discoverability.md)** — read it first.
 
-- **#118** mouse-button classifier core (ADR-0020) — identities + config vocab +
-  conditional suppression. Pure logic; unblocks #120/#121.
-- **#125** Replacements parser (ADR-0024) — `~/.dictatem/replacements.md`,
-  `source => target`, empty target = delete.
-- **#126** custom Vocabulary (ADR-0024) — `~/.dictatem/vocabulary.md` →
-  faster-whisper hints.
+Session 2 shipped the pure-logic cores: **PR #133** (#118 mouse-button classifier)
+and **PR #134** (#125 Replacements + #126 Vocabulary, ADR-0024) — both reviewed,
+pure-logic-tested, 924 tests green. This session is small docs + thin
+discoverability wiring: **#67** (lazy-load/idle-unload docs — docs-only now),
+**#127** (default Polish prompt + cleanup docs), **#122** (auto-open Usage Guide on
+first run — **sentinel marker, never rewrite config.toml**), **#123** (tray "Open
+config…" + Guide "Changing your hotkey" section reflecting the live combo, incl.
+the new `mouse4/mouse5/middle` vocab). Do #122/#123 in sequence — they share the
+tray/first-run path. There is a light **Windows manual-QA** tail (first-run
+auto-open; tray open-config) — give the user a checklist or export a QA handoff;
+don't claim it passed without a human. When done, point the prompt at **Session 4 —
+CI keystone + install hardening** (pull it early — it's the macOS verification
+surface).
 
-Read each issue's named ADR first (don't re-decide it). The three are independent
-→ good candidate for three parallel worktree agents, **but commit first** so they
-branch from the same HEAD. Keep all decision logic pure and tested; if any file
-bootstrapping touches `config.toml`, use a sentinel/marker — never rewrite config.
-Branch per issue, `/code-review` before each PR, PRs to `main`. No manual QA owed
-(all pure). When done, point the prompt at **Session 3 — Docs & discoverability**
-(or **Session 4 — CI**, which is worth pulling early as the verification surface).
-
-Skills: `tdd` (primary), `code-review`. Your role: autonomous; the user reviews
-and merges the three PRs.
+Skills: `run`/`verify`, `code-review`. Your role: autonomous; the user reviews and
+merges the PRs and runs the Windows QA.
 
 ---
 
@@ -113,7 +108,7 @@ session · **M** ≈ one focused session · **L** ≈ may span more than one.
 | # | Session | Type | Size | Issues | Skills | Depends on |
 |---|---|---|---|---|---|---|
 | ~~**S1**~~ | ~~Triage & close-out~~ | AFK | S | ✅ #82 #83 #34 #51 — closed | `triage` | done 2026-06-11 |
-| **S2** | Pure-logic feature cores | AFK | M | #118 #125 #126 | `tdd`, `code-review` | — |
+| ~~**S2**~~ | ~~Pure-logic feature cores~~ | AFK | M | ✅ PR #133 (#118) · PR #134 (#125 #126) | `tdd`, `code-review` | done 2026-06-11 |
 | **S3** | Docs & discoverability | AFK | S–M | #67 #127 #122 #123 | `run`/`verify`, `code-review` | — |
 | **S4** | CI keystone + install hardening | AFK | M | #81 #90 #92 | `code-review`, `diagnose` | — *(do early)* |
 | **S5** | Clipboard last-dictation rail | AFK | M | #119 → #124 | `tdd`, `run`/`verify`, `code-review` | — |
@@ -313,6 +308,14 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### S2 — Pure-logic feature cores — 2026-06-11
+- **Shipped:** three feature cores via two parallel worktree agents + TDD. Two PRs open (unmerged, for user review).
+- **Issues:** PR **#133** closes #118 (mouse buttons in `HotkeyClassifier` — `Key.MOUSE_4/5/MIDDLE`, curated allow-list `{…, mouse4, mouse5, middle}`, conditional down/up-paired suppression; pure, unblocks #120/#121). PR **#134** closes #125 + #126 (ADR-0024 — pure `transcribe/replacements.py` + `transcribe/vocabulary.py`; replacements apply to **regular dictation only**, after trigger detection; vocabulary → `hotwords`/`initial_prompt`; both `~/.dictatem/*.md` bootstrapped opt-in).
+- **PRs:** #133 (`feat/mouse-trigger-classifier`), #134 (`feat/vocabulary-replacements`). Both reviewed (diff + checks); #134's own `/code-review` caught + fixed a whole-word boundary bug.
+- **Tests:** full suite **924 passed, 4 skipped** (baseline 863; +26 from #118, +61 from #125/126). `pyright` 0 new errors, `ruff` clean.
+- **QA owed:** #126 vocabulary recognition-lift needs a real model on Windows (manual-QA per the issue) — fold into Session 3's QA pass.
+- **Follow-ups / notes:** #133 & #134 touch disjoint files → merge in any order, no rebase. Flagged decisions (both non-blocking, accepted): #118 uses a `set` for down/up pairing (fine for real single-down hooks) + unconfigured buttons pass through; #126 joins multi-word vocab terms with spaces (boundary ambiguity acceptable for the focused opt-in list). Next: **S3 — docs & discoverability** (#67/#127/#122/#123).
 
 ### S1 — Triage & close-out — 2026-06-11
 - **Shipped:** no code; tracker triage. Verified four issues already-shipped (in-code evidence) and closed them. Authored this roadmap doc.
