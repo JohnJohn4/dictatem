@@ -1307,6 +1307,33 @@ class _PlatformAdapters:
     check_permissions: Callable[[], tuple[PermissionGuidance, ...]] | None
 
 
+def _acquire_single_instance_lock(lock_path: Path) -> object | None:
+    """Acquire the cross-platform single-instance lock (#92).
+
+    Returns the held lock object on success, or ``None`` when another Dictatem
+    daemon already owns it. Backed by ``QtCore.QLockFile`` so Windows and macOS
+    share one guard — the Win32-only alternative (a named ``CreateMutexW``
+    mutex) would split the code path. The caller MUST keep the returned object
+    alive for the whole process: a garbage-collected ``QLockFile`` releases the
+    lock and silently drops the guard.
+
+    A daemon killed hard (kill -9) leaves its lock file behind, but
+    ``QLockFile`` records the creating PID and steals a lock whose owner is no
+    longer running, so a fresh start never deadlocks on a stale lock. The
+    import stays lazy so ``dictatem.daemon`` imports with no Qt present
+    (``test_import_safety``).
+    """
+    from PySide6.QtCore import QLockFile  # type: ignore[import-not-found]
+
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(lock_path))
+    # Try once without blocking: a redundant instance must fail fast and exit,
+    # not queue up waiting for the live daemon to release the lock.
+    if not lock.tryLock(0):
+        return None
+    return lock
+
+
 def _run_daemon(adapters: _PlatformAdapters) -> None:
     """Wire the platform-neutral daemon around *adapters* and run the Qt loop.
 
@@ -1368,6 +1395,22 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # noisy at INFO. Our own load/unload lines tell the user what they need.
     for noisy in ("httpx", "huggingface_hub", "filelock", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    # Single-instance guard (#92). Two concurrent daemons each register the
+    # global hotkey hook, so every gesture is recorded, transcribed, and pasted
+    # twice (the most likely trigger is an upgrade relaunch while the old tray
+    # instance is still alive; a dev clone next to the installed build does it
+    # too). Acquire the lock BEFORE any hook, audio, model, or tray setup so a
+    # redundant instance exits cleanly here, leaving the live daemon untouched.
+    # ``_instance_lock`` is intentionally bound for the whole function: it must
+    # outlive setup (app.exec() below holds it until the process exits), and
+    # releasing the QLockFile would drop the guard.
+    _instance_lock = _acquire_single_instance_lock(
+        Path.home() / ".dictatem" / "daemon.lock"
+    )
+    if _instance_lock is None:
+        logger.warning("Another Dictatem instance is already running; exiting")
+        return
 
     config_path = Path.home() / ".dictatem" / "config.toml"
     # First run with no config: probe the machine once and bake the resolved
