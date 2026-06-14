@@ -55,6 +55,16 @@ def _trigger_words_section(trigger_words: Sequence[str]) -> str:
     return section
 
 
+def _recovery_section() -> str:
+    return (
+        "<h3>Recovering a lost dictation</h3>"
+        "<p>If a dictation lands nowhere — you weren't focused on a text box — "
+        "it isn't lost. Focus where it should have gone and say <i>paste</i> on "
+        "its own to drop it in. You can also use <b>Copy last dictation</b> in "
+        "this menu to put it on your clipboard.</p>"
+    )
+
+
 def _first_use_section() -> str:
     return (
         "<h3>First use</h3>"
@@ -82,6 +92,7 @@ def usage_guide_html(
     sections = [
         _dictating_section(combo),
         _trigger_words_section(trigger_words),
+        _recovery_section(),
         _first_use_section(),
     ]
     return "<html><body>" + "".join(sections) + "</body></html>"

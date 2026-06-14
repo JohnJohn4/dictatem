@@ -18,6 +18,7 @@ from dictatem.exceptions import (
     TransformFailedError,
 )
 from dictatem.state import Command, Event, State
+from dictatem.transform.detector import PASTE_ACTION, match_builtin_action
 from dictatem.transform.last_paste import LastPaste
 from dictatem.types import EmptyResult, RecordingMode
 
@@ -571,6 +572,16 @@ class DaemonCore:
                     self._execute_commands(commands, now_ms=now_ms)
                     return
 
+                # Built-in action words (today: `paste`) are matched BEFORE the
+                # Transform alias map and run regardless of [transform].enabled
+                # or any Last Paste — they are the recovery path (ADR-0023 /
+                # #139). Detected before Replacements so a rule can't rewrite or
+                # mask them, and before _detect_trigger so they bypass both of
+                # its gates (transform-enabled + Last-Paste-exists).
+                if match_builtin_action(result) == PASTE_ACTION:  # type: ignore[arg-type]
+                    self._handle_paste_action(now_ms=now_ms)
+                    return
+
                 # Trigger Word detection — see CONTEXT.md#trigger-fire. Detect
                 # BEFORE applying Replacements so a Replacement rule can never
                 # rewrite (or mask) a Trigger Word; the trigger path is
@@ -622,6 +633,35 @@ class DaemonCore:
         if self._last_paste is None:
             return None
         return self._trigger_detector.match(text)
+
+    def _handle_paste_action(self, *, now_ms: int) -> None:
+        """Re-paste the Most-recent dictation — the built-in ``paste`` recovery.
+
+        The voice recovery for a dictation that landed nowhere (ADR-0023 /
+        #139). Runs regardless of ``[transform].enabled`` and needs no Last
+        Paste; it reads the Most-recent dictation buffer (#119), **not** Last
+        Paste. An empty buffer flashes the existing overlay error and types
+        nothing — it never falls back to typing the literal word "paste". The
+        re-paste lands like a normal dictation (clipboard + Ctrl+V) and so
+        becomes the new Last Paste, re-arming Trigger Words at the new spot.
+        """
+        self._transcription_active = False
+        if self._most_recent_dictation is None:
+            logger.info("`paste` action: no Most-recent dictation to recover")
+            commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
+            self._execute_commands(commands, now_ms=now_ms)
+            return
+        logger.info(
+            "`paste` action: re-pasting %d-char Most-recent dictation",
+            len(self._most_recent_dictation),
+        )
+        # Route the buffer through the normal paste path. replace_chars stays 0
+        # so it's a clipboard + Ctrl+V paste (not a typed Trigger-Fire
+        # replacement), and _do_paste records the new Last Paste.
+        self._last_text = self._most_recent_dictation
+        self._pending_replace_chars = 0
+        commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
+        self._execute_commands(commands, now_ms=now_ms)
 
     def _handle_trigger_fire(self, prompt: str, *, now_ms: int) -> None:
         """Run a Transform on the Last Paste; defer the SM event until it returns.
@@ -1292,7 +1332,10 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         bootstrap_vocabulary,
         load_vocabulary,
     )
-    from dictatem.transform.detector import TriggerDetector
+    from dictatem.transform.detector import (
+        TriggerDetector,
+        shadowed_builtin_aliases,
+    )
     from dictatem.transform.lifecycle import TransformLifecycle
     from dictatem.transform.ollama_backend import OllamaBackend
     from dictatem.transform.prompts import (
@@ -1433,6 +1476,17 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     prompts_dir = Path.home() / ".dictatem" / "prompts"
     bootstrap_prompts(prompts_dir, default_prompts_dir())
     prompt_aliases = load_prompts_dir(prompts_dir)
+    # A user Prompt File that reuses a built-in action name (`paste`) is
+    # shadowed by the built-in — its Transform can never fire (ADR-0023 / #139).
+    # Warn so the collision is visible rather than silently dead.
+    shadowed = shadowed_builtin_aliases(prompt_aliases)
+    if shadowed:
+        logger.warning(
+            "Prompt File alias(es) %s are shadowed by the built-in `paste` "
+            "action and will never fire as a Transform — rename them in %s",
+            ", ".join(shadowed),
+            prompts_dir,
+        )
     trigger_detector = TriggerDetector(prompt_aliases)
 
     overlay_state = OverlayState(

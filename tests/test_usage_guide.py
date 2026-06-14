@@ -66,6 +66,20 @@ class TestTriggerWordsSection:
         assert "a&b" not in html
 
 
+class TestRecoverySection:
+    def test_explains_paste_recovery(self) -> None:
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        assert "Recovering a lost dictation" in html
+        # The built-in recovery word and the tray fallback are both named.
+        assert "paste" in html
+        assert "Copy last dictation" in html
+
+    def test_recovery_after_triggers_before_first_use(self) -> None:
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        assert html.index("Trigger words") < html.index("Recovering a lost dictation")
+        assert html.index("Recovering a lost dictation") < html.index("First use")
+
+
 class TestFirstUseSection:
     def test_explains_model_load_and_preload(self) -> None:
         html = usage_guide_html(("win", "alt"), platform="win32")
