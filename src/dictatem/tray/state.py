@@ -31,6 +31,11 @@ class MenuItem(enum.Enum):
     HOTKEY_HINT = "hotkey_hint"
     START = "start"
     STOP = "stop"
+    # "Copy last dictation" — copies the Most-recent dictation to the clipboard
+    # on demand (ADR-0023). A NORMAL copy (appears in Win+V); the recovery for a
+    # dictation that landed nowhere when saying "paste" isn't convenient.
+    # Disabled until a dictation exists (driven by TrayState.has_last_dictation).
+    COPY_LAST_DICTATION = "copy_last_dictation"
     PRELOAD = "preload"
     UNLOAD = "unload"
     # "Start at login" — a checkable toggle bound to config.startup.autostart.
@@ -60,6 +65,9 @@ class TrayState:
     is_model_loaded: bool
     has_error: bool
     is_model_loading: bool = False
+    # Whether a Most-recent dictation exists yet (ADR-0023 / #119). Gates the
+    # "Copy last dictation" item; driven by the daemon, not derived here.
+    has_last_dictation: bool = False
 
     def current_icon_variant(self) -> IconVariant:
         # Per ADR-0006 the Tray Icon no longer encodes recording state — the
@@ -83,4 +91,7 @@ class TrayState:
             return self.is_model_loaded and not self.is_model_loading
         if item is MenuItem.PRELOAD:
             return not self.is_model_loaded and not self.is_model_loading
+        if item is MenuItem.COPY_LAST_DICTATION:
+            # Nothing to copy until the first dictation has been retained.
+            return self.has_last_dictation
         return True

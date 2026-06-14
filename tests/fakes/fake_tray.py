@@ -8,6 +8,7 @@ class FakeTrayRenderer:
         self.state: str = "idle"
         self.model_loaded: bool = False
         self.model_loading: bool = False
+        self.has_last_dictation: bool = False
         self.notifications: list[tuple[str, str]] = []
 
     def set_idle(self) -> None:
@@ -24,6 +25,9 @@ class FakeTrayRenderer:
 
     def set_model_loading(self, loading: bool) -> None:
         self.model_loading = loading
+
+    def set_has_last_dictation(self, has_last_dictation: bool) -> None:
+        self.has_last_dictation = has_last_dictation
 
     def show_notification(self, title: str, message: str) -> None:
         self.notifications.append((title, message))

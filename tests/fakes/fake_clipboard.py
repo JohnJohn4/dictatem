@@ -38,6 +38,12 @@ class FakeClipboardIO:
         self.calls.append(("set_text", text))
         self._content = text
 
+    def copy(self, text: str) -> None:
+        # The explicit, normal "Copy last dictation" copy (#119) — distinct from
+        # the transient set_text juggling so tests can assert which path ran.
+        self.calls.append(("copy", text))
+        self._content = text
+
     def restore(self, saved: str | None) -> None:
         self.restore_timestamps.append(time.monotonic())
         if self._restore_failures_remaining > 0:

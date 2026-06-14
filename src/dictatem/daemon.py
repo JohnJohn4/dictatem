@@ -196,6 +196,7 @@ class _TrayAdapter:
         self._error = False
         self._model_loaded = False
         self._model_loading = False
+        self._has_last_dictation = False
 
     def set_idle(self) -> None:
         self._recording = False
@@ -222,6 +223,12 @@ class _TrayAdapter:
         self._model_loading = loading
         self._sync()
 
+    def set_has_last_dictation(self, has_last_dictation: bool) -> None:
+        if has_last_dictation == self._has_last_dictation:
+            return
+        self._has_last_dictation = has_last_dictation
+        self._sync()
+
     def show_notification(self, title: str, message: str) -> None:
         self._icon.show_notification(title, message)  # type: ignore[attr-defined]
 
@@ -234,6 +241,7 @@ class _TrayAdapter:
                 is_model_loaded=self._model_loaded,
                 has_error=self._error,
                 is_model_loading=self._model_loading,
+                has_last_dictation=self._has_last_dictation,
             )
         )
 
@@ -285,6 +293,16 @@ class DaemonCore:
         self._silence_timeout_s = silence_timeout_s
         self._max_recording_s = max_recording_s
         self._last_text: str | None = None
+        # --- Most-recent dictation buffer (ADR-0023 / #119) ---
+        # The exact payload of the last REGULAR dictation (normalised, with
+        # Replacements applied) — the text that was (or would have been) pasted.
+        # Unlike _last_text (the transient pending-paste payload, nulled after
+        # every paste) and Last Paste (needs a successful paste + target_id),
+        # this is kept ACROSS pastes and even when the dictation landed nowhere,
+        # so it carries no target_id and does not arm Trigger Words. It is what
+        # the tray "Copy last dictation" item and the built-in `paste` Trigger
+        # Word (#139) recover — the guarantee a dictation is never lost.
+        self._most_recent_dictation: str | None = None
         self._transcription_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._transcription_active: bool = False
         self._transcription_thread: threading.Thread | None = None
@@ -777,6 +795,12 @@ class DaemonCore:
                 target_id=self._foreground.capture(),
                 pasted_at_ms=now_ms,
             )
+            # Retain regular dictation for voice/tray recovery (ADR-0023 / #119).
+            # A Trigger Fire (replace > 0) pastes Transform output, not a
+            # dictation, so it must NOT overwrite the Most-recent dictation.
+            if replace == 0:
+                self._most_recent_dictation = normalized
+                self._tray.set_has_last_dictation(True)
         else:
             logger.warning(
                 "Paste skipped: text=%r, clipboard=%s, keystroke=%s, foreground=%s",
@@ -861,6 +885,27 @@ class DaemonCore:
         except Exception:
             logger.error("Error unloading model", exc_info=True)
         self.sync_model_loaded()
+
+    def on_tray_copy_last_dictation(self) -> None:
+        """Copy the Most-recent dictation to the clipboard (ADR-0023 / #119).
+
+        A NORMAL copy (it appears in Win+V) via ``ClipboardIO.copy`` — the user
+        explicitly asked for the text on their clipboard, so it is not
+        clutter-proofed like the automatic dictation juggling (#138). A no-op
+        when there is no dictation yet (the tray item is disabled then anyway)
+        or no clipboard adapter. Wrapped so a clipboard hiccup never crashes the
+        daemon.
+        """
+        try:
+            if self._most_recent_dictation is None or self._clipboard is None:
+                return
+            self._clipboard.copy(self._most_recent_dictation)
+            logger.info(
+                "Copied %d-char Most-recent dictation to the clipboard",
+                len(self._most_recent_dictation),
+            )
+        except Exception:
+            logger.error("Error copying last dictation", exc_info=True)
 
     def on_tray_quit(self, quit_callback: Callable[[], None]) -> None:
         """Unload the model gracefully, then invoke ``quit_callback`` to exit."""
@@ -1447,6 +1492,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 
     tray_icon.on_start = daemon.on_tray_start_recording
     tray_icon.on_stop = daemon.on_tray_stop_recording
+    tray_icon.on_copy_last_dictation = daemon.on_tray_copy_last_dictation
     tray_icon.on_preload = daemon.on_tray_preload
     tray_icon.on_unload = daemon.on_tray_unload
     tray_icon.on_autostart_toggled = daemon.on_tray_set_autostart

@@ -55,6 +55,20 @@ class MacClipboardIO:
             # logging SendInput shortfalls instead of raising.
             logger.warning("NSPasteboard setString:forType: failed; clipboard not set")
 
+    def copy(self, text: str) -> None:
+        # A normal, persistent copy for the tray "Copy last dictation" item
+        # (ADR-0023 / #119). NSPasteboard has no Win+V/cloud-clipboard notion,
+        # so this is just a plain pasteboard write — there is nothing to
+        # clutter-proof and nothing to exclude. Mirrors set_text without the
+        # transient-juggling framing.
+        pasteboard = NSPasteboard.generalPasteboard()
+        pasteboard.clearContents()
+        ok = pasteboard.setString_forType_(text, NSPasteboardTypeString)
+        if not ok:
+            logger.warning(
+                "NSPasteboard setString:forType: failed; last dictation not copied"
+            )
+
     def restore(self, saved: str | None) -> None:
         pasteboard = NSPasteboard.generalPasteboard()
         # Always clear: restoring None leaves the clipboard empty, matching
