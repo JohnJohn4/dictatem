@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from dictatem.transform.detector import TriggerDetector
+from dictatem.transform.detector import (
+    PASTE_ACTION,
+    TriggerDetector,
+    match_builtin_action,
+    shadowed_builtin_aliases,
+)
 
 SUMMARIZE = "summarize prompt body"
 EXPAND = "expand prompt body"
@@ -106,3 +111,48 @@ class TestRegistrationNormalisation:
         # Empty key dropped; real alias still works.
         assert det.match("summarize") == SUMMARIZE
         assert det.match("") is None
+
+
+class TestMatchBuiltinAction:
+    """The built-in `paste` action uses the same match rule as Trigger Words,
+    but is matched independently of the Transform alias map (#139)."""
+
+    def test_paste_action_constant(self) -> None:
+        assert PASTE_ACTION == "paste"
+
+    def test_exact_paste_matches(self) -> None:
+        assert match_builtin_action("paste") == PASTE_ACTION
+
+    def test_case_and_punctuation_forms_fire(self) -> None:
+        # Whisper's period, a question mark, all-caps — all normalise to "paste".
+        for utterance in ("Paste.", "paste?", "PASTE", "  paste  ", "\tPaste!\n"):
+            assert match_builtin_action(utterance) == PASTE_ACTION, utterance
+
+    def test_multi_word_paste_this_is_not_the_action(self) -> None:
+        # A lone "paste" is never something a user dictates; "paste this" is.
+        assert match_builtin_action("paste this") is None
+        assert match_builtin_action("please paste") is None
+        assert match_builtin_action("paste, please") is None
+
+    def test_unknown_and_empty_miss(self) -> None:
+        assert match_builtin_action("summarize") is None
+        assert match_builtin_action("") is None
+        assert match_builtin_action("   ") is None
+        assert match_builtin_action("....") is None
+
+
+class TestShadowedBuiltinAliases:
+    def test_no_collision_returns_empty(self) -> None:
+        assert shadowed_builtin_aliases(["summarize", "expand"]) == []
+
+    def test_exact_paste_alias_is_shadowed(self) -> None:
+        assert shadowed_builtin_aliases(["paste", "summarize"]) == ["paste"]
+
+    def test_surface_form_alias_is_shadowed(self) -> None:
+        # The collision is detected after normalisation, so punctuation/case
+        # variants of a built-in name are caught too.
+        assert shadowed_builtin_aliases(["Paste.", "expand"]) == ["Paste."]
+
+    def test_result_is_deduped_and_sorted(self) -> None:
+        out = shadowed_builtin_aliases(["paste", "paste", "PASTE"])
+        assert out == sorted(set(out))
