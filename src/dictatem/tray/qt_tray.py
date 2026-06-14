@@ -30,6 +30,7 @@ _MENU_LABELS: dict[MenuItem, str] = {
     MenuItem.HOTKEY_HINT: "Hotkey",
     MenuItem.START: "Start Recording",
     MenuItem.STOP: "Stop Recording",
+    MenuItem.COPY_LAST_DICTATION: "Copy last dictation",
     MenuItem.PRELOAD: "Preload Model",
     MenuItem.UNLOAD: "Unload Model",
     MenuItem.AUTOSTART: "Start at Login",
@@ -140,6 +141,7 @@ class QtTrayIcon:
 
         self.on_start: Callable[[], None] | None = None
         self.on_stop: Callable[[], None] | None = None
+        self.on_copy_last_dictation: Callable[[], None] | None = None
         self.on_preload: Callable[[], None] | None = None
         self.on_unload: Callable[[], None] | None = None
         # "Start at Login" toggle — receives the new checked state (ADR-0012).
@@ -178,6 +180,11 @@ class QtTrayIcon:
         callback_map: dict[MenuItem, Callable[[], None]] = {
             MenuItem.START: lambda: self.on_start() if self.on_start else None,
             MenuItem.STOP: lambda: self.on_stop() if self.on_stop else None,
+            MenuItem.COPY_LAST_DICTATION: (
+                lambda: self.on_copy_last_dictation()
+                if self.on_copy_last_dictation
+                else None
+            ),
             MenuItem.PRELOAD: lambda: self.on_preload() if self.on_preload else None,
             MenuItem.UNLOAD: lambda: self.on_unload() if self.on_unload else None,
             MenuItem.SHOW_LOG: lambda: self._open_log(),

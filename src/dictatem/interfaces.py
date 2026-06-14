@@ -44,6 +44,17 @@ class ClipboardIO(Protocol):
         """Restore previously saved clipboard content."""
         ...
 
+    def copy(self, text: str) -> None:
+        """Place *text* on the clipboard as a normal, persistent copy.
+
+        Unlike the transient ``set_text``/``restore`` juggling of the dictation
+        paste path — which is clutter-proofed out of Win+V history (#138) —
+        this is an explicit user copy (the tray "Copy last dictation" item), so
+        it is a *normal* copy that DOES appear in Win+V. Opens, replaces, and
+        closes the clipboard in one call. See ``CONTEXT.md#most-recent-dictation``.
+        """
+        ...
+
 
 @runtime_checkable
 class KeystrokeSender(Protocol):
@@ -309,6 +320,14 @@ class TrayRenderer(Protocol):
         """Update whether a model load is currently in progress.
 
         Used to disable Preload and Unload while a background load runs.
+        """
+        ...
+
+    def set_has_last_dictation(self, has_last_dictation: bool) -> None:
+        """Update whether a Most-recent dictation exists (ADR-0023 / #119).
+
+        Enables the tray "Copy last dictation" item once the first dictation
+        has been retained in the daemon's buffer.
         """
         ...
 

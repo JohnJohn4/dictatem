@@ -95,6 +95,34 @@ class TestMenuItemEnabled:
             assert state.menu_item_enabled(item) is True, f"{item} should be enabled even in error"
 
 
+    def test_copy_last_dictation_enabled_only_when_dictation_exists(self) -> None:
+        # Disabled before any dictation; enabled once one has been retained
+        # (ADR-0023 / #119) — independent of recording / model state.
+        none_yet = TrayState(
+            is_recording=False, is_model_loaded=False, has_error=False,
+            has_last_dictation=False,
+        )
+        have_one = TrayState(
+            is_recording=False, is_model_loaded=False, has_error=False,
+            has_last_dictation=True,
+        )
+        assert none_yet.menu_item_enabled(MenuItem.COPY_LAST_DICTATION) is False
+        assert have_one.menu_item_enabled(MenuItem.COPY_LAST_DICTATION) is True
+
+    def test_copy_last_dictation_defaults_disabled(self) -> None:
+        # has_last_dictation defaults False, so a freshly-built state (no kwarg)
+        # leaves the item disabled.
+        state = TrayState(is_recording=False, is_model_loaded=False, has_error=False)
+        assert state.menu_item_enabled(MenuItem.COPY_LAST_DICTATION) is False
+
+    def test_copy_last_dictation_enabled_even_while_recording(self) -> None:
+        # The buffer persists across states, so recovery stays available.
+        state = TrayState(
+            is_recording=True, is_model_loaded=True, has_error=False,
+            has_last_dictation=True,
+        )
+        assert state.menu_item_enabled(MenuItem.COPY_LAST_DICTATION) is True
+
     def test_hotkey_hint_and_version_are_always_disabled(self) -> None:
         # The hotkey header and version footer are non-interactive labels.
         for state in (
@@ -107,9 +135,9 @@ class TestMenuItemEnabled:
 
 class TestMenuItemOrder:
     def test_enum_order_matches_documented_spec(self) -> None:
-        expected = ["HOTKEY_HINT", "START", "STOP", "PRELOAD", "UNLOAD",
-                    "AUTOSTART", "SHOW_LOG", "HELP", "RESTART", "UPGRADE", "QUIT",
-                    "VERSION"]
+        expected = ["HOTKEY_HINT", "START", "STOP", "COPY_LAST_DICTATION",
+                    "PRELOAD", "UNLOAD", "AUTOSTART", "SHOW_LOG", "HELP",
+                    "RESTART", "UPGRADE", "QUIT", "VERSION"]
         actual = [m.name for m in MenuItem]
         assert actual == expected
 

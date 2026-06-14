@@ -33,6 +33,7 @@ class TestProtocolSignatures:
         assert callable(getattr(interfaces.ClipboardIO, "save", None))
         assert callable(getattr(interfaces.ClipboardIO, "set_text", None))
         assert callable(getattr(interfaces.ClipboardIO, "restore", None))
+        assert callable(getattr(interfaces.ClipboardIO, "copy", None))
 
     def test_keystroke_sender_methods(self) -> None:
         assert callable(getattr(interfaces.KeystrokeSender, "send_paste", None))
@@ -86,6 +87,7 @@ class TestProtocolSignatures:
         assert callable(getattr(interfaces.TrayRenderer, "set_idle", None))
         assert callable(getattr(interfaces.TrayRenderer, "set_recording", None))
         assert callable(getattr(interfaces.TrayRenderer, "set_error", None))
+        assert callable(getattr(interfaces.TrayRenderer, "set_has_last_dictation", None))
         assert callable(getattr(interfaces.TrayRenderer, "show_notification", None))
 
 
