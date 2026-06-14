@@ -47,11 +47,12 @@ class ClipboardIO(Protocol):
     def copy(self, text: str) -> None:
         """Place *text* on the clipboard as a normal, persistent copy.
 
-        Unlike the transient ``set_text``/``restore`` juggling of the dictation
-        paste path — which is clutter-proofed out of Win+V history (#138) —
-        this is an explicit user copy (the tray "Copy last dictation" item), so
-        it is a *normal* copy that DOES appear in Win+V. Opens, replaces, and
-        closes the clipboard in one call. See ``CONTEXT.md#most-recent-dictation``.
+        Unlike the transient ``set_text``/``restore`` writes of the dictation
+        paste path — which the clutter-proof write keeps out of Win+V history
+        (ADR-0023 / #138) — this is an explicit user copy (the tray "Copy last
+        dictation" item), so it is a *normal* copy that DOES appear in Win+V.
+        Opens, replaces, and closes the clipboard in one call. See
+        ``CONTEXT.md#most-recent-dictation``.
         """
         ...
 

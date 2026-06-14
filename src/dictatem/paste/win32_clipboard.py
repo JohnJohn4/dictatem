@@ -24,9 +24,11 @@ class Win32ClipboardIO:
 
     def copy(self, text: str) -> None:
         # A normal, persistent copy for the tray "Copy last dictation" item: it
-        # SHOULD land in Win+V (the user explicitly asked for it), so unlike the
-        # dictation-path set_text it carries no clutter-proof exclusion markers
-        # (ADR-0023 / #119). Self-contained open/empty/set/close.
+        # SHOULD appear in Win+V — the user explicitly asked for the text on
+        # their clipboard. It is therefore deliberately kept SEPARATE from the
+        # automatic dictation paste and must NOT pick up the clutter-proof
+        # exclusion markers that keep that automatic write out of Win+V history
+        # (ADR-0023 / #138). Self-contained open/empty/set/close.
         win32clipboard.OpenClipboard()
         try:
             win32clipboard.EmptyClipboard()
