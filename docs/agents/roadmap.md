@@ -24,7 +24,21 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Session 3 — Docs & discoverability.**
+**Clipboard clutter + last-dictation recovery — DESIGN SETTLED (2026-06-14). Do
+not re-grill.** Decision: regular dictation keeps pasting via **clipboard +
+Ctrl+V** (ADR-0004 untouched), made **clutter-proof** by `CanIncludeInClipboardHistory`
++ `CanUploadToCloudClipboard` exclusion markers on *both* the transient write and
+the restore; "never lost" is delivered by an in-memory **Most-recent dictation**
+buffer recovered via a built-in **`paste`** Trigger Word (works regardless of
+`[transform].enabled`) plus a tray **"Copy last dictation"**. The no-target
+auto-dump (#124) and a paste-last hotkey (#128) were considered and **rejected**
+(closed). Spec: amended **ADR-0023**. Ready-to-build (this is **roadmap S5**):
+**#138** clutter-proof write · **#119** buffer + tray copy → **#139** `paste`
+word. Parallel-safe — #138 is independent; #139 is blocked by #119.
+
+---
+
+**Next up (mainline): Session 3 — Docs & discoverability.**
 
 ➡️ **Full handoff: [`docs/agents/handoffs/session-03-docs-discoverability.md`](handoffs/session-03-docs-discoverability.md)** — read it first.
 
@@ -111,13 +125,13 @@ session · **M** ≈ one focused session · **L** ≈ may span more than one.
 | ~~**S2**~~ | ~~Pure-logic feature cores~~ | AFK | M | ✅ PR #133 (#118) · PR #134 (#125 #126) | `tdd`, `code-review` | done 2026-06-11 |
 | **S3** | Docs & discoverability | AFK | S–M | #67 #127 #122 #123 | `run`/`verify`, `code-review` | — |
 | **S4** | CI keystone + install hardening | AFK | M | #81 #90 #92 | `code-review`, `diagnose` | — *(do early)* |
-| **S5** | Clipboard last-dictation rail | AFK | M | #119 → #124 | `tdd`, `run`/`verify`, `code-review` | — |
+| **S5** | Clutter-proof clipboard + last-dictation recovery | AFK | M | #138 · #119 → #139 | `tdd`, `run`/`verify`, `code-review` | — |
 | **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | S2 (#118) |
 | **S7** | Cold-start latency **design** | Grill | — | #101 (frames #97 #96 #67) | `grill-with-docs`, `prototype` | — *(parallel-safe)* |
 | **S8** | Overlay & focus UX | AFK | M | #96 #97 | `run`/`verify`, `code-review` | S7 |
 | **S9** | macOS QA & polish | Manual-QA + AFK | L | #121 #95 #94 #93 | `verify`/`run`, `tdd`, `diagnose` | S2 (#118), S4 |
 | **S10** | Signing decision | Grill | — | #91 | `grill-me` | user spend call |
-| **—** | Parked backlog | — | — | #72 #80 #128 #129 #130 #131 | `prototype` (#130 spike) | fresh go-ahead |
+| **—** | Parked backlog | — | — | #72 #80 #129 #130 #131 | `prototype` (#130 spike) | fresh go-ahead |
 
 **Critical path:** S1 → S2 (#118) → S6 / S9 (mouse hooks). **Slot S4 early** — it
 is the CI verification surface that turns most macOS work into machine-checkable
@@ -151,10 +165,15 @@ asserting pinned versions appear in the matrix (pairs with #81). #92
 cross-platform single-instance guard (`QLockFile`). *QA:* Windows boot smoke for
 #92.
 
-**S5 — Clipboard last-dictation rail.** #119 tray "Copy last dictation"
-(ADR-0023), then #124 no-target fallback to clipboard + overlay notice (ADR-0023,
-blocked by #119). Keep the no-target *decision* pure and tested; thin tray/overlay
-wiring. *QA:* Windows tray + overlay.
+**S5 — Clutter-proof clipboard + last-dictation recovery.** Fully specced by the
+**ADR-0023 amendment (2026-06-14)**. #138 clutter-proof clipboard write
+(history/cloud exclusion markers on the win32 adapter's `set_text` + `restore`);
+#119 Most-recent dictation buffer + tray "Copy last dictation"; #139 built-in
+`paste` Trigger Word that re-pastes the buffer (blocked by #119). Keep the buffer
++ detection logic pure and tested; thin win32/tray wiring. **Do not re-grill** —
+the no-target auto-dump (#124) and the paste-last hotkey (#128) were considered
+and rejected (see ADR-0023; both closed). *QA:* Windows — Win+V stays clean, tray
+copy, and "paste" recovery.
 
 **S6 — Windows mouse hook.** #120 `WH_MOUSE_LL` adapter feeding the S2 classifier
 (ADR-0020). *QA:* Windows — physically click mouse4/mouse5/middle.
@@ -178,10 +197,11 @@ Mac is available, export a QA handoff.
 ticket: pay for a Developer-ID + notarization pipeline vs. accept the `python3.12`
 label (ADR-0014 amendment). Needs the user's spend call.
 
-**Parked — do not build without a fresh go-ahead:** #128 paste-last hotkey, #129
+**Parked — do not build without a fresh go-ahead:** #129
 auto-cleanup-every-dictation, #131 tracking issue, #72 PyPI publish, #80 native
 Windows-ARM. #130 speech-helper is a **spike** — when picked up, use `prototype`
-(ties to the speech-helper direction memory).
+(ties to the speech-helper direction memory). (#128 paste-last hotkey was closed
+as superseded by the ADR-0023 amendment / #139.)
 
 ---
 
@@ -284,7 +304,7 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 
 ## Guardrails (do-not)
 
-- Don't build **parked** issues (#72 #80 #128 #129 #130 #131) without a fresh
+- Don't build **parked** issues (#72 #80 #129 #130 #131) without a fresh
   user go-ahead.
 - Don't **re-grill or reverse a settled ADR.** Surface conflicts instead.
 - Don't **rewrite `config.toml`** from the app — use sentinel markers.
@@ -308,6 +328,13 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### Clipboard clutter + last-dictation recovery (design grill) — 2026-06-14
+- **Shipped:** no code — design decisions. Amended **ADR-0023**: corrected the false "regular dictation never touches the clipboard" premise (it pastes via clipboard + Ctrl+V, ADR-0004); recorded the clutter-proof history/cloud exclusion markers, the Most-recent dictation buffer, and the built-in `paste` recovery; recorded #124 auto-dump and #128 hotkey as rejected options. Updated **CONTEXT.md**: added *Most-recent dictation* and *Clutter-proof clipboard write*, broadened *Trigger Word* to cover built-in actions, removed the now-wrong *Clipboard Fallback* term.
+- **Issues:** opened **#138** (clutter-proof clipboard write) + **#139** (`paste` built-in action Trigger Word, blocked by #119) · rescoped **#119** (Most-recent dictation buffer + tray "Copy last dictation") · closed **#124** + **#128** (superseded / not planned).
+- **PRs:** none (design session; docs committed to branch `docs/clipboard-clutter-backup-paste`).
+- **QA owed:** none yet — S5 implementation (#138 / #119 / #139) carries the Windows manual-QA (Win+V stays clean, tray copy, "paste" recovery).
+- **Follow-ups / notes:** HARD CONSTRAINT preserved — regular dictation stays clipboard + Ctrl+V (typed `SendInput` was rejected for it; ADR-0004 untouched). Built-in `paste` is decoupled from `[transform].enabled`. Flagged (easily reversible): the tray "Copy last dictation" is a *normal* copy (appears in Win+V) — flip to a clutter-proof write if surprising. **Separate thread still owed:** single-instance guard **#92** on `feat/single-instance-guard-92` (commit + `/code-review` + PR + the installer "stop old daemon" upgrade) — see `docs/agents/handoffs/single-instance-guard-92.md`; not part of this session.
 
 ### S2 — Pure-logic feature cores — 2026-06-11
 - **Shipped:** three feature cores via two parallel worktree agents + TDD. Both PRs merged to `main` (#133, #134); suite green at 950 passed post-merge.
