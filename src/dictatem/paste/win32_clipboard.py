@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 import win32clipboard  # type: ignore[import-untyped]
+
+from dictatem.paste.clipboard_markers import apply_exclusion_markers
+
+logger = logging.getLogger(__name__)
 
 
 class Win32ClipboardIO:
@@ -25,6 +31,10 @@ class Win32ClipboardIO:
     def set_text(self, text: str) -> None:
         win32clipboard.EmptyClipboard()
         win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, text)
+        # Clutter-proof the transient dictation write: Ctrl+V still pastes it,
+        # but it never lands in Win+V history or syncs to the cloud clipboard
+        # (ADR-0023 / #138). The caller already holds the clipboard open.
+        self._apply_exclusion_markers()
 
     def restore(self, saved: str | None) -> None:
         win32clipboard.OpenClipboard()
@@ -32,5 +42,28 @@ class Win32ClipboardIO:
             win32clipboard.EmptyClipboard()
             if saved is not None:
                 win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, saved)
+                # Mark the restore too: re-writing the user's original would
+                # otherwise leave a duplicate entry in Win+V — the second half
+                # of the clutter the markers fix (ADR-0023 / #138).
+                self._apply_exclusion_markers()
         finally:
             win32clipboard.CloseClipboard()
+
+    def _apply_exclusion_markers(self) -> None:
+        # Best-effort: the markers only keep the write out of Win+V history and
+        # cloud sync — they are advisory, and the text is already on the
+        # clipboard. A marker failure must never break the paste/restore nor
+        # escape into pipeline's deferred restore, whose ``except OSError``
+        # wouldn't catch ``pywintypes.error`` anyway. Log-and-continue mirrors
+        # the adapters' posture (see ``mac_clipboard.set_text``).
+        try:
+            apply_exclusion_markers(
+                win32clipboard.RegisterClipboardFormat,
+                win32clipboard.SetClipboardData,
+            )
+        except Exception:
+            logger.warning(
+                "Could not apply clutter-proof clipboard markers; the write "
+                "succeeded but may appear in Win+V history",
+                exc_info=True,
+            )
