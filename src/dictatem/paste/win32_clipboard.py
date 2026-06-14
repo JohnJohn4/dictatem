@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 import win32clipboard  # type: ignore[import-untyped]
 
 from dictatem.paste.clipboard_markers import apply_exclusion_markers
+
+logger = logging.getLogger(__name__)
 
 
 class Win32ClipboardIO:
@@ -46,7 +50,20 @@ class Win32ClipboardIO:
             win32clipboard.CloseClipboard()
 
     def _apply_exclusion_markers(self) -> None:
-        apply_exclusion_markers(
-            win32clipboard.RegisterClipboardFormat,
-            win32clipboard.SetClipboardData,
-        )
+        # Best-effort: the markers only keep the write out of Win+V history and
+        # cloud sync — they are advisory, and the text is already on the
+        # clipboard. A marker failure must never break the paste/restore nor
+        # escape into pipeline's deferred restore, whose ``except OSError``
+        # wouldn't catch ``pywintypes.error`` anyway. Log-and-continue mirrors
+        # the adapters' posture (see ``mac_clipboard.set_text``).
+        try:
+            apply_exclusion_markers(
+                win32clipboard.RegisterClipboardFormat,
+                win32clipboard.SetClipboardData,
+            )
+        except Exception:
+            logger.warning(
+                "Could not apply clutter-proof clipboard markers; the write "
+                "succeeded but may appear in Win+V history",
+                exc_info=True,
+            )

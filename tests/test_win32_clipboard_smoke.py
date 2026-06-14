@@ -7,12 +7,15 @@ would see it), the user's original is still restored, and both exclusion formats
 are present after a dictation-style write. Whether Win+V history *actually* skips
 the entry is human manual-QA (ADR-0023 / #138 QA handoff).
 
-Self-cleaning: the runner's real clipboard is saved and restored around each test
-via the ``preserve_clipboard`` fixture, so running the suite never clobbers it.
+Self-cleaning: the runner's real clipboard is saved and restored (best-effort)
+around each test via the ``preserve_clipboard`` fixture — so running the suite
+does not clobber it, except in the rare case where ~0.8s of sustained clipboard
+contention defeats even the teardown restore.
 """
 
 from __future__ import annotations
 
+import contextlib
 import sys
 import time
 from typing import TYPE_CHECKING
@@ -66,7 +69,10 @@ def _read_text() -> str | None:
     _open_with_retry()
     try:
         try:
-            return str(win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT))
+            data = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
+            # Collapse empty → None, matching Win32ClipboardIO.save() so the
+            # fixture round-trips the runner's clipboard with the same semantics.
+            return str(data) if data else None
         except TypeError:
             return None
     finally:
@@ -91,9 +97,12 @@ def preserve_clipboard() -> Iterator[None]:
     try:
         yield
     finally:
-        # Put the runner's clipboard back exactly as it was.
+        # Put the runner's clipboard back exactly as it was. Best-effort: never
+        # fail teardown over clipboard contention (the give-up case leaves test
+        # text on the clipboard, which the docstring flags).
         clip = Win32ClipboardIO()
-        _retry_clipboard_op(lambda: clip.restore(saved))
+        with contextlib.suppress(pywintypes.error):
+            _retry_clipboard_op(lambda: clip.restore(saved))
 
 
 class TestClutterProofSetText:
@@ -112,6 +121,7 @@ class TestClutterProofSetText:
         assert _read_text() == "dictatem clutter-proof smoke "
         # Both exclusion markers are present, so Win+V/cloud skip this write.
         present = _exclusion_formats_present()
+        assert len(present) == len(CLIPBOARD_EXCLUSION_FORMATS)  # not vacuous
         assert all(present.values()), f"missing exclusion markers: {present}"
 
 
@@ -124,6 +134,7 @@ class TestClutterProofRestore:
         # ...and itself history/cloud-excluded, so the restore adds no Win+V
         # duplicate of the user's original (the second half of the clutter fix).
         present = _exclusion_formats_present()
+        assert len(present) == len(CLIPBOARD_EXCLUSION_FORMATS)  # not vacuous
         assert all(present.values()), f"missing exclusion markers: {present}"
 
     def test_restore_none_leaves_clipboard_empty(self, preserve_clipboard: None) -> None:
