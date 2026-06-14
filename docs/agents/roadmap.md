@@ -24,40 +24,29 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Clipboard clutter + last-dictation recovery — DESIGN SETTLED (2026-06-14). Do
-not re-grill.** Decision: regular dictation keeps pasting via **clipboard +
-Ctrl+V** (ADR-0004 untouched), made **clutter-proof** by `CanIncludeInClipboardHistory`
-+ `CanUploadToCloudClipboard` exclusion markers on *both* the transient write and
-the restore; "never lost" is delivered by an in-memory **Most-recent dictation**
-buffer recovered via a built-in **`paste`** Trigger Word (works regardless of
-`[transform].enabled`) plus a tray **"Copy last dictation"**. The no-target
-auto-dump (#124) and a paste-last hotkey (#128) were considered and **rejected**
-(closed). Spec: amended **ADR-0023**. Ready-to-build (this is **roadmap S5**):
-**#138** clutter-proof write · **#119** buffer + tray copy → **#139** `paste`
-word. Parallel-safe — #138 is independent; #139 is blocked by #119.
+**Next up: Session 3 — Docs & discoverability.** S5 (clutter-proof clipboard +
+last-dictation recovery) just shipped as **three PRs awaiting your review/merge**
+— **#141** (#138 clutter-proof write), **#142** (#119 Most-recent dictation
+buffer + tray "Copy last dictation"), **#143** (#139 built-in `paste` word,
+**stacked on #142** — merge #142 first, then #143 auto-retargets to `main`).
+Suite green at **987 passed**; `/code-review` run per PR. **Windows manual-QA is
+owed** — run [`docs/agents/qa-handoffs/03-s5-clipboard-recovery-qa.md`](qa-handoffs/03-s5-clipboard-recovery-qa.md)
+after the three merge (Win+V stays clean, tray copy, "paste" recovery). Do **not**
+re-grill S5 — ADR-0023 is settled and the #124 auto-dump / #128 hotkey were
+rejected.
 
----
+This session is small docs + thin discoverability wiring: **#67** (lazy-load/
+idle-unload docs — docs-only now), **#127** (default Polish prompt + cleanup
+docs), **#122** (auto-open Usage Guide on first run — **sentinel marker, never
+rewrite config.toml**), **#123** (tray "Open config…" + Guide "Changing your
+hotkey" section). Do #122/#123 in sequence (shared tray/first-run path). Full
+handoff: [`docs/agents/handoffs/session-03-docs-discoverability.md`](handoffs/session-03-docs-discoverability.md)
+— read it first. **Pull S4 (CI keystone + install hardening) early** — there is
+no CI today and it's the macOS verification surface.
 
-**Next up (mainline): Session 3 — Docs & discoverability.**
-
-➡️ **Full handoff: [`docs/agents/handoffs/session-03-docs-discoverability.md`](handoffs/session-03-docs-discoverability.md)** — read it first.
-
-Session 2 shipped the pure-logic cores: **PR #133** (#118 mouse-button classifier)
-and **PR #134** (#125 Replacements + #126 Vocabulary, ADR-0024) — both reviewed,
-pure-logic-tested, 924 tests green. This session is small docs + thin
-discoverability wiring: **#67** (lazy-load/idle-unload docs — docs-only now),
-**#127** (default Polish prompt + cleanup docs), **#122** (auto-open Usage Guide on
-first run — **sentinel marker, never rewrite config.toml**), **#123** (tray "Open
-config…" + Guide "Changing your hotkey" section reflecting the live combo, incl.
-the new `mouse4/mouse5/middle` vocab). Do #122/#123 in sequence — they share the
-tray/first-run path. There is a light **Windows manual-QA** tail (first-run
-auto-open; tray open-config) — give the user a checklist or export a QA handoff;
-don't claim it passed without a human. When done, point the prompt at **Session 4 —
-CI keystone + install hardening** (pull it early — it's the macOS verification
-surface).
-
-Skills: `run`/`verify`, `code-review`. Your role: autonomous; the user reviews and
-merges the PRs and runs the Windows QA.
+Skills: `run`/`verify`, `code-review`. Your role: autonomous; the user reviews/
+merges the PRs and runs the Windows QA. **QA pending — see
+`docs/agents/qa-handoffs/03-s5-clipboard-recovery-qa.md`.**
 
 ---
 
@@ -125,7 +114,7 @@ session · **M** ≈ one focused session · **L** ≈ may span more than one.
 | ~~**S2**~~ | ~~Pure-logic feature cores~~ | AFK | M | ✅ PR #133 (#118) · PR #134 (#125 #126) | `tdd`, `code-review` | done 2026-06-11 |
 | **S3** | Docs & discoverability | AFK | S–M | #67 #127 #122 #123 | `run`/`verify`, `code-review` | — |
 | **S4** | CI keystone + install hardening | AFK | M | #81 #90 #92 | `code-review`, `diagnose` | — *(do early)* |
-| **S5** | Clutter-proof clipboard + last-dictation recovery | AFK | M | #138 · #119 → #139 | `tdd`, `run`/`verify`, `code-review` | — |
+| **S5** | Clutter-proof clipboard + last-dictation recovery | AFK | M | 🔶 PR #141 (#138) · #142 (#119) → #143 (#139) — open | `tdd`, `run`/`verify`, `code-review` | impl done 2026-06-14; merge + Win QA owed |
 | **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | S2 (#118) |
 | **S7** | Cold-start latency **design** | Grill | — | #101 (frames #97 #96 #67) | `grill-with-docs`, `prototype` | — *(parallel-safe)* |
 | **S8** | Overlay & focus UX | AFK | M | #96 #97 | `run`/`verify`, `code-review` | S7 |
@@ -328,6 +317,13 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### S5 — Clutter-proof clipboard + last-dictation recovery — 2026-06-14
+- **Shipped:** three feature slices implemented per amended **ADR-0023**, each its own branch/PR with `/code-review` run before opening. **#138** — clutter-proof clipboard write: a pure `paste/clipboard_markers.py` (which exclusion formats + DWORD-0 payload) wired into `win32_clipboard.set_text`/`restore`, applied **best-effort** (a marker failure logs and degrades; the text write already succeeded). **#119** — a new persistent `DaemonCore._most_recent_dictation` field (the last *regular* dictation, normalised + Replacements applied), set in `_do_paste` only when `replace == 0` so a Trigger Fire never overwrites it; a new `ClipboardIO.copy` (a NORMAL copy, no markers) + a tray **"Copy last dictation"** item gated by `TrayState.has_last_dictation`. **#139** — a built-in **`paste`** Trigger Word: pure `match_builtin_action`/`shadowed_builtin_aliases` in `transform.detector`, intercepted in `check_transcription_result` before the Transform alias map (so it runs regardless of `[transform].enabled` and with no Last Paste), reading the Most-recent dictation buffer; empty buffer → existing error flash, never types "paste"; re-paste becomes the new Last Paste; built-in actions dispatched via a `{word: handler}` table (lookup, not equality, so a future word fails loudly). Usage Guide gained a "Recovering a lost dictation" section.
+- **Issues:** #138, #119, #139 implemented (left **open** pending merge + QA). Closed: none. Opened: none. Rescoped: none.
+- **PRs:** **#141** (#138, base `main`), **#142** (#119, base `main`), **#143** (#139, **stacked on #142** — base is `feat/most-recent-dictation-119`; auto-retargets to `main` once #142 merges). **Merge order: #141 any time; #142 then #143.** Suite **987 passed, 4 skipped**; `pyright` 0 errors, `ruff` clean.
+- **QA owed:** Windows manual-QA — exported as [`qa-handoffs/03-s5-clipboard-recovery-qa.md`](qa-handoffs/03-s5-clipboard-recovery-qa.md). Run after all three PRs merge, from the dev clone (installed tool pinned to v0.5.6). Covers: Win+V stays clean after dictation (#138), tray copy disabled→enabled + survives pastes (#119), "paste" recovers a lost dictation incl. case/punct forms, Transform-off, and empty-buffer error (#139). **Pending a human on real Windows.**
+- **Follow-ups / notes:** Flagged decisions (accepted, reversible): the tray "Copy last dictation" is a *normal* copy (appears in Win+V) per ADR-0023 — flip to a clutter-proof write if surprising. **Pre-existing observation surfaced during #138 review (not a bug introduced here, left untouched per "ride the paste flow unchanged"):** `pipeline._open_with_retry` and the deferred `_restore` catch `OSError`, but `win32clipboard.OpenClipboard` raises `pywintypes.error`, which is **not** an `OSError` subclass — so real clipboard contention on the production open/restore is not actually retried/swallowed. Worth a follow-up issue if paste-not-landing recurs (relates to #93). **Separate thread still owed:** single-instance guard **#92** on `feat/single-instance-guard-92` (commit + `/code-review` + PR + installer "stop old daemon" upgrade) — see `docs/agents/handoffs/single-instance-guard-92.md`; not part of this session.
 
 ### Clipboard clutter + last-dictation recovery (design grill) — 2026-06-14
 - **Shipped:** no code — design decisions. Amended **ADR-0023**: corrected the false "regular dictation never touches the clipboard" premise (it pastes via clipboard + Ctrl+V, ADR-0004); recorded the clutter-proof history/cloud exclusion markers, the Most-recent dictation buffer, and the built-in `paste` recovery; recorded #124 auto-dump and #128 hotkey as rejected options. Updated **CONTEXT.md**: added *Most-recent dictation* and *Clutter-proof clipboard write*, broadened *Trigger Word* to cover built-in actions, removed the now-wrong *Clipboard Fallback* term.
