@@ -77,18 +77,40 @@ the same-target rail.
 
 The **Last Paste** is the operand for [Trigger Words](#trigger-word). It is
 updated after every paste — both from regular dictation and from a Trigger
-Word firing. It is cleared on cancel.
+Word firing. It is cleared on cancel. It is distinct from the
+[Most-recent dictation](#most-recent-dictation) below.
+
+### Most-recent dictation
+
+The exact payload of the most recent regular dictation — normalised and with
+[Replacements](#replacement) applied, i.e. the text that was (or would have been)
+pasted — held in daemon memory. Unlike [Last Paste](#last-paste) it is retained
+across pastes and exists even when the dictation landed nowhere (no window
+focused, or the focused control was not a text field), so it carries no
+`target_id` and does not by itself arm [Trigger Words](#trigger-word). It is what
+the **`paste`** [Trigger Word](#trigger-word) and the [Tray Icon](#tray-icon)
+"Copy last dictation" item recover, which is how Dictatem guarantees a dictation
+is **never lost**: if text lands nowhere, focus where it should go and say
+"paste" (or copy it from the tray). See
+[ADR-0023](docs/adr/0023-dictation-is-never-lost-clipboard-fallback.md).
 
 ### Trigger Word
 
-A single-word utterance that, instead of being pasted as dictation, invokes
-a [Transform](#transform) on the [Last Paste](#last-paste).
+A single-word utterance that, instead of being pasted as dictation, invokes an
+**action**. Two kinds exist: a [Transform](#transform) — an LLM operation on the
+[Last Paste](#last-paste), declared by a [Prompt File](#prompt-file) — and a
+**built-in action**, hard-coded in Dictatem, that needs no Prompt File and no
+LLM. The only built-in action today is **`paste`**, which re-pastes the
+[Most-recent dictation](#most-recent-dictation) into the current window (the
+recovery for a dictation that landed nowhere). Built-in actions work regardless
+of whether the [Transform](#transform) feature is enabled.
 
 A transcription is recognised as a Trigger Word if, after stripping
-whitespace and ASCII punctuation and lowercasing, it exactly matches one of
-the configured [Aliases](#alias). Multi-token utterances never match —
-`"summarize this"` is regular dictation, only the lone word `"summarize"`
-(or its [Aliases](#alias)) fires.
+whitespace and ASCII punctuation and lowercasing, it exactly matches a configured
+[Alias](#alias) or a built-in action word. Multi-token utterances never match —
+`"summarize this"` is regular dictation; only the lone word `"summarize"` (or
+`"paste"`, or their [Aliases](#alias)) fires. A user [Prompt File](#prompt-file)
+that re-uses a built-in name (`paste`) is shadowed by the built-in.
 
 ### Alias
 
@@ -166,22 +188,21 @@ by rules the user has consciously enabled. Ambiguous fillers (`like`,
 context and need LLM judgement, not a blind rule. See
 [ADR-0024](docs/adr/0024-replacements-are-opt-in-no-silent-autocorrect.md).
 
-### Clipboard Fallback
+### Clutter-proof clipboard write
 
-A dictation is **never silently lost**. Dictatem types transcribed text into the
-focused window via keystrokes — it does not paste through the clipboard (see
-[ADR-0004](docs/adr/0004-trigger-fire-types-via-sendinput-not-clipboard.md)) —
-but when there is **no foreground target** to type into, the text is placed on
-the **clipboard** instead and the [Overlay Pill](#overlay-pill) shows a brief
-notice, so the user can paste it where they meant to. The most recent dictation
-can also be copied on demand from the [Tray Icon](#tray-icon) menu
-("Copy last dictation").
-
-Dictatem deliberately does **not** detect whether the focused control is
-editable: typing blind is what lets it work in every application without per-app
-knowledge. The automatic fallback therefore fires only on the cheaply-known
-"no foreground window" case; for the rarer "focused, but not a text field" case,
-the on-demand copy is the recovery. See
+A clipboard write Dictatem tags so it pastes normally with Ctrl+V but leaves no
+trace: the Windows markers `CanIncludeInClipboardHistory` and
+`CanUploadToCloudClipboard` (both DWORD `0`) exclude it from the Win+V clipboard
+**history** and from **cloud-clipboard** sync. Regular dictation pastes via the
+clipboard + Ctrl+V (see
+[ADR-0004](docs/adr/0004-trigger-fire-types-via-sendinput-not-clipboard.md)),
+saving and restoring the user's original around the transient write; **both** the
+transient write and the restore are clutter-proof, so the automatic juggling
+never piles entries into Win+V or syncs the dictation off-device. (An explicit
+[Tray Icon](#tray-icon) "Copy last dictation" is a *normal* copy — the user
+deliberately asked for it on the clipboard.) [Trigger Fire](#trigger-fire) never
+touches the clipboard at all (it types via `SendInput`), so this concerns only
+the regular-dictation path. See
 [ADR-0023](docs/adr/0023-dictation-is-never-lost-clipboard-fallback.md).
 
 ## UI surfaces
