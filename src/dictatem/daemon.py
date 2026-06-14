@@ -304,6 +304,14 @@ class DaemonCore:
         # the tray "Copy last dictation" item and the built-in `paste` Trigger
         # Word (#139) recover — the guarantee a dictation is never lost.
         self._most_recent_dictation: str | None = None
+        # Built-in action words → their handlers (ADR-0023 / #139). Routed by
+        # lookup, not an equality check, so adding a word to
+        # BUILTIN_ACTION_WORDS without a handler fails loudly here (caught by
+        # check_transcription_result's try/except) instead of silently falling
+        # through to regular dictation.
+        self._builtin_action_handlers: dict[str, Callable[..., None]] = {
+            PASTE_ACTION: self._handle_paste_action,
+        }
         self._transcription_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._transcription_active: bool = False
         self._transcription_thread: threading.Thread | None = None
@@ -578,8 +586,9 @@ class DaemonCore:
                 # #139). Detected before Replacements so a rule can't rewrite or
                 # mask them, and before _detect_trigger so they bypass both of
                 # its gates (transform-enabled + Last-Paste-exists).
-                if match_builtin_action(result) == PASTE_ACTION:  # type: ignore[arg-type]
-                    self._handle_paste_action(now_ms=now_ms)
+                action = match_builtin_action(result)  # type: ignore[arg-type]
+                if action is not None:
+                    self._builtin_action_handlers[action](now_ms=now_ms)
                     return
 
                 # Trigger Word detection — see CONTEXT.md#trigger-fire. Detect
