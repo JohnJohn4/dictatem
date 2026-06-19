@@ -25,16 +25,16 @@ named ADR remain the per-feature spec.
 > the Handoff protocol. It is the first thing the next agent reads._
 
 **Next up: Session 4 — CI keystone + install hardening.** Session 3 (docs &
-discoverability) shipped as three PRs, **open and pending your review/merge**:
-**#151** (#67 — README model lazy-load/idle-unload + managed-machine first-launch
-AV/EDR note), **#152** (#127 — bundled default `polish` cleanup prompt + docs),
-and **#153** (#122 first-run Usage Guide auto-open via a sentinel marker + #123
-tray "Open config file…" and the Guide's "Changing your hotkey" section).
-**#122/#123 also owe a Windows manual-QA** — run/merge their PR only after the
-checklist at
-[`docs/agents/qa-handoffs/04-docs-discoverability-qa.md`](qa-handoffs/04-docs-discoverability-qa.md)
-passes (the PR deliberately does **not** auto-close them). Don't re-grill the
-settled ADRs (0021 sentinel-marker onboarding, 0022 no-settings-UI).
+discoverability) is **fully landed**: PRs **#151** (#67 — README model
+lazy-load/idle-unload + managed-machine first-launch AV/EDR note), **#152** (#127
+— bundled default `polish` cleanup prompt + docs), and **#153** (#122 first-run
+Usage Guide auto-open via a sentinel marker + #123 tray "Open config file…" and
+the Guide's "Changing your hotkey" section) are **all merged to `main`**, and
+#67/#127/#122/#123 are **closed**. **#122/#123 passed Windows manual-QA**
+(2026-06-20): the guide auto-opened once and wrote the marker, a relaunch did not
+re-open, and the "Open config file…" item + "Changing your hotkey" section both
+checked out. Don't re-grill the settled ADRs (0021 sentinel-marker onboarding,
+0022 no-settings-UI).
 
 This session builds the **verification surface the whole macOS track needs**:
 **#81** — a GitHub Actions matrix (`macos-latest` + `windows-latest`, py3.11–3.13;
@@ -49,8 +49,8 @@ duplicate. *QA:* none beyond CI going green. Full handoff:
 cold-start grill) for your own handoff.
 
 Skills: `code-review`, `diagnose`. Your role: autonomous; the user reviews/merges
-the PRs. **QA pending (carried from S3):** #122/#123 Windows — see
-`docs/agents/qa-handoffs/04-docs-discoverability-qa.md`.
+the PRs. **No QA owed from S3** — its Windows QA passed. The only carried-over QA
+is **#126** vocabulary recognition-lift (S2) — `docs/agents/qa-handoffs/02-vocabulary-recognition-qa.md`.
 
 ---
 
@@ -324,9 +324,9 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 
 ### S3 — Docs & discoverability — 2026-06-20
 - **Shipped:** four issues across three independent PRs. **#67** (PR **#151**, docs-only) — a README "Model loading & VRAM" section: lazy-load (model loads on first dictation; the pill shows it's *loading*, not stuck), idle-unload (frees ~3 GB VRAM after `idle_unload_minutes`; the LLM is kept warm for the same window), how to trade VRAM for an instant first response (`[startup] preload_model`, `[model] idle_unload_minutes`, tray Preload/Unload), and the managed-machine AV/EDR first-launch note. The "Loading model…" pill itself already shipped (#74), so this was the item-2/3 docs residual only. **#127** (PR **#152**) — a bundled default `polish.md` Prompt File (aliases `polish`, `cleanup`): a faithful copy-edit (remove filler/false starts, **preserve meaning + voice**, explicitly NOT a summary), bootstrapped like `summarize.md`; the Usage Guide + README document the cleanup-over-last-dictation flow. Reuses the Prompt File mechanism — no new code (ADR-0003/0024). **#122 + #123** (PR **#153**, combined — shared tray/first-run path): **#122** auto-opens the Usage Guide once on first run via a sentinel marker `~/.dictatem/.usage_guide_seen` (pure gate in new `onboarding.py`; written only *on-show*; deferred while a macOS permission flow is pending; never rewrites `config.toml` — ADR-0021/0009/0022); **#123** adds a tray "Open config file…" item (OS-default open, no settings UI) + a "Changing your hotkey" Usage Guide section reflecting the live combo and the curated `[hotkey].modifiers` vocabulary incl. mouse buttons (ADR-0022/0019). New `config.default_config_path()` shared by daemon + tray.
-- **Issues:** **#67**, **#127** close on their PRs' merge. **#122**, **#123** kept **open pending Windows QA** (PR #153 does not auto-close them). Opened: none. Open count unchanged until merges land.
-- **PRs:** **#151** (#67) · **#152** (#127) · **#153** (#122+#123) — **all open at session close, pending your review/merge.** Cut **independently from `main`** (no stacking — avoids the #143 base-branch-deletion auto-close hazard); file-disjoint except `usage_guide.py` / `test_usage_guide.py`, where #127 and #123 touch different hunks (clean merge, the established S5 multi-PR pattern). Each branch: full suite green (1007 passed after #127, 1021 after #122/#123; 4 skipped), `ruff` clean, `pyright` 0 errors; `/code-review` run (no findings — #153 got two independent adversarial reviewers over the daemon control-flow + the pure modules).
-- **QA owed:** **#122 / #123 Windows manual-QA** — exported as [`qa-handoffs/04-docs-discoverability-qa.md`](qa-handoffs/04-docs-discoverability-qa.md) and given to the user in-chat (they're on Windows). The pure marker gate is unit-tested (`test_onboarding.py`); the first-run auto-open + tray-item wiring are Qt/tray and need a human (clean profile: no marker → guide opens once + marker written; relaunch → no re-open; tray "Open config file…" opens `config.toml`; Guide shows the live combo). Carried over: **#126** vocabulary recognition-lift (S2) still pending a user run — `qa-handoffs/02-vocabulary-recognition-qa.md`.
+- **Issues:** **all four closed** — #67, #127 on their PRs' merge; **#122**, **#123** closed COMPLETED after the **Windows QA PASS** (2026-06-20), with evidence on each. Opened: none.
+- **PRs:** **#151** (#67) · **#152** (#127) · **#153** (#122+#123) — **all merged to `main`** 2026-06-20 (plus the docs PR **#154** and the follow-up **#155** correcting this ledger). Cut **independently from `main`** (no stacking — avoids the #143 base-branch-deletion auto-close hazard); file-disjoint except `usage_guide.py` / `test_usage_guide.py`, where #127 and #123 touched different hunks and merged clean (the established S5 multi-PR pattern). Each branch: full suite green (1007 passed after #127, 1021 after #122/#123; 4 skipped), `ruff` clean, `pyright` 0 errors; `/code-review` run (no findings — #153 got two independent adversarial reviewers over the daemon control-flow + the pure modules).
+- **QA owed:** **none** — #122/#123 Windows manual-QA **PASSED 2026-06-20** on real hardware: clean profile (marker absent) → the Usage Guide auto-opened once and `~/.dictatem/.usage_guide_seen` was written (log: `First run — auto-opened the Usage Guide`); a relaunch with the marker present did **not** re-open (auto-open log-line count stayed at 1 across the restart); tray "Open config file…" opened `config.toml`; the Guide's "Changing your hotkey" section showed the live Win+Alt combo + the curated vocabulary. Checklist: [`qa-handoffs/04-docs-discoverability-qa.md`](qa-handoffs/04-docs-discoverability-qa.md). Carried over: **#126** vocabulary recognition-lift (S2) still pending a user run — `qa-handoffs/02-vocabulary-recognition-qa.md`.
 - **Follow-ups / notes:** #67's framing stays deliberately factual (no over-promising) until the **#101 cold-start design (S7)** lands. The bundled `polish` trigger only fires once the Transform/Ollama is set up (Transform is on by default, but Ollama stays user-managed — ADR-0008). Next: **S4 — CI keystone + install hardening (#81 + #90)** — `.github/workflows/ci.yml` already exists on `main`; the S4 agent must inspect it before adding the matrix. See `docs/agents/handoffs/session-04-ci-install-hardening.md`.
 
 ### Cleanup + reliability — hygiene, single-instance guard (#92), clipboard contention (#145) — 2026-06-19
