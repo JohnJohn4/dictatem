@@ -53,13 +53,15 @@ def _open_with_retry() -> None:
 
 
 def _retry_clipboard_op(op: Callable[[], None]) -> None:
-    # The adapter's own OpenClipboard (in restore, and the test's open()) races
-    # the same history monitor — retry the whole mutation on contention.
+    # The adapter's own OpenClipboard (in restore, set_text, etc.) races the same
+    # history monitor — retry the whole mutation on contention. The adapter now
+    # translates that contention to OSError (#145), so catch OSError here; the raw
+    # pywintypes.error is only seen by the raw-win32 `_open_with_retry` above.
     for attempt in range(40):
         try:
             op()
             return
-        except pywintypes.error:
+        except OSError:
             if attempt == 39:
                 raise
             time.sleep(0.02)
@@ -101,7 +103,7 @@ def preserve_clipboard() -> Iterator[None]:
         # fail teardown over clipboard contention (the give-up case leaves test
         # text on the clipboard, which the docstring flags).
         clip = Win32ClipboardIO()
-        with contextlib.suppress(pywintypes.error):
+        with contextlib.suppress(OSError):
             _retry_clipboard_op(lambda: clip.restore(saved))
 
 
