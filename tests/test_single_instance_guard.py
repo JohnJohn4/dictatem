@@ -98,3 +98,16 @@ class TestSingleInstanceGuard:
         finally:
             if lock is not None:
                 _release(lock)
+
+    def test_unestablishable_lock_path_degrades_without_blocking_start(
+        self, tmp_path: Path
+    ) -> None:
+        # If the lock file cannot be ESTABLISHED at all — here the parent "dir"
+        # is actually a file, so mkdir fails — the guard must DEGRADE (return a
+        # non-None lock so the daemon starts), not block startup or raise. #92
+        # must never be the reason a daemon fails to start (cf. ADR-0023's
+        # best-effort clipboard markers); only a genuinely-held lock returns None.
+        blocker = tmp_path / "not-a-directory"
+        blocker.write_text("x")
+        lock = _acquire_single_instance_lock(blocker / "daemon.lock")
+        assert lock is not None  # degraded → proceed, not a silent "already running"

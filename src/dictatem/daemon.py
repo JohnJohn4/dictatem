@@ -1310,27 +1310,63 @@ class _PlatformAdapters:
 def _acquire_single_instance_lock(lock_path: Path) -> object | None:
     """Acquire the cross-platform single-instance lock (#92).
 
-    Returns the held lock object on success, or ``None`` when another Dictatem
-    daemon already owns it. Backed by ``QtCore.QLockFile`` so Windows and macOS
+    Returns a lock object the caller must keep alive for the whole process, or
+    ``None`` when another *live* Dictatem daemon already holds the lock (the
+    caller then exits). Backed by ``QtCore.QLockFile`` so Windows and macOS
     share one guard — the Win32-only alternative (a named ``CreateMutexW``
-    mutex) would split the code path. The caller MUST keep the returned object
-    alive for the whole process: a garbage-collected ``QLockFile`` releases the
-    lock and silently drops the guard.
+    mutex) would split the code path. A garbage-collected ``QLockFile`` releases
+    the lock and silently drops the guard, hence the keep-alive contract.
 
-    A daemon killed hard (kill -9) leaves its lock file behind, but
-    ``QLockFile`` records the creating PID and steals a lock whose owner is no
-    longer running, so a fresh start never deadlocks on a stale lock. The
-    import stays lazy so ``dictatem.daemon`` imports with no Qt present
+    A daemon killed hard (kill -9) leaves its lock file behind, but ``QLockFile``
+    records the creating PID and steals a lock whose owner is no longer running,
+    so a fresh start never deadlocks on a stale lock.
+
+    **Best-effort, like the clipboard markers (ADR-0023): the guard must never be
+    the reason the daemon fails to start.** If the lock file cannot be
+    *established* at all — ``~/.dictatem`` is unwritable, or sits on a network/
+    redirected home that is offline — log it and return a (non-held) lock so the
+    daemon starts anyway. That is no worse than the pre-#92 no-guard behaviour,
+    and avoids #92 newly turning a lock-file IO error into a confusing silent
+    "already running" exit. ``None`` is reserved for a genuine ``LockFailedError``
+    (the lock is held by a process that is currently alive).
+
+    Known limitation: ``QLockFile`` decides "held" from the recorded PID, so if a
+    hard-killed daemon's PID is reused by an unrelated live process the lock looks
+    held and a fresh start is refused until that process exits (or the lock file
+    is deleted). Defeating that needs more than ``QLockFile`` offers; accepted as
+    a rare edge — the common relaunch path (the installer's ``Stop-DictatemDaemon``
+    / #98) stops the old daemon first, leaving no stale lock.
+
+    The import stays lazy so ``dictatem.daemon`` imports with no Qt present
     (``test_import_safety``).
     """
     from PySide6.QtCore import QLockFile  # type: ignore[import-not-found]
 
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(lock_path))
-    # Try once without blocking: a redundant instance must fail fast and exit,
-    # not queue up waiting for the live daemon to release the lock.
-    if not lock.tryLock(0):
-        return None
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        # Try once without blocking: a redundant instance must fail fast and
+        # exit, not queue up waiting for the live daemon to release the lock.
+        if lock.tryLock(0):
+            return lock
+        if lock.error() == QLockFile.LockError.LockFailedError:
+            return None  # genuinely held by a live daemon — the caller exits
+    except OSError:
+        logger.warning(
+            "Could not prepare the single-instance lock at %s; starting without "
+            "the guard",
+            lock_path,
+            exc_info=True,
+        )
+        return lock
+    # tryLock failed for a reason other than contention (a permission/IO error on
+    # the lock file itself): degrade to running without the guard rather than
+    # block startup. Returning the un-held lock keeps the contract simple
+    # (non-None ⇒ proceed) and holding the object is harmless.
+    logger.warning(
+        "Single-instance lock unavailable (error=%s); starting without the guard",
+        lock.error(),
+    )
     return lock
 
 
