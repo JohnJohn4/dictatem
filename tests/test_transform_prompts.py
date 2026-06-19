@@ -209,7 +209,7 @@ class TestBootstrapPrompts:
 
 
 class TestShippedDefaults:
-    """Sanity: the bundled summarize.md parses and registers correctly."""
+    """Sanity: the bundled prompt files parse and register correctly."""
 
     def test_bundled_summarize_is_loadable(self, tmp_path: Path) -> None:
         bootstrap_prompts(tmp_path, default_prompts_dir())
@@ -218,3 +218,18 @@ class TestShippedDefaults:
         assert "summarise" in aliases
         assert aliases["summarize"] == aliases["summarise"]
         assert "condenser" in aliases["summarize"].lower()
+
+    def test_bundled_polish_is_loadable(self, tmp_path: Path) -> None:
+        # The default cleanup Transform (#127): both aliases register and share
+        # one body that describes a faithful cleanup (filler removal, voice
+        # preserved) rather than a summary.
+        bootstrap_prompts(tmp_path, default_prompts_dir())
+        aliases = load_prompts_dir(tmp_path)
+        assert "polish" in aliases
+        assert "cleanup" in aliases
+        assert aliases["polish"] == aliases["cleanup"]
+        body = aliases["polish"].lower()
+        assert "filler" in body
+        assert "voice" in body
+        # Distinguishes it from summarize: a cleanup, explicitly not a summary.
+        assert "not a summary" in body

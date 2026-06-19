@@ -65,6 +65,14 @@ class TestTriggerWordsSection:
         assert "a&amp;b" in html
         assert "a&b" not in html
 
+    def test_explains_cleanup_over_last_dictation(self) -> None:
+        # #127: the guide teaches the built-in cleanup trigger over your last
+        # dictation — naming `polish` and what it does to the just-pasted text.
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        assert "Clean up your last dictation" in html
+        assert "polish" in html
+        assert "filler" in html
+
 
 class TestRecoverySection:
     def test_explains_paste_recovery(self) -> None:
