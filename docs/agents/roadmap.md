@@ -24,27 +24,27 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Session 3 — Docs & discoverability.** S5 (clutter-proof clipboard +
-last-dictation recovery) **fully landed 2026-06-14** — PRs **#141** (#138),
-**#142** (#119), and **#146** (#139; the original stacked PR #143 auto-closed
-when its base branch was deleted on merging #142) are all merged to `main`,
-suite green at **995 passed**, and **Windows live-QA PASSed** on real hardware
-(Win+V stays clean, tray "Copy last dictation", "paste" recovery — evidence on
-the now-closed #138/#119/#139). Do **not** re-grill S5 — ADR-0023 is settled and
-the #124 auto-dump / #128 hotkey were rejected.
+**Next up: Session 3 — Docs & discoverability.** Since S5 (v0.5.7) a cleanup +
+reliability pass landed (2026-06-19): tracker/branch **hygiene** (closed #137 as
+superseded by ADR-0023; pruned ~21 merged branches; retired the stale
+`feat/macos-track`), the **single-instance guard #92** (PR **#148** — `QLockFile`,
+best-effort degrade), and the **#145 clipboard-contention fix** (PR **#149** — the
+win32 adapter now translates `pywintypes.error` → `OSError` so the paste
+retry/swallow finally engages; relates to #93). Both merged, suite green, no QA
+owed. **S4 is now just #81 + #90** (#92 done). Don't re-grill any settled ADR.
 
 This session is small docs + thin discoverability wiring: **#67** (lazy-load/
 idle-unload docs — docs-only now), **#127** (default Polish prompt + cleanup
 docs), **#122** (auto-open Usage Guide on first run — **sentinel marker, never
 rewrite config.toml**), **#123** (tray "Open config…" + Guide "Changing your
-hotkey" section). Do #122/#123 in sequence (shared tray/first-run path). Full
-handoff: [`docs/agents/handoffs/session-03-docs-discoverability.md`](handoffs/session-03-docs-discoverability.md)
-— read it first. **Pull S4 (CI keystone + install hardening) early** — there is
-no CI today and it's the macOS verification surface.
+hotkey" section). Do **#67 → #127** first (pure docs/bootstrap, no QA), then
+**#122 → #123** in sequence (shared tray/first-run path, light Windows QA tail).
+Full handoff:
+[`docs/agents/handoffs/session-03-docs-discoverability.md`](handoffs/session-03-docs-discoverability.md)
+— read it first; it carries the **post-S3 sequencing** for your own handoff.
 
 Skills: `run`/`verify`, `code-review`. Your role: autonomous; the user reviews/
-merges the PRs and runs the Windows QA. **QA pending — see
-`docs/agents/qa-handoffs/03-s5-clipboard-recovery-qa.md`.**
+merges the PRs and runs any light Windows QA.
 
 ---
 
@@ -111,7 +111,7 @@ session · **M** ≈ one focused session · **L** ≈ may span more than one.
 | ~~**S1**~~ | ~~Triage & close-out~~ | AFK | S | ✅ #82 #83 #34 #51 — closed | `triage` | done 2026-06-11 |
 | ~~**S2**~~ | ~~Pure-logic feature cores~~ | AFK | M | ✅ PR #133 (#118) · PR #134 (#125 #126) | `tdd`, `code-review` | done 2026-06-11 |
 | **S3** | Docs & discoverability | AFK | S–M | #67 #127 #122 #123 | `run`/`verify`, `code-review` | — |
-| **S4** | CI keystone + install hardening | AFK | M | #81 #90 #92 | `code-review`, `diagnose` | — *(do early)* |
+| **S4** | CI keystone + install hardening | AFK | M | #81 #90 ~~#92~~ | `code-review`, `diagnose` | — *(do early)* |
 | ~~**S5**~~ | ~~Clutter-proof clipboard + last-dictation recovery~~ | AFK | M | ✅ PR #141 (#138) · #142 (#119) · #146 (#139) — merged | `tdd`, `run`/`verify`, `code-review` | done 2026-06-14; Win QA PASS |
 | **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | S2 (#118) |
 | **S7** | Cold-start latency **design** | Grill | — | #101 (frames #97 #96 #67) | `grill-with-docs`, `prototype` | — *(parallel-safe)* |
@@ -315,6 +315,13 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### Cleanup + reliability — hygiene, single-instance guard (#92), clipboard contention (#145) — 2026-06-19
+- **Shipped:** (1) **Hygiene/triage** — closed **#137** as superseded by ADR-0023's clutter-proof markers (the SendInput-for-dictation direction it proposed is the one ADR-0004 rejects; residual contention → #145); pruned ~6 local + ~15 stale remote branches; **retired `feat/macos-track`** (locked worktree + branch — confirmed superseded: its 2026-05-24 work re-landed and evolved on `main` in a different layout, no `macos/` package on main; recovery SHA `2e031a7`). (2) **#92 single-instance guard** (PR **#148**) — its branch was cut **pre-S5**, so it was first **rebased onto `main`** (merging as-was would have reverted all of S5); `QLockFile` at `~/.dictatem/daemon.lock` acquired before hooks/audio/tray; `/code-review` (high) added a **best-effort degrade** so a lock that can't be *established* (unwritable/offline home) logs and starts anyway rather than #92 newly causing a silent "already running" exit; the installer stop-daemon companion was already shipped (#98). (3) **#145 clipboard contention** (PR **#149**) — a `_contention_as_oserror` context manager in `win32_clipboard` translates `pywintypes.error` → `OSError` on **every** clipboard op, so the pure pipeline's `except OSError` retry (open) / swallow (deferred restore) finally engages against the real adapter; a new Windows-only `test_win32_clipboard_contention.py` drives the real pywin32 type; relates to #93.
+- **Issues:** closed **#137** (superseded), **#92** (PR #148), **#145** (PR #149). Opened: none. Open count **23 → 20**.
+- **PRs:** **#148** (#92) · **#149** (#145) — both **merged to `main`** 2026-06-19 (`1c9a65a`). Branch suites green (1001 / 999, 4 skipped); `pyright` 0 errors, `ruff` clean. `/code-review` run on each (high on #92, medium on #145 — no correctness findings).
+- **QA owed:** none — the guard's degrade path and the contention translation are unit-tested against the **real** QLockFile / pywin32 types (which run, not skip, on Windows). Carried over: **#126** vocabulary recognition-lift (S2) still pending a user run — `qa-handoffs/02-vocabulary-recognition-qa.md`.
+- **Follow-ups / notes:** **S4 is now just #81 (CI matrix) + #90 (pin CPython)** — #92 done. #92's accepted limitation — QLockFile refuses a fresh start if a crashed daemon's PID is reused by a *live* process — is documented in its docstring; rare (the installer stops the old daemon first), not worth defeating with QLockFile. Next: **S3 — docs & discoverability** (#67/#127/#122/#123); see `docs/agents/handoffs/session-03-docs-discoverability.md` for the **post-S3 sequencing** (S4 recommended next, then S6 mouse hook / S7 cold-start grill).
 
 ### S5 — Clutter-proof clipboard + last-dictation recovery — 2026-06-14
 - **Shipped:** three feature slices implemented per amended **ADR-0023**, each its own branch/PR with `/code-review` run before opening. **#138** — clutter-proof clipboard write: a pure `paste/clipboard_markers.py` (which exclusion formats + DWORD-0 payload) wired into `win32_clipboard.set_text`/`restore`, applied **best-effort** (a marker failure logs and degrades; the text write already succeeded). **#119** — a new persistent `DaemonCore._most_recent_dictation` field (the last *regular* dictation, normalised + Replacements applied), set in `_do_paste` only when `replace == 0` so a Trigger Fire never overwrites it; a new `ClipboardIO.copy` (a NORMAL copy, no markers) + a tray **"Copy last dictation"** item gated by `TrayState.has_last_dictation`. **#139** — a built-in **`paste`** Trigger Word: pure `match_builtin_action`/`shadowed_builtin_aliases` in `transform.detector`, intercepted in `check_transcription_result` before the Transform alias map (so it runs regardless of `[transform].enabled` and with no Last Paste), reading the Most-recent dictation buffer; empty buffer → existing error flash, never types "paste"; re-paste becomes the new Last Paste; built-in actions dispatched via a `{word: handler}` table (lookup, not equality, so a future word fails loudly). Usage Guide gained a "Recovering a lost dictation" section.
