@@ -24,27 +24,33 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Session 3 — Docs & discoverability.** Since S5 (v0.5.7) a cleanup +
-reliability pass landed (2026-06-19): tracker/branch **hygiene** (closed #137 as
-superseded by ADR-0023; pruned ~21 merged branches; retired the stale
-`feat/macos-track`), the **single-instance guard #92** (PR **#148** — `QLockFile`,
-best-effort degrade), and the **#145 clipboard-contention fix** (PR **#149** — the
-win32 adapter now translates `pywintypes.error` → `OSError` so the paste
-retry/swallow finally engages; relates to #93). Both merged, suite green, no QA
-owed. **S4 is now just #81 + #90** (#92 done). Don't re-grill any settled ADR.
+**Next up: Session 4 — CI keystone + install hardening.** Session 3 (docs &
+discoverability) shipped as three PRs, **open and pending your review/merge**:
+**#151** (#67 — README model lazy-load/idle-unload + managed-machine first-launch
+AV/EDR note), **#152** (#127 — bundled default `polish` cleanup prompt + docs),
+and **#153** (#122 first-run Usage Guide auto-open via a sentinel marker + #123
+tray "Open config file…" and the Guide's "Changing your hotkey" section).
+**#122/#123 also owe a Windows manual-QA** — run/merge their PR only after the
+checklist at
+[`docs/agents/qa-handoffs/04-docs-discoverability-qa.md`](qa-handoffs/04-docs-discoverability-qa.md)
+passes (the PR deliberately does **not** auto-close them). Don't re-grill the
+settled ADRs (0021 sentinel-marker onboarding, 0022 no-settings-UI).
 
-This session is small docs + thin discoverability wiring: **#67** (lazy-load/
-idle-unload docs — docs-only now), **#127** (default Polish prompt + cleanup
-docs), **#122** (auto-open Usage Guide on first run — **sentinel marker, never
-rewrite config.toml**), **#123** (tray "Open config…" + Guide "Changing your
-hotkey" section). Do **#67 → #127** first (pure docs/bootstrap, no QA), then
-**#122 → #123** in sequence (shared tray/first-run path, light Windows QA tail).
-Full handoff:
-[`docs/agents/handoffs/session-03-docs-discoverability.md`](handoffs/session-03-docs-discoverability.md)
-— read it first; it carries the **post-S3 sequencing** for your own handoff.
+This session builds the **verification surface the whole macOS track needs**:
+**#81** — a GitHub Actions matrix (`macos-latest` + `windows-latest`, py3.11–3.13;
+ruff + pyright + pytest + import-safety) — and **#90** — pin a uv-managed CPython
+on Windows x64 (mirroring `install.sh`) plus a test asserting the pinned versions
+appear in the matrix. **Heads-up: `.github/workflows/ci.yml` already exists on
+`main`** (a `ci/bump-actions-node24` commit touched it) — **read it first** and
+confirm whether it's a real workflow or a stub, then extend it rather than
+duplicate. *QA:* none beyond CI going green. Full handoff:
+[`docs/agents/handoffs/session-04-ci-install-hardening.md`](handoffs/session-04-ci-install-hardening.md)
+— read it first; it carries the **post-S4 sequencing** (S6 mouse hook / S7
+cold-start grill) for your own handoff.
 
-Skills: `run`/`verify`, `code-review`. Your role: autonomous; the user reviews/
-merges the PRs and runs any light Windows QA.
+Skills: `code-review`, `diagnose`. Your role: autonomous; the user reviews/merges
+the PRs. **QA pending (carried from S3):** #122/#123 Windows — see
+`docs/agents/qa-handoffs/04-docs-discoverability-qa.md`.
 
 ---
 
@@ -315,6 +321,13 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### S3 — Docs & discoverability — 2026-06-20
+- **Shipped:** four issues across three independent PRs. **#67** (PR **#151**, docs-only) — a README "Model loading & VRAM" section: lazy-load (model loads on first dictation; the pill shows it's *loading*, not stuck), idle-unload (frees ~3 GB VRAM after `idle_unload_minutes`; the LLM is kept warm for the same window), how to trade VRAM for an instant first response (`[startup] preload_model`, `[model] idle_unload_minutes`, tray Preload/Unload), and the managed-machine AV/EDR first-launch note. The "Loading model…" pill itself already shipped (#74), so this was the item-2/3 docs residual only. **#127** (PR **#152**) — a bundled default `polish.md` Prompt File (aliases `polish`, `cleanup`): a faithful copy-edit (remove filler/false starts, **preserve meaning + voice**, explicitly NOT a summary), bootstrapped like `summarize.md`; the Usage Guide + README document the cleanup-over-last-dictation flow. Reuses the Prompt File mechanism — no new code (ADR-0003/0024). **#122 + #123** (PR **#153**, combined — shared tray/first-run path): **#122** auto-opens the Usage Guide once on first run via a sentinel marker `~/.dictatem/.usage_guide_seen` (pure gate in new `onboarding.py`; written only *on-show*; deferred while a macOS permission flow is pending; never rewrites `config.toml` — ADR-0021/0009/0022); **#123** adds a tray "Open config file…" item (OS-default open, no settings UI) + a "Changing your hotkey" Usage Guide section reflecting the live combo and the curated `[hotkey].modifiers` vocabulary incl. mouse buttons (ADR-0022/0019). New `config.default_config_path()` shared by daemon + tray.
+- **Issues:** **#67**, **#127** close on their PRs' merge. **#122**, **#123** kept **open pending Windows QA** (PR #153 does not auto-close them). Opened: none. Open count unchanged until merges land.
+- **PRs:** **#151** (#67) · **#152** (#127) · **#153** (#122+#123) — **all open at session close, pending your review/merge.** Cut **independently from `main`** (no stacking — avoids the #143 base-branch-deletion auto-close hazard); file-disjoint except `usage_guide.py` / `test_usage_guide.py`, where #127 and #123 touch different hunks (clean merge, the established S5 multi-PR pattern). Each branch: full suite green (1007 passed after #127, 1021 after #122/#123; 4 skipped), `ruff` clean, `pyright` 0 errors; `/code-review` run (no findings — #153 got two independent adversarial reviewers over the daemon control-flow + the pure modules).
+- **QA owed:** **#122 / #123 Windows manual-QA** — exported as [`qa-handoffs/04-docs-discoverability-qa.md`](qa-handoffs/04-docs-discoverability-qa.md) and given to the user in-chat (they're on Windows). The pure marker gate is unit-tested (`test_onboarding.py`); the first-run auto-open + tray-item wiring are Qt/tray and need a human (clean profile: no marker → guide opens once + marker written; relaunch → no re-open; tray "Open config file…" opens `config.toml`; Guide shows the live combo). Carried over: **#126** vocabulary recognition-lift (S2) still pending a user run — `qa-handoffs/02-vocabulary-recognition-qa.md`.
+- **Follow-ups / notes:** #67's framing stays deliberately factual (no over-promising) until the **#101 cold-start design (S7)** lands. The bundled `polish` trigger only fires once the Transform/Ollama is set up (Transform is on by default, but Ollama stays user-managed — ADR-0008). Next: **S4 — CI keystone + install hardening (#81 + #90)** — `.github/workflows/ci.yml` already exists on `main`; the S4 agent must inspect it before adding the matrix. See `docs/agents/handoffs/session-04-ci-install-hardening.md`.
 
 ### Cleanup + reliability — hygiene, single-instance guard (#92), clipboard contention (#145) — 2026-06-19
 - **Shipped:** (1) **Hygiene/triage** — closed **#137** as superseded by ADR-0023's clutter-proof markers (the SendInput-for-dictation direction it proposed is the one ADR-0004 rejects; residual contention → #145); pruned ~6 local + ~15 stale remote branches; **retired `feat/macos-track`** (locked worktree + branch — confirmed superseded: its 2026-05-24 work re-landed and evolved on `main` in a different layout, no `macos/` package on main; recovery SHA `2e031a7`). (2) **#92 single-instance guard** (PR **#148**) — its branch was cut **pre-S5**, so it was first **rebased onto `main`** (merging as-was would have reverted all of S5); `QLockFile` at `~/.dictatem/daemon.lock` acquired before hooks/audio/tray; `/code-review` (high) added a **best-effort degrade** so a lock that can't be *established* (unwritable/offline home) logs and starts anyway rather than #92 newly causing a silent "already running" exit; the installer stop-daemon companion was already shipped (#98). (3) **#145 clipboard contention** (PR **#149**) — a `_contention_as_oserror` context manager in `win32_clipboard` translates `pywintypes.error` → `OSError` on **every** clipboard op, so the pure pipeline's `except OSError` retry (open) / swallow (deferred restore) finally engages against the real adapter; a new Windows-only `test_win32_clipboard_contention.py` drives the real pywin32 type; relates to #93.
