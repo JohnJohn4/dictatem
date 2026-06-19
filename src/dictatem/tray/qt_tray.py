@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from dictatem.assets import asset_path
+from dictatem.config import default_config_path
 from dictatem.logpaths import default_daemon_log_path
 from dictatem.tray.glyph import waveform_bars
 from dictatem.tray.state import MenuItem, TrayState, glyph_tint_rgba
@@ -35,6 +36,7 @@ _MENU_LABELS: dict[MenuItem, str] = {
     MenuItem.UNLOAD: "Unload Model",
     MenuItem.AUTOSTART: "Start at Login",
     MenuItem.SHOW_LOG: "Show Log",
+    MenuItem.OPEN_CONFIG: "Open config file…",
     MenuItem.HELP: "How to use Dictatem…",
     MenuItem.RESTART: "Restart",
     MenuItem.UPGRADE: "Check for Updates…",
@@ -188,7 +190,8 @@ class QtTrayIcon:
             MenuItem.PRELOAD: lambda: self.on_preload() if self.on_preload else None,
             MenuItem.UNLOAD: lambda: self.on_unload() if self.on_unload else None,
             MenuItem.SHOW_LOG: lambda: self._open_log(),
-            MenuItem.HELP: lambda: self._open_usage_guide(),
+            MenuItem.OPEN_CONFIG: lambda: self._open_config(),
+            MenuItem.HELP: lambda: self.open_usage_guide(),
             MenuItem.RESTART: lambda: self.on_restart() if self.on_restart else None,
             MenuItem.UPGRADE: lambda: self.on_upgrade() if self.on_upgrade else None,
             MenuItem.QUIT: lambda: self.on_quit() if self.on_quit else None,
@@ -314,19 +317,36 @@ class QtTrayIcon:
             # per-platform branch (os.startfile is Windows-only).
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path)))
 
-    def _open_usage_guide(self) -> None:
+    def _open_config(self) -> None:
+        """Open ``~/.dictatem/config.toml`` in the OS default editor (ADR-0022).
+
+        Reuses the Show Log open-default pattern (``QDesktopServices.openUrl``):
+        no config-editing UI, just hands the file to the user's default app. The
+        file exists by the time the tray is up (the daemon's ``load_config``
+        writes it on first run), so the guard is belt-and-suspenders.
+        """
+        config_path = default_config_path()
+        if config_path.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(config_path)))
+
+    def open_usage_guide(self) -> bool:
         """Open the read-only Usage Guide window, or raise it if already open.
 
         Single-instance and non-modal (ADR-0019): clicking the menu item again
         brings the existing window to the front rather than spawning a second.
         The window only hosts the HTML; its content is built from live config
         by the daemon (``tray.usage_guide``).
+
+        Returns ``True`` once the guide is shown. The daemon's first-run
+        auto-open (ADR-0021) relies on this to write the seen-marker *only after*
+        the guide is actually shown — if hosting the window raised, the exception
+        propagates and the marker stays absent so the next launch re-attempts.
         """
         if self._usage_guide_window is not None:
             self._usage_guide_window.show()
             self._usage_guide_window.raise_()
             self._usage_guide_window.activateWindow()
-            return
+            return True
 
         window = QDialog(self._parent)
         window.setWindowTitle("How to use Dictatem")
@@ -345,3 +365,4 @@ class QtTrayIcon:
         window.show()
         window.raise_()
         window.activateWindow()
+        return True

@@ -7,8 +7,8 @@ Qt adapter (``qt_tray``) only hosts the window. The guide reflects the **live
 configuration** — the actual Hotkey Combo via ``format_hotkey`` — so it can
 never drift from what the user has set. See ADR-0019.
 
-It grows by appending one section per feature; v1 covers dictating and
-first-use model loading.
+It grows by appending one section per feature: dictating, trigger words,
+recovering a lost dictation, first-use model loading, and changing your hotkey.
 """
 
 from __future__ import annotations
@@ -80,6 +80,38 @@ def _first_use_section() -> str:
     )
 
 
+def _changing_hotkey_section(modifiers: tuple[str, ...], platform: str) -> str:
+    """The "Changing your hotkey" config-discoverability section (ADR-0022).
+
+    Shows the live Hotkey Combo, names ``config.toml`` and the
+    ``[hotkey].modifiers`` key, lists the curated vocabulary (modifiers + mouse
+    buttons), and notes that a restart applies changes — Dictatem's in-app answer
+    to "how do I change this?", since there is no settings UI. The vocabulary
+    must stay in step with ``config.VALID_MODIFIER_NAMES`` (a test enforces it).
+    """
+    combo = html.escape(format_hotkey(modifiers, platform=platform))
+    return (
+        "<h3>Changing your hotkey</h3>"
+        f"<p>Your dictation hotkey is <b>{combo}</b>. To change it, edit "
+        "<code>config.toml</code> in <code>~/.dictatem/</code> (use "
+        "<b>Open config file…</b> in this menu), set the "
+        "<code>[hotkey].modifiers</code> list, then restart Dictatem to apply it "
+        "(use <b>Restart</b> in this menu).</p>"
+        "<p>Pick from this set — Dictatem has no free-form key binding:</p>"
+        "<ul>"
+        "<li><code>win</code> (or <code>meta</code>) — Windows key / ⌘ Command</li>"
+        "<li><code>alt</code> — Alt / ⌥ Option</li>"
+        "<li><code>ctrl</code> — Ctrl / Control</li>"
+        "<li><code>shift</code> — Shift</li>"
+        "<li><code>mouse4</code>, <code>mouse5</code> — the two side mouse buttons</li>"
+        "<li><code>middle</code> — the mouse-wheel click</li>"
+        "</ul>"
+        "<p>Use one on its own (e.g. <code>[\"mouse4\"]</code>) or combine several "
+        "(e.g. <code>[\"ctrl\", \"alt\"]</code>). Any other name is ignored and the "
+        "default is kept.</p>"
+    )
+
+
 def usage_guide_html(
     modifiers: tuple[str, ...],
     *,
@@ -100,5 +132,6 @@ def usage_guide_html(
         _trigger_words_section(trigger_words),
         _recovery_section(),
         _first_use_section(),
+        _changing_hotkey_section(modifiers, platform),
     ]
     return "<html><body>" + "".join(sections) + "</body></html>"

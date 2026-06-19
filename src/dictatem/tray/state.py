@@ -43,6 +43,11 @@ class MenuItem(enum.Enum):
     # by TrayState (which tracks enable/disable only). See ADR-0012.
     AUTOSTART = "autostart"
     SHOW_LOG = "show_log"
+    # "Open config file…" — opens ~/.dictatem/config.toml in the OS default
+    # editor (ADR-0022). Always enabled. Dictatem has no settings UI; this is the
+    # discoverable escape hatch to the hand-edited config. Grouped next to
+    # SHOW_LOG since both just open a file in the default app.
+    OPEN_CONFIG = "open_config"
     # "How to use Dictatem…" — opens the read-only in-app Usage Guide window
     # (CONTEXT.md / ADR-0019). Always enabled; its content is set from live
     # config by the daemon via set_usage_guide_html. Grouped next to SHOW_LOG

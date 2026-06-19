@@ -95,6 +95,48 @@ class TestFirstUseSection:
         assert "Preload Model" in html
 
 
+class TestChangingHotkeySection:
+    """The config-discoverability "Changing your hotkey" section (#123)."""
+
+    def _section(self, html: str) -> str:
+        # Scope assertions to this section's text (the live combo also appears in
+        # the dictating section, so an unscoped check would be ambiguous).
+        return html[html.index("Changing your hotkey"):]
+
+    def test_shows_the_live_windows_chord(self) -> None:
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        assert "Changing your hotkey" in html
+        assert "Win+Alt" in self._section(html)
+
+    def test_reflects_a_rebound_chord(self) -> None:
+        html = usage_guide_html(("ctrl", "shift"), platform="win32")
+        assert "Ctrl+Shift" in self._section(html)
+
+    def test_names_the_config_file_and_key(self) -> None:
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        assert "config.toml" in html
+        assert "[hotkey].modifiers" in html
+
+    def test_mentions_restart_applies_changes(self) -> None:
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        assert "restart" in self._section(html).lower()
+
+    def test_lists_mouse_buttons(self) -> None:
+        html = self._section(usage_guide_html(("win", "alt"), platform="win32"))
+        for name in ("mouse4", "mouse5", "middle"):
+            assert name in html
+
+    def test_lists_the_whole_curated_vocabulary(self) -> None:
+        # Drift guard: every accepted [hotkey].modifiers name (config's curated
+        # allow-list) must appear in the section, so the two can't fall out of
+        # sync as new trigger inputs are added.
+        from dictatem.config import VALID_MODIFIER_NAMES
+
+        section = self._section(usage_guide_html(("win", "alt"), platform="win32"))
+        for name in VALID_MODIFIER_NAMES:
+            assert name in section, f"{name} missing from the hotkey section"
+
+
 class TestDocumentShape:
     def test_is_wrapped_html(self) -> None:
         html = usage_guide_html(("win", "alt"), platform="win32")
@@ -105,3 +147,7 @@ class TestDocumentShape:
         html = usage_guide_html(("win", "alt"), platform="win32")
         assert html.index("Dictating") < html.index("Trigger words")
         assert html.index("Trigger words") < html.index("First use")
+
+    def test_changing_hotkey_section_comes_last(self) -> None:
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        assert html.index("First use") < html.index("Changing your hotkey")

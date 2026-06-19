@@ -1388,8 +1388,13 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 
     from dictatem.audio.sounddevice_capture import SoundDeviceCapture
     from dictatem.autostart.reconcile import apply_autostart
-    from dictatem.config import load_config, write_config
+    from dictatem.config import default_config_path, load_config, write_config
     from dictatem.hotkey.classifier import HotkeyClassifier
+    from dictatem.onboarding import (
+        mark_usage_guide_seen,
+        should_auto_open_usage_guide,
+        usage_guide_seen_marker,
+    )
     from dictatem.overlay.qt_widget import QtOverlayWidget
     from dictatem.overlay.state import OverlayState
     from dictatem.state import StateMachine
@@ -1448,7 +1453,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         logger.warning("Another Dictatem instance is already running; exiting")
         return
 
-    config_path = Path.home() / ".dictatem" / "config.toml"
+    config_path = default_config_path()
     # First run with no config: probe the machine once and bake the resolved
     # Hardware Tier (model/device/compute_type + transform tag) into the file.
     # Existing configs are read unchanged and the probe is not consulted.
@@ -1754,27 +1759,57 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     tick_timer.timeout.connect(_on_tick)
     tick_timer.start()
 
+    # First-run onboarding (#122 / ADR-0021): auto-open the Usage Guide once so
+    # a new user meets it without hunting through the tray menu. Gated by a
+    # sentinel marker — never a config flag, since config.toml is never
+    # app-rewritten (ADR-0009/0022) — written only AFTER the guide is shown, so a
+    # launch that defers it (mid macOS permission flow) re-attempts next time.
+    _guide_marker = usage_guide_seen_marker(Path.home())
+
+    def _maybe_auto_open_usage_guide(*, permissions_pending: bool) -> None:
+        try:
+            if not should_auto_open_usage_guide(
+                marker_path=_guide_marker, permissions_pending=permissions_pending
+            ):
+                return
+            if tray_icon.open_usage_guide():
+                mark_usage_guide_seen(_guide_marker)
+                logger.info("First run — auto-opened the Usage Guide")
+        except Exception:
+            logger.error("Error auto-opening the Usage Guide", exc_info=True)
+
     # First-run permission UX (#57 / ADR-0014), deferred like the CPU-fallback
     # balloon below so the tray and event loop are up first. One probe per
     # launch: the platform callable reads the grant state, registers Dictatem
     # in the System Settings panes for anything missing, and returns the pure
     # mapper's guidance; the Qt dialogs then deep-link the user into the right
-    # pane and explain the one-time relaunch. Empty guidance = no dialog.
+    # pane and explain the one-time relaunch. Empty guidance = no dialog. The
+    # Usage Guide auto-open chains off it: deferred while a grant is still
+    # pending (the daemon relaunches on grant), shown once permissions settle.
     if adapters.check_permissions is not None:
         check_permissions = adapters.check_permissions
 
         def _show_permission_guidance() -> None:
+            permissions_pending = False
             try:
                 guidances = check_permissions()
-                if not guidances:
-                    return
-                from dictatem.permissions.qt_dialog import show_permission_dialogs
+                if guidances:
+                    permissions_pending = True
+                    from dictatem.permissions.qt_dialog import show_permission_dialogs
 
-                show_permission_dialogs(guidances)
+                    show_permission_dialogs(guidances)
             except Exception:
                 logger.error("Error in startup permission check", exc_info=True)
+            finally:
+                _maybe_auto_open_usage_guide(permissions_pending=permissions_pending)
 
         QTimer.singleShot(2000, _show_permission_guidance)
+    else:
+        # No first-run permission flow on this platform (Windows): auto-open the
+        # guide shortly after the tray is up, on the same deferred tick.
+        QTimer.singleShot(
+            2000, lambda: _maybe_auto_open_usage_guide(permissions_pending=False)
+        )
 
     # Surface the session CPU fallback once, after the loop is up. A
     # QSystemTrayIcon balloon needs a visible icon and a running event loop, so
