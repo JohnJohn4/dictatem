@@ -25,7 +25,12 @@ class ClipboardIO(Protocol):
     """Read/write the system clipboard with save/restore support."""
 
     def open(self) -> None:
-        """Acquire exclusive clipboard access. Raises on contention."""
+        """Acquire exclusive clipboard access. Raises ``OSError`` on contention.
+
+        Adapters translate any native contention error (pywin32's
+        ``pywintypes.error`` on Windows) into ``OSError`` so the pure pipeline's
+        retry engages and stays testable with an ``OSError``-raising fake (#145).
+        """
         ...
 
     def close(self) -> None:
@@ -41,7 +46,11 @@ class ClipboardIO(Protocol):
         ...
 
     def restore(self, saved: str | None) -> None:
-        """Restore previously saved clipboard content."""
+        """Restore previously saved clipboard content.
+
+        Like :meth:`open`, raises ``OSError`` on contention — the deferred restore
+        races the target's paste handler, and the pipeline swallows it (#145/#23).
+        """
         ...
 
     def copy(self, text: str) -> None:
