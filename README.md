@@ -184,6 +184,21 @@ Transcribed text is pasted automatically into the focused window.
 
 Right-click the tray icon for: Start/Stop Recording, **Preload Model** (load Whisper into GPU memory ahead of time so the first dictation is fast), **Unload Model** (free the ~3 GB of GPU memory), Show Log, Restart, Quit. The model also auto-unloads after the configured idle period.
 
+### Model loading & VRAM
+
+Dictatem loads the Whisper model **lazily** — not at startup, but on your first dictation (the very first ever also downloads it). While it loads, the overlay pill shows a **"Loading model…"** caption with cycling dots, not the recording waveform, so a multi-second first response reads as *loading*, not *stuck* — the audio you already spoke is transcribed and pasted automatically once the model is resident (you don't press the hotkey again). Subsequent dictations are immediate.
+
+After `[model].idle_unload_minutes` of inactivity (default 30) the model **unloads** to free its memory — about 3 GB of VRAM on the GPU — for other GPU/AI work; the next dictation reloads it in a few seconds. This idle-unload is intentional: Dictatem stays a good GPU citizen when you're not dictating. The [Trigger Words](#trigger-words) LLM (Ollama) is kept warm for the same window, so back-to-back triggers don't re-pay its slower cold load.
+
+**Want an instant first response instead?** Trade some held memory for latency in `~/.dictatem/config.toml`:
+
+- `preload_model = true` under `[startup]` — load the model when the daemon starts, so even the first dictation is immediate (holds the VRAM from launch).
+- raise `idle_unload_minutes` under `[model]` — keep the model resident longer between dictations (e.g. a whole workday) so it rarely has to reload.
+
+You can also warm the model on demand any time from the tray menu's **Preload Model** item, and release it again with **Unload Model**.
+
+**On a managed / work machine,** the *first* launch — and the first dictation right after it — can lag noticeably while antivirus/EDR scans the freshly installed `dictatem` executable and, on a GPU install, the CUDA DLLs it loads. That's the security software doing its one-time pass, not a Dictatem fault; it settles after the first run. (The tray icon itself can take the same few seconds to appear on first launch for the same reason.)
+
 ## Configuration
 
 On first launch, a default config is written to `~/.dictatem/config.toml`. Edit it to customise behaviour:
