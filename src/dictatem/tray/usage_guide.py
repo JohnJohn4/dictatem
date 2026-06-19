@@ -39,10 +39,16 @@ def _dictating_section(combo: str) -> str:
 def _trigger_words_section(trigger_words: Sequence[str]) -> str:
     section = (
         "<h3>Trigger words</h3>"
-        "<p>Right after dictating, say a single word like <i>summarize</i> on its "
-        "own. Instead of typing it, Dictatem runs that word's transform and "
-        "replaces what you just pasted with the result. It only fires in the "
-        "<b>same window</b>, within a few minutes of the paste.</p>"
+        "<p>Right after dictating, say a single word like <i>polish</i> or "
+        "<i>summarize</i> on its own. Instead of typing it, Dictatem runs that "
+        "word's transform and replaces what you just pasted with the result. It "
+        "only fires in the <b>same window</b>, within a few minutes of the "
+        "paste.</p>"
+        "<p><b>Clean up your last dictation:</b> say <i>polish</i> on its own "
+        "just after dictating and Dictatem rewrites what you pasted — removing "
+        "filler and false starts and tightening the wording while keeping your "
+        "meaning and voice. <i>summarize</i> condenses it instead. Both ship "
+        "built in and need the Transform (Ollama) set up.</p>"
     )
     if trigger_words:
         words = ", ".join(html.escape(word) for word in trigger_words)

@@ -295,13 +295,13 @@ Native Ollama serves on the same `http://localhost:11434`, so **no Dictatem conf
 
 ## Trigger Words
 
-A Trigger Word is a single utterance that rewrites the previously-pasted dictation in place instead of being pasted as-is. After any normal dictation paste, say one trigger (e.g. `"summarize"`) within the configured TTL — dictatem deletes the just-pasted text and replaces it with the output of a local [Ollama](https://ollama.com) model run with that trigger's prompt.
+A Trigger Word is a single utterance that rewrites the previously-pasted dictation in place instead of being pasted as-is. After any normal dictation paste, say one trigger (e.g. `"polish"` to clean up filler and false starts, or `"summarize"` to condense) within the configured TTL — dictatem deletes the just-pasted text and replaces it with the output of a local [Ollama](https://ollama.com) model run with that trigger's prompt.
 
 Requires Ollama running locally with the configured model pulled — see [Ollama / Transform setup](#ollama--transform-setup) above (`ollama pull gemma4:e2b` by default). If Ollama is offline or the call fails, the document is left untouched and the overlay flashes a message telling you which step is missing.
 
 ### Custom triggers
 
-Prompts live as markdown files in `~/.dictatem/prompts/`, created on first daemon start. Each file declares its aliases in YAML-style frontmatter; the body is the system prompt sent to Ollama:
+Prompts live as markdown files in `~/.dictatem/prompts/`, created on first daemon start. Dictatem ships two by default — **`polish`** (clean up filler and false starts while keeping your meaning and voice) and **`summarize`** (condense to terse notes) — so a cleanup trigger works out of the box once Ollama is set up. Each file declares its aliases in YAML-style frontmatter; the body is the system prompt sent to Ollama:
 
 ```markdown
 ---
