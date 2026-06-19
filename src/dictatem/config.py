@@ -5,11 +5,10 @@ from __future__ import annotations
 import logging
 import tomllib
 from dataclasses import dataclass, field, fields
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from dictatem.interfaces import HardwareProbe
 
 logger = logging.getLogger(__name__)
@@ -142,6 +141,17 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     behaviour: BehaviourConfig = field(default_factory=BehaviourConfig)
     transform: TransformConfig = field(default_factory=TransformConfig)
+
+
+def default_config_path() -> Path:
+    """The canonical config.toml location — ``~/.dictatem/config.toml``.
+
+    One spelling shared by the daemon (which loads it on startup) and the tray
+    "Open config file…" item (ADR-0022), so the two cannot drift. Not
+    platform-varying: ``~/.dictatem`` is the config home on both Windows and
+    macOS.
+    """
+    return Path.home() / ".dictatem" / "config.toml"
 
 
 def load_config(path: Path, probe: HardwareProbe | None = None) -> Config:

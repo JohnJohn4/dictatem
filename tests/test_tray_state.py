@@ -85,13 +85,15 @@ class TestMenuItemEnabled:
     def test_always_enabled_items(self) -> None:
         state = TrayState(is_recording=False, is_model_loaded=False, has_error=False)
         for item in (MenuItem.START, MenuItem.AUTOSTART, MenuItem.SHOW_LOG,
-                     MenuItem.HELP, MenuItem.RESTART, MenuItem.UPGRADE, MenuItem.QUIT):
+                     MenuItem.OPEN_CONFIG, MenuItem.HELP, MenuItem.RESTART,
+                     MenuItem.UPGRADE, MenuItem.QUIT):
             assert state.menu_item_enabled(item) is True, f"{item} should always be enabled"
 
     def test_always_enabled_items_during_recording(self) -> None:
         state = TrayState(is_recording=True, is_model_loaded=True, has_error=True)
         for item in (MenuItem.START, MenuItem.AUTOSTART, MenuItem.SHOW_LOG,
-                     MenuItem.HELP, MenuItem.RESTART, MenuItem.UPGRADE, MenuItem.QUIT):
+                     MenuItem.OPEN_CONFIG, MenuItem.HELP, MenuItem.RESTART,
+                     MenuItem.UPGRADE, MenuItem.QUIT):
             assert state.menu_item_enabled(item) is True, f"{item} should be enabled even in error"
 
 
@@ -136,8 +138,8 @@ class TestMenuItemEnabled:
 class TestMenuItemOrder:
     def test_enum_order_matches_documented_spec(self) -> None:
         expected = ["HOTKEY_HINT", "START", "STOP", "COPY_LAST_DICTATION",
-                    "PRELOAD", "UNLOAD", "AUTOSTART", "SHOW_LOG", "HELP",
-                    "RESTART", "UPGRADE", "QUIT", "VERSION"]
+                    "PRELOAD", "UNLOAD", "AUTOSTART", "SHOW_LOG", "OPEN_CONFIG",
+                    "HELP", "RESTART", "UPGRADE", "QUIT", "VERSION"]
         actual = [m.name for m in MenuItem]
         assert actual == expected
 
