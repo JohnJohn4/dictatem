@@ -24,33 +24,42 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Session 4 — CI keystone + install hardening.** Session 3 (docs &
-discoverability) is **fully landed**: PRs **#151** (#67 — README model
-lazy-load/idle-unload + managed-machine first-launch AV/EDR note), **#152** (#127
-— bundled default `polish` cleanup prompt + docs), and **#153** (#122 first-run
-Usage Guide auto-open via a sentinel marker + #123 tray "Open config file…" and
-the Guide's "Changing your hotkey" section) are **all merged to `main`**, and
-#67/#127/#122/#123 are **closed**. **#122/#123 passed Windows manual-QA**
-(2026-06-20): the guide auto-opened once and wrote the marker, a relaunch did not
-re-open, and the "Open config file…" item + "Changing your hotkey" section both
-checked out. Don't re-grill the settled ADRs (0021 sentinel-marker onboarding,
-0022 no-settings-UI).
+**Next up: Session 6 — Windows mouse hook (#120).** Session 4 (CI keystone +
+install hardening) is **implemented and CI-green** — two PRs **open, awaiting the
+user's review/merge: #156 (#81) and #157 (#90)**, all 6 legs green
+(`windows-latest` + `macos-latest` × py3.11–3.13). **Once they merge, close #81 and
+#90** (they're file-disjoint, cut independently off `main` — merge either order).
 
-This session builds the **verification surface the whole macOS track needs**:
-**#81** — a GitHub Actions matrix (`macos-latest` + `windows-latest`, py3.11–3.13;
-ruff + pyright + pytest + import-safety) — and **#90** — pin a uv-managed CPython
-on Windows x64 (mirroring `install.sh`) plus a test asserting the pinned versions
-appear in the matrix. **Heads-up: `.github/workflows/ci.yml` already exists on
-`main`** (a `ci/bump-actions-node24` commit touched it) — **read it first** and
-confirm whether it's a real workflow or a stub, then extend it rather than
-duplicate. *QA:* none beyond CI going green. Full handoff:
-[`docs/agents/handoffs/session-04-ci-install-hardening.md`](handoffs/session-04-ci-install-hardening.md)
-— read it first; it carries the **post-S4 sequencing** (S6 mouse hook / S7
-cold-start grill) for your own handoff.
+**Key discovery from S4 (so the record is straight):** the CI matrix #81 describes
+**already existed** — it landed with the arm64-windows work (PR #79, `19dc2b8`) and
+has been green all along; the roadmap had overstated it as "no CI today." The only
+missing piece was the **import-safety assertion** (#156 adds `TestNativeAdaptersImport`
+— glob-discovers + imports every native adapter per platform; verified on macOS CI
+too). **#157** pins a uv-managed **CPython 3.12** on Windows **x64** (x64 previously
+let `uv` discover any system Python — the reproducibility hazard) and **aligns the
+pin to 3.12 across x64 + ARM + macOS**; `tests/test_install_python_pin.py` enforces
+every installer pin stays inside the CI matrix. **Decision settled — do not
+reopen: 3.12 everywhere** (the user chose it; ARM bumped 3.11→3.12 because the 3.11
+was arbitrary — ADR-0017 amendment). The ARM bump is CI-tested + reasoned-safe but
+**not re-verified on real ARM hardware** (no device); Windows x64 install QA passed
+on real hardware. The x64 install now *fetches* a managed CPython (mirrors macOS,
+no opt-out) — accepted trade-off, documented in ADR-0017.
 
-Skills: `code-review`, `diagnose`. Your role: autonomous; the user reviews/merges
-the PRs. **No QA owed from S3** — its Windows QA passed. The only carried-over QA
-is **#126** vocabulary recognition-lift (S2) — `docs/agents/qa-handoffs/02-vocabulary-recognition-qa.md`.
+This session adds the **#120 `WH_MOUSE_LL` adapter** feeding the already-merged S2
+mouse classifier core (#118, ADR-0020) so a mouse side-button can arm dictation —
+a feature the user wants (mouse-button memory) and **end-to-end Windows-testable
+here**. Keep the hook thin; mirror the existing keyboard hook
+(`hotkey/wh_keyboard_ll.py`); the Tap/Hold decision logic already lives in the pure
+classifier. *QA:* physically click mouse4 / mouse5 / middle. Full handoff:
+[`docs/agents/handoffs/session-06-windows-mouse-hook.md`](handoffs/session-06-windows-mouse-hook.md).
+
+**Parallel-safe alternative:** **S7 — cold-start latency design grill (#101)** is
+code-free, unblocks S8, and is the deepest real-user complaint; run it any time
+with `grill-with-docs` / `prototype`.
+
+Skills: `run`/`verify`, `diagnose`, `code-review`. Your role: autonomous; the user
+reviews/merges PRs + runs the physical-click QA. Carried-over QA: **#126**
+vocabulary recognition-lift (S2) — `docs/agents/qa-handoffs/02-vocabulary-recognition-qa.md`.
 
 ---
 
@@ -117,7 +126,7 @@ session · **M** ≈ one focused session · **L** ≈ may span more than one.
 | ~~**S1**~~ | ~~Triage & close-out~~ | AFK | S | ✅ #82 #83 #34 #51 — closed | `triage` | done 2026-06-11 |
 | ~~**S2**~~ | ~~Pure-logic feature cores~~ | AFK | M | ✅ PR #133 (#118) · PR #134 (#125 #126) | `tdd`, `code-review` | done 2026-06-11 |
 | **S3** | Docs & discoverability | AFK | S–M | #67 #127 #122 #123 | `run`/`verify`, `code-review` | — |
-| **S4** | CI keystone + install hardening | AFK | M | #81 #90 ~~#92~~ | `code-review`, `diagnose` | — *(do early)* |
+| **S4** | CI keystone + install hardening | AFK | M | #81 #90 ~~#92~~ | `code-review`, `diagnose` | PRs #156/#157 green — awaiting merge |
 | ~~**S5**~~ | ~~Clutter-proof clipboard + last-dictation recovery~~ | AFK | M | ✅ PR #141 (#138) · #142 (#119) · #146 (#139) — merged | `tdd`, `run`/`verify`, `code-review` | done 2026-06-14; Win QA PASS |
 | **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | S2 (#118) |
 | **S7** | Cold-start latency **design** | Grill | — | #101 (frames #97 #96 #67) | `grill-with-docs`, `prototype` | — *(parallel-safe)* |
@@ -321,6 +330,14 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### S4 — CI keystone + install hardening — 2026-06-22
+- **Shipped:** two issues, one PR each (independent branches off `main`, file-disjoint). **Key discovery:** the CI matrix #81 describes (`windows-latest` + `macos-latest` × py3.11–3.13; `uv sync --extra runtime` + ruff + pyright + pytest, PR-gated) **already existed** — it landed with the arm64-windows work (PR **#79**, `19dc2b8`) and has been green on every PR since; the roadmap/handoff overstated it as "no CI today," so S4 was much smaller than framed. **#81** (PR **#156**) adds the one missing acceptance criterion: a *positive* import-safety test (`TestNativeAdaptersImport`) that, per platform, glob-discovers every native adapter (`win32_*`/`wh_*` on Windows, `mac_*` + `macapp.activation` on macOS) and imports it, so a broken pywin32/PyObjC binding fails in CI not at runtime — the existing inverse purity guard is kept. **#90** (PR **#157**) pins `--managed-python --python 3.12` on Windows **x64** (x64 previously let uv discover any system Python ≥3.11 — the reproducibility hazard) and **aligns the pin to 3.12 across x64 + ARM + macOS** (ARM was an arbitrary 3.11 with no wheel/arch rationale — **ADR-0017 amendment**); new `tests/test_install_python_pin.py` parses both installers and asserts every pin appears in the CI matrix so they can't drift.
+- **Decision (settled — do not reopen):** **3.12 everywhere.** The user chose it after confirming 3.11 was arbitrary on ARM (ADR-0017 carried no version rationale; #78 just copied an example). ARM 3.11→3.12 is CI-tested + reasoned-safe but **not re-verified on real ARM hardware** (no device) — re-run the Snapdragon smoke test when one is available.
+- **Issues:** #81, #90 — **implemented, not yet closed** (close on PR merge). Opened: none.
+- **PRs:** **#156** (#81) · **#157** (#90) — **both open, all 6 CI legs green**, awaiting review/merge; merge either order. Each: full suite **1025 passed, 4 skipped** locally, ruff clean, pyright 0 errors; `/code-review` (high) run — #157's review hardened the pin parser (an example *comment* could masquerade as a pin and defeat the vacuous-pass guard) and documented the x64 managed-fetch consequence.
+- **QA owed:** **none of S4's own** beyond CI green — plus a **real Windows x64 install QA PASS** (2026-06-22): `uv tool install --managed-python --python 3.12 dictatem[runtime]@v0.5.7` into a throwaway tool dir (real install untouched) resolved 42 pkgs, env = Python 3.12.13, dictatem + win32 adapter imported clean. Carried over: **#126** vocabulary recognition-lift (S2) — `qa-handoffs/02-vocabulary-recognition-qa.md`. (**#122/#123 already passed** S3 QA, 2026-06-20.)
+- **Follow-ups / notes:** the **x64 managed-fetch is now mandatory** (mirrors macOS; no opt-out to a discovered interpreter) — accepted reproducibility trade-off documented in ADR-0017; an opt-out env var is a possible later follow-up if an air-gapped/strict-proxy x64 box surfaces. Next: **S6 — Windows mouse hook (#120)** recommended (Windows-testable here, user-wanted); **S7 cold-start grill (#101)** is code-free + parallel-safe. See `docs/agents/handoffs/session-06-windows-mouse-hook.md`.
 
 ### S3 — Docs & discoverability — 2026-06-20
 - **Shipped:** four issues across three independent PRs. **#67** (PR **#151**, docs-only) — a README "Model loading & VRAM" section: lazy-load (model loads on first dictation; the pill shows it's *loading*, not stuck), idle-unload (frees ~3 GB VRAM after `idle_unload_minutes`; the LLM is kept warm for the same window), how to trade VRAM for an instant first response (`[startup] preload_model`, `[model] idle_unload_minutes`, tray Preload/Unload), and the managed-machine AV/EDR first-launch note. The "Loading model…" pill itself already shipped (#74), so this was the item-2/3 docs residual only. **#127** (PR **#152**) — a bundled default `polish.md` Prompt File (aliases `polish`, `cleanup`): a faithful copy-edit (remove filler/false starts, **preserve meaning + voice**, explicitly NOT a summary), bootstrapped like `summarize.md`; the Usage Guide + README document the cleanup-over-last-dictation flow. Reuses the Prompt File mechanism — no new code (ADR-0003/0024). **#122 + #123** (PR **#153**, combined — shared tray/first-run path): **#122** auto-opens the Usage Guide once on first run via a sentinel marker `~/.dictatem/.usage_guide_seen` (pure gate in new `onboarding.py`; written only *on-show*; deferred while a macOS permission flow is pending; never rewrites `config.toml` — ADR-0021/0009/0022); **#123** adds a tray "Open config file…" item (OS-default open, no settings UI) + a "Changing your hotkey" Usage Guide section reflecting the live combo and the curated `[hotkey].modifiers` vocabulary incl. mouse buttons (ADR-0022/0019). New `config.default_config_path()` shared by daemon + tray.
