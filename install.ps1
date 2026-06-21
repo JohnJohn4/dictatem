@@ -76,30 +76,43 @@ if ($useGpu) {
     $extras = 'runtime'
 }
 
-# --- 2.5 Windows on ARM: install under an x64 CPython (Prism emulation) ---
-# On Windows on ARM (ARM64 / Snapdragon-class), `uv` installs a NATIVE ARM64
-# CPython by default. The transcription engine `ctranslate2` (pulled by
+# --- 2.5 Pin a uv-managed CPython (interpreter-discovery hazard, #90) ------
+# Pin the tool environment to a uv-MANAGED CPython instead of whatever Python
+# `uv` happens to discover on PATH. On x64, a discovered python.org 3.14+ build
+# can hit missing-wheel resolution failures or land the install on an interpreter
+# no CI cell tests — defeating the reproducible-install goal of ADR-0011/0015
+# (the x64 mirror of the macOS discovery hazard install.sh already pins against).
+# The version is kept inside CI's tested matrix (.github/workflows/ci.yml);
+# tests/test_install_python_pin.py enforces that. Override for QA via
+# DICTATEM_PYTHON (mirrors install.sh).
+$dictatemPython = if ($env:DICTATEM_PYTHON) { $env:DICTATEM_PYTHON } else { '3.12' }
+
+# Windows on ARM (ARM64 / Snapdragon-class): `uv` installs a NATIVE ARM64 CPython
+# by default, but the transcription engine `ctranslate2` (pulled by
 # faster-whisper) ships NO win_arm64 wheel and is wheel-only (no sdist), so a
 # native-ARM64 environment cannot provide a working engine. Every dependency
-# does, however, run under Windows' built-in x64 emulation (Prism): pinned to an
-# x64 interpreter, `ctranslate2`, `faster-whisper`, `sounddevice` (which then
-# correctly loads the x64 PortAudio binary — its own arch check reports AMD64)
-# and PySide6 all resolve and run. So on ARM64 we pin an x64 CPython for the tool
-# environment. The hardware-tier logic is left untouched (a Snapdragon has no
-# NVIDIA GPU, so it resolves to a CPU tier on its own). `--force` overwrites any
-# stale launcher a prior failed native-ARM64 attempt may have left behind.
-$pythonArgs = @()
-$forceArgs = @()
+# does, however, run under Windows' built-in x64 emulation (Prism): pinned to the
+# x64 build of the managed CPython, `ctranslate2`, `faster-whisper`, `sounddevice`
+# (which then loads the x64 PortAudio binary — its own arch check reports AMD64)
+# and PySide6 all resolve and run (ADR-0017). The hardware-tier logic is left
+# untouched (a Snapdragon has no NVIDIA GPU, so it resolves to a CPU tier on its
+# own). `--force` overwrites any stale launcher a prior failed native-ARM64
+# attempt may have left behind.
 if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') {
     Write-Host 'Windows on ARM detected — installing under x64 CPython (runs via Prism emulation).'
     Write-Host 'Native ARM64 is not yet supported: the transcription engine (ctranslate2) ships no win_arm64 wheel.'
-    $x64Python = 'cpython-3.11-windows-x86_64'
+    $x64Python = "cpython-$dictatemPython-windows-x86_64"
     uv python install $x64Python
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to provision an x64 Python ($x64Python) for emulation (exit code $LASTEXITCODE)."
     }
     $pythonArgs = @('--python', $x64Python)
     $forceArgs = @('--force')
+} else {
+    # x64 (incl. GPU): pin the managed CPython by version so uv downloads/uses it
+    # rather than discovering a system Python (#90).
+    $pythonArgs = @('--managed-python', '--python', $dictatemPython)
+    $forceArgs = @()
 }
 
 # --- 2.9 Stop any running daemon before (re)installing (#98) --------------
@@ -330,8 +343,9 @@ $requirement = "dictatem[$extras] @ $source"
 if (Test-DictatemEnvBroken) { Repair-DictatemToolEnv }
 
 Write-Host "Installing dictatem[$extras] from $source ..."
-# @forceArgs / @pythonArgs are empty on x64 (no behaviour change there); on ARM64
-# they expand to `--force --python cpython-3.11-windows-x86_64` (see step 2.5).
+# @forceArgs / @pythonArgs pin the interpreter (step 2.5, #90 / ADR-0017): on x64
+# they expand to `--managed-python --python 3.12`; on ARM64 to `--force --python
+# cpython-3.12-windows-x86_64`.
 uv tool install @forceArgs @pythonArgs $requirement
 # $ErrorActionPreference='Stop' does NOT halt on a native exe's non-zero exit,
 # so guard explicitly — otherwise a failed install falls through to the launch
@@ -350,6 +364,9 @@ if ($LASTEXITCODE -ne 0) {
         uv tool install @forceArgs @pythonArgs $requirement
     }
     if ($LASTEXITCODE -ne 0) {
+        # --managed-python (step 2.5) needs a recent uv; step 1 only installs uv
+        # when ABSENT, so a stale pre-existing uv fails on the unknown flag.
+        Write-Host "If the error above calls '--managed-python' unexpected, your pre-existing uv is too old: update it ('uv self update') and re-run this installer."
         throw "uv tool install failed (exit code $LASTEXITCODE). See the error above; Dictatem was not installed."
     }
 }

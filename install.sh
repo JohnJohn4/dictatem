@@ -70,7 +70,8 @@ requirement="dictatem[runtime] @ ${source_url}"
 # (It does NOT fix the TCC label — the daemon still shows as "python3.12" in
 # the privacy panes; a clean "Dictatem" identity needs a signed bundle and is
 # an accepted limitation, see ADR-0014's amendment / #91.) Keep the version
-# inside CI's tested matrix; the env override mirrors DICTATEM_REF for QA.
+# inside CI's tested matrix (tests/test_install_python_pin.py enforces this for
+# both installers, #90); the env override mirrors DICTATEM_REF for QA.
 DICTATEM_PYTHON="${DICTATEM_PYTHON:-3.12}"
 
 # Recover a half-removed / invalid tool env before installing (parity with

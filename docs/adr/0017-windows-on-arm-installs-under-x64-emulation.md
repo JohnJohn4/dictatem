@@ -77,3 +77,26 @@ CPU` branch — only `install.ps1` is arch-aware, and only for Python selection.
   tracked for uninstall as #69. First installs are unaffected (nothing is running
   yet); the broader "stop the daemon before (re)install" fix stays with #69.
 - Native ARM64 remains a future follow-up via the swappable backend (ADR-0013).
+
+## Amendment (2026-06-22): interpreter version aligned to the project-wide pin (#90)
+
+The original decision pinned `cpython-3.11-windows-x86_64`. The `3.11` carried
+**no arch- or wheel-specific rationale** — it was the example value from #78's
+strategy notes; the Snapdragon QA validated the *stack* (`ctranslate2` 4.7.2,
+`faster-whisper` 1.2.1, `sounddevice` 0.5.5, `PySide6` 6.11.1), none of which is
+3.11-bound (all ship `cp312` x64 wheels too).
+
+As of #90 the pinned minor version is **3.12**, matching `install.sh` and the
+macOS pin so the whole project shares one managed interpreter. `install.ps1` now
+also pins on **x64** (`--managed-python --python 3.12`); previously x64 let `uv`
+discover any PATH Python ≥3.11 — the same interpreter-discovery hazard
+(`python.org` 3.14+ → missing-wheel resolution failures, or an untested
+interpreter) that #90 closes. The pinned versions are kept inside the CI matrix
+and `tests/test_install_python_pin.py` asserts every installer pin appears there,
+so the version can no longer silently drift.
+
+Native ARM64 (the real fix, via ADR-0013's swappable backend) remains the
+follow-up; until then the x64-under-emulation pin simply tracks the shared
+version. The ARM bump 3.11 → 3.12 is reasoned-safe and CI-tested but **not yet
+re-verified on real ARM hardware** (no device on hand) — re-run the Snapdragon
+smoke test when one is available.
