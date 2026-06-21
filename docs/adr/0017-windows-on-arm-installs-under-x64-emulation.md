@@ -95,6 +95,14 @@ interpreter) that #90 closes. The pinned versions are kept inside the CI matrix
 and `tests/test_install_python_pin.py` asserts every installer pin appears there,
 so the version can no longer silently drift.
 
+**Consequence:** like macOS, an x64 install now has `uv` *fetch* a managed CPython
+(from the same GitHub host the pinned tarball already requires) instead of reusing
+a discovered system Python. `DICTATEM_PYTHON` chooses the version, but there is no
+opt-out back to a discovered interpreter — the accepted trade-off for a
+reproducible install (ADR-0011/0015). The one regression is an air-gapped /
+strict-proxy x64 box that previously installed against a pre-existing local Python;
+an opt-out env var could be added later if that case shows up in the wild.
+
 Native ARM64 (the real fix, via ADR-0013's swappable backend) remains the
 follow-up; until then the x64-under-emulation pin simply tracks the shared
 version. The ARM bump 3.11 → 3.12 is reasoned-safe and CI-tested but **not yet

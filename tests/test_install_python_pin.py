@@ -19,28 +19,48 @@ _CI_YML = _REPO / ".github" / "workflows" / "ci.yml"
 
 _VER = r"(\d+\.\d+)"
 
-# install.ps1: the `$dictatemPython = ... else { '3.12' }` default, plus any
-# hard-coded `cpython-X.Y-windows` build id (the ARM pin currently interpolates
-# $dictatemPython, but a future literal would be caught too).
+# install.ps1: the `$dictatemPython = if (...) ... else { '3.12' }` default —
+# anchored on the assignment and tolerant of single/double quotes and a
+# multi-line reformat — plus any hard-coded `cpython-X.Y-windows` build id (the
+# ARM pin interpolates $dictatemPython today, but a future literal is caught too).
 _PS1_PINS = [
-    rf"DICTATEM_PYTHON[^\n]*?else\s*\{{\s*'{_VER}'",
+    rf"\$dictatemPython\s*=\s*if[\s\S]*?else\s*\{{\s*['\"]{_VER}['\"]",
     rf"cpython-{_VER}-windows",
 ]
 # install.sh: the `DICTATEM_PYTHON="${DICTATEM_PYTHON:-3.12}"` default.
 _SH_PINS = [rf"DICTATEM_PYTHON:-{_VER}"]
 
 
+def _strip_comments(text: str) -> str:
+    """Drop `#`-to-end-of-line on every line.
+
+    Both installers mention example versions in comments (e.g. the
+    `cpython-3.12-windows-x86_64` in install.ps1's `uv tool install` note).
+    Parsing only code keeps an illustrative or stale comment from masquerading as
+    an enforced pin — which would both false-fail and defeat the vacuous-pass
+    guard below (a comment version would keep the pin set non-empty even after the
+    real pin stopped matching).
+    """
+    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
+
+
 def _pins(text: str, patterns: list[str]) -> set[str]:
+    code = _strip_comments(text)
     found: set[str] = set()
     for pattern in patterns:
-        found.update(re.findall(pattern, text))
+        found.update(re.findall(pattern, code))
     return found
 
 
 def _ci_matrix_versions(text: str) -> set[str]:
-    line = re.search(r"python-version:\s*\[([^\]]*)\]", text)
-    assert line, "could not find a `python-version: [...]` matrix in ci.yml"
-    return set(re.findall(_VER, line.group(1)))
+    # The matrix is inline today (`python-version: ["3.11", ...]`); also accept a
+    # YAML block list. Anchored on the key so the `${{ matrix.python-version }}`
+    # reference in the setup step is never mistaken for the matrix.
+    match = re.search(
+        r"python-version:\s*(\[[^\]]*\]|(?:\n\s*-\s*['\"]?\d+\.\d+['\"]?)+)", text
+    )
+    assert match, "could not find a `python-version` matrix in ci.yml"
+    return set(re.findall(_VER, match.group(1)))
 
 
 class TestInstallerPythonPin:
