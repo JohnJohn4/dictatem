@@ -24,7 +24,7 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Session 9 — Overlay & focus UX (#96, #97, #163).**
+**Next up: Session 9 — Overlay & focus UX (#96, #97, #163) + #171.**
 S8 **shipped, merged + Windows QA PASS**: **#161 load-on-arm** (PR **#167**) — the
 Whisper load starts at record-start, overlapping speech; **#162 first-run fetch**
 (PR **#168**, stacked on #161) — the tier model downloads to disk on first run so the
@@ -46,7 +46,16 @@ refreshed. S1–S7 done; **S8 done — PRs #167/#168/#169 merged + Windows QA PA
   activation** (a likely root-cause for "caret deactivates while talking"; fix at
   source — it **complements**, not replaces, #97's detect-and-hold).
 
-**This session (S9) is AFK.** Implement **#96**, **#97**, **#163** per **ADR-0026**.
+**Folded into S9 (found in S8 QA — NOT part of ADR-0026):**
+- **#171** — a **Win+Alt** hotkey bug: a lone **Alt**-up on chord release activates the
+  app menu bar and **deactivates the caret**, so the first paste can misfire. Distinct
+  root cause from #97 (window-level target change) and #163 (the pill) — it's the
+  **modifier key's own** OS side-effect. Proposed fix: inject a **neutralizing keystroke
+  on modifier release** (also covers a lone Win-up popping Start); keep the keyboard-hook
+  decision pure + unit-tested, the SendInput thin. See **#171** for acceptance criteria.
+
+**This session (S9) is AFK.** Implement **#96**, **#97**, **#163** per **ADR-0026**, plus
+**#171** (the focus bug above).
 Keep the decision logic **pure + unit-tested** (the target-changed / no-target
 comparison; the phase→colour mapping on `OverlayState`) and the Qt pill widget +
 win32/mac activation wiring **thin** (the architecture seam — manual-QA). #96 and
@@ -57,11 +66,12 @@ Skills: `tdd`, `run`/`verify`, `code-review`, `diagnose`. Your role: **autonomou
 **QA tail (S9):** Windows **overlay** (pill colour reads recording/transcribing/
 loading; no dot; the pill never steals focus while you click around) + **focus-drift**
 (start a dictation, click into another window before it lands → held in the
-Most-recent buffer with a quiet flash, no sound, no refocus) — run on Windows or
-**export a QA handoff**. **QA owed (carried in):** **S8 cold-start QA — PASS ✅ 2026-06-22**
-(`qa-handoffs/06-s8-cold-start-qa.md`; #161/#162 closed; surfaced the Win+Alt focus
-bug **#171**). Still owed: **#126** vocabulary recognition-lift —
-`qa-handoffs/02-vocabulary-recognition-qa.md` (real-model run on Windows).
+Most-recent buffer with a quiet flash, no sound, no refocus) + **#171 Win+Alt** (after a
+Win+Alt dictation released in any key order, the menu bar is not activated and the caret
+holds; paste lands at the caret) — run on Windows or **export a QA handoff**.
+**QA owed (carried in):** only **#126** vocabulary recognition-lift —
+`qa-handoffs/02-vocabulary-recognition-qa.md` (real-model run on Windows). *(S8 cold-start
+QA passed 2026-06-22 — #161/#162 closed; it surfaced #171, now folded into S9.)*
 
 ---
 
@@ -132,8 +142,8 @@ session · **M** ≈ one focused session · **L** ≈ may span more than one.
 | ~~**S5**~~ | ~~Clutter-proof clipboard + last-dictation recovery~~ | AFK | M | ✅ PR #141 (#138) · #142 (#119) · #146 (#139) — merged | `tdd`, `run`/`verify`, `code-review` | done 2026-06-14; Win QA PASS |
 | **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | done 2026-06-22 (PR #159, QA PASS) |
 | ~~**S7**~~ | ~~Cold-start latency **design**~~ | Grill | — | ✅ #101 → ADR-0025/0026; spun #161 #162 #163 #164 #165 (#96/#97 re-scoped) | `grill-with-docs` | done 2026-06-22 |
-| **S8** | Cold-start latency **implementation** | AFK | M | #161 #162 #164 | `tdd`, `run`/`verify`, `code-review` | done 2026-06-22 (PRs #167/#168/#169 open; Win QA owed) |
-| **S9** | Overlay & focus UX | AFK | M | #96 #97 #163 | `run`/`verify`, `code-review` | S7 |
+| **S8** | Cold-start latency **implementation** | AFK | M | #161 #162 #164 | `tdd`, `run`/`verify`, `code-review` | done 2026-06-22 (PRs #167/#168/#169 merged; Win QA PASS) |
+| **S9** | Overlay & focus UX | AFK | M | #96 #97 #163 #171 | `run`/`verify`, `code-review` | S7 |
 | **S10** | macOS QA & polish | Manual-QA + AFK | L | #121 #95 #94 #93 | `verify`/`run`, `tdd`, `diagnose` | S2 (#118), S4 |
 | **S11** | Signing decision | Grill | — | #91 | `grill-me` | user spend call |
 | **—** | Parked backlog | — | — | #72 #80 #129 #130 #131 | `prototype` (#130 spike) | fresh go-ahead |
@@ -204,7 +214,10 @@ load-overlaps-speech eyeball.
 informational (drop the Tap/Hold cue); #97 polite **detect-and-hold** (anchor
 `target_id` at record-start for comparison only; changed target → hold in the
 Most-recent buffer + quiet flash, no sound, never refocus); #163 make the pill never
-steal activation. Per **ADR-0026**. *QA:* Windows overlay + focus-drift.
+steal activation. Per **ADR-0026**. **Plus #171** (folded in from S8 QA, not in
+ADR-0026): a lone Alt-up on a Win+Alt chord release activates the app menu bar /
+deactivates the caret — fix via a neutralizing keystroke on modifier release. *QA:*
+Windows overlay + focus-drift + the #171 Win+Alt check.
 
 **S10 — macOS QA & polish.** #121 macOS mouse hook (after #118), #95 first-run
 onboarding (pure permission mapper is testable; dialog copy + re-prompt-on-use),
