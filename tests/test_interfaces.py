@@ -80,6 +80,7 @@ class TestProtocolSignatures:
         assert callable(getattr(interfaces.OverlayRenderer, "show", None))
         assert callable(getattr(interfaces.OverlayRenderer, "update_level", None))
         assert callable(getattr(interfaces.OverlayRenderer, "show_transcribing", None))
+        assert callable(getattr(interfaces.OverlayRenderer, "show_computing", None))
         assert callable(getattr(interfaces.OverlayRenderer, "show_error", None))
         assert callable(getattr(interfaces.OverlayRenderer, "hide", None))
 

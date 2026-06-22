@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, NamedTuple
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-from dictatem.types import RecordingMode
+    from dictatem.types import RecordingMode
 
 
 class OverlayPhase(enum.Enum):
@@ -18,18 +18,23 @@ class OverlayPhase(enum.Enum):
     LOADING = "loading"
     RECORDING = "recording"
     TRANSCRIBING = "transcribing"
+    COMPUTING = "computing"
     ERROR_FLASH = "error_flash"
     FADING_OUT = "fading_out"
 
 
-class Color(enum.Enum):
-    RED = "red"
-    AMBER = "amber"
+class PillColor(enum.Enum):
+    """The pill's phase-by-colour signal (#96 / ADR-0026).
 
+    Replaces the retired Status Dot: recording phase is carried by the pill's
+    colour rather than a separate dot. The names are semantic; the Qt widget
+    maps each to an actual hue (an implementer call — see ``overlay.qt_widget``).
+    """
 
-class DotStyle(enum.Enum):
-    OUTLINE = "outline"
-    FILLED = "filled"
+    ACCENT = "accent"  # recording: the live waveform's colour
+    PROCESSING = "processing"  # transcribing
+    COMPUTING = "computing"  # a Transform/Trigger Fire generating (distinct hue)
+    ERROR = "error"  # the error / focus-drift "saved" flash
 
 
 class Point(NamedTuple):
@@ -80,7 +85,10 @@ class OverlayState:
         self._bar_weights = _BAR_WEIGHTS[:bar_count]
         self._flash_duration_s = 0.300
         self._phase = OverlayPhase.HIDDEN
-        self._mode: RecordingMode | None = None
+        # The current phase colour (#96). Set on each show_*/flash transition and
+        # held through the following fade-out, so the pill fades the colour it was
+        # last showing rather than snapping to a default.
+        self._color: PillColor = PillColor.ACCENT
         self._transition_start: float = 0.0
         self._loading_label: str = "Model Loading"
         self._loading_start: float = 0.0
@@ -90,12 +98,27 @@ class OverlayState:
         return self._phase
 
     def show_recording(self, mode: RecordingMode) -> None:
-        self._mode = mode
+        # ``mode`` (Tap vs Hold) no longer drives a visible cue: the Status Dot
+        # is retired and its Tap/Hold style is dropped — the user knows the
+        # gesture they just made (#96 / ADR-0026). The parameter is kept so the
+        # OverlayRenderer contract still distinguishes the two record entrypoints.
+        self._color = PillColor.ACCENT
         self._phase = OverlayPhase.FADING_IN
         self._transition_start = self._clock()
 
     def show_transcribing(self) -> None:
+        self._color = PillColor.PROCESSING
         self._phase = OverlayPhase.TRANSCRIBING
+
+    def show_computing(self) -> None:
+        """The pill while a Transform/Trigger Fire generates (#96 / ADR-0026).
+
+        A warm LLM generating is a tinted processing indicator by COLOUR, held
+        until the daemon hides it — distinct from a model *load* (still the text
+        caption via :meth:`show_loading`) and from transcribing (a distinct hue).
+        """
+        self._color = PillColor.COMPUTING
+        self._phase = OverlayPhase.COMPUTING
 
     def show_loading(self, label: str = "Model Loading") -> None:
         self._loading_label = label
@@ -110,6 +133,7 @@ class OverlayState:
         return f"{self._loading_label}{'.' * dots}"
 
     def flash_error(self) -> None:
+        self._color = PillColor.ERROR
         self._phase = OverlayPhase.ERROR_FLASH
         self._transition_start = self._clock()
 
@@ -142,6 +166,7 @@ class OverlayState:
             OverlayPhase.LOADING,
             OverlayPhase.RECORDING,
             OverlayPhase.TRANSCRIBING,
+            OverlayPhase.COMPUTING,
             OverlayPhase.ERROR_FLASH,
         ):
             return 1.0
@@ -151,15 +176,16 @@ class OverlayState:
             return (1.0 - t) ** 2  # ease-out
         return 0.0
 
-    def current_dot_color(self) -> Color:
-        if self._phase == OverlayPhase.TRANSCRIBING:
-            return Color.AMBER
-        return Color.RED
+    def current_color(self) -> PillColor:
+        """The pill's phase colour — the Status Dot's replacement (#96).
 
-    def current_dot_style(self) -> DotStyle:
-        if self._mode == RecordingMode.PTT:
-            return DotStyle.OUTLINE
-        return DotStyle.FILLED
+        Carries recording phase: accent while recording, a distinct processing
+        hue while transcribing, a distinct hue while a Transform computes, and
+        the error/focus-drift flash colour. Held through the fade-out so the pill
+        fades the colour it was last showing. While LOADING the pill shows a text
+        caption instead (see :meth:`current_loading_text`), so this is unused then.
+        """
+        return self._color
 
     def current_waveform_frame(self, level_supplier: Callable[[], float]) -> WaveformFrame:
         level = max(0.0, min(1.0, level_supplier()))

@@ -120,6 +120,11 @@ class _OverlayAdapter:
     def show_transcribing(self) -> None:
         self._state.show_transcribing()
 
+    def show_computing(self) -> None:
+        # The pill is already visible (transcribing showed it), so — like
+        # show_transcribing — this only flips the phase, never repositions.
+        self._state.show_computing()
+
     def show_error(self) -> None:
         self._state.flash_error()
 
@@ -824,11 +829,12 @@ class DaemonCore:
             "Trigger Fire: starting Transform on %d-char Last Paste",
             captured.char_count,
         )
-        # Within the keep_alive window the model is already resident, so the
-        # work is generation ("computing"), not a load. Only call it "loading"
-        # the first time or after it has gone idle and unloaded (#74).
+        # Within the keep_alive window the model is already resident, so the work
+        # is generation — the "computing" pill colour (#96 / ADR-0026), not a
+        # load caption. Only call it "loading" (a text caption) the first time or
+        # after it has gone idle and unloaded (#74).
         if now_ms < self._llm_warm_until_ms:
-            self._overlay.show_loading("LLM Model Computing")
+            self._overlay.show_computing()
         else:
             self._overlay.show_loading("Loading LLM Model")
 
