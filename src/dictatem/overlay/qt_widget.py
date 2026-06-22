@@ -33,7 +33,7 @@ from dictatem.overlay.state import MonitorRect
 # differently. Built once at import (QColor needs no QApplication) rather than
 # per paintEvent — the pill repaints at 30 FPS while visible.
 _PHASE_HUES = {
-    PillColor.ACCENT: QColor(80, 170, 255),  # recording — blue accent
+    PillColor.ACCENT: QColor(255, 255, 255, 195),  # recording — white (motion is the cue)
     PillColor.PROCESSING: QColor(255, 191, 0),  # transcribing — amber
     PillColor.COMPUTING: QColor(170, 130, 255),  # computing — violet
     PillColor.ERROR: QColor(235, 80, 80),  # error / "saved" flash — red
