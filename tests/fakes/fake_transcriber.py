@@ -33,6 +33,14 @@ class FakeTranscriberBackend:
         self._errors_to_raise: list[Exception] = []
         self._load_errors: list[Exception] = []
         self._progress_callback: Callable[[int, int], None] | None = None
+        # First-run download-to-disk (#162): download_to_disk() does NOT load
+        # the model (no VRAM), and is gated like load_model so a test can hold a
+        # download in flight (block_download) and assert the "Downloading model"
+        # pill before releasing it.
+        self.download_to_disk_count: int = 0
+        self._download_errors: list[Exception] = []
+        self._download_gate = threading.Event()
+        self._download_gate.set()
 
     def load_model(self) -> None:
         self.load_count += 1
@@ -50,6 +58,14 @@ class FakeTranscriberBackend:
     def unload_model(self) -> None:
         self._loaded = False
         self.unload_count += 1
+
+    def download_to_disk(self) -> None:
+        # Download-to-disk only: never sets _loaded (no VRAM), mirroring the
+        # real backend's snapshot_download vs WhisperModel split (#162).
+        self.download_to_disk_count += 1
+        self._download_gate.wait()
+        if self._download_errors:
+            raise self._download_errors.pop(0)
 
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
         self.transcribe_calls.append(audio)
@@ -101,3 +117,15 @@ class FakeTranscriberBackend:
     def fail_load_always(self, error: Exception) -> None:
         """Make every load_model() call raise *error* (a persistent failure)."""
         self._fail_load_always = error
+
+    def queue_download_error(self, error: Exception) -> None:
+        """Queue an exception to be raised on the next download_to_disk() call."""
+        self._download_errors.append(error)
+
+    def block_download(self) -> None:
+        """Make download_to_disk() calls block until release_download() (#162)."""
+        self._download_gate.clear()
+
+    def release_download(self) -> None:
+        """Release a download_to_disk() call parked by block_download()."""
+        self._download_gate.set()

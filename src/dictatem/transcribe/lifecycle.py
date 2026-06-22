@@ -41,6 +41,8 @@ class TranscribeLifecycle:
         self._last_activity: float | None = None
         self._load_lock = threading.Lock()
         self._is_loading = False
+        self._is_downloading = False
+        self._last_download_ok = False
 
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
         self._ensure_loaded()
@@ -73,12 +75,47 @@ class TranscribeLifecycle:
     def is_loading(self) -> bool:
         return self._is_loading
 
+    @property
+    def is_downloading(self) -> bool:
+        """Whether a first-run prefetch_to_disk() is in flight."""
+        return self._is_downloading
+
+    @property
+    def last_download_succeeded(self) -> bool:
+        """Whether the most recent prefetch_to_disk() completed without error.
+
+        Only meaningful once ``is_downloading`` has gone back to ``False``.
+        """
+        return self._last_download_ok
+
     def preload(self) -> None:
         if self._is_loading or self._backend.is_loaded:
             return
         self._is_loading = True
         thread = threading.Thread(target=self._background_load, daemon=True)
         thread.start()
+
+    def prefetch_to_disk(self) -> bool:
+        """Download the model weights to the on-disk cache, NOT into VRAM/RAM.
+
+        The first-run, best-effort, offline-after-setup fetch (ADR-0025 / #162):
+        it makes the machine offline-ready — the first *dictation* no longer
+        needs the network — without holding a model resident. A no-op when the
+        model is already resident or a load/download is already in flight. Runs
+        on a background daemon thread; a failed/offline download is logged and
+        swallowed, and the model then lazy-downloads on the first dictation
+        (today's behaviour). Sets no ``_last_activity``: nothing is resident, so
+        the idle-unloader has nothing to reap.
+
+        Returns ``True`` if a fetch was started, ``False`` if it was a no-op, so
+        the caller can tell whether to expect a completion.
+        """
+        if self._is_downloading or self._is_loading or self._backend.is_loaded:
+            return False
+        self._is_downloading = True
+        thread = threading.Thread(target=self._background_prefetch, daemon=True)
+        thread.start()
+        return True
 
     def unload(self) -> None:
         if not self._backend.is_loaded:
@@ -122,6 +159,26 @@ class TranscribeLifecycle:
             )
         finally:
             self._is_loading = False
+
+    def _background_prefetch(self) -> None:
+        ok = False
+        try:
+            start = self._clock()
+            logger.info("Fetching model weights to disk (first run, one-time)...")
+            self._backend.download_to_disk()
+            ok = True
+            logger.info("Model fetched to disk in %.1fs", self._clock() - start)
+        except Exception:
+            # Best-effort: an offline/failed first-run fetch must never crash
+            # startup. The model lazy-downloads on the first dictation instead.
+            logger.warning(
+                "First-run model fetch failed (offline?); the model will "
+                "download on the first dictation instead",
+                exc_info=True,
+            )
+        finally:
+            self._last_download_ok = ok
+            self._is_downloading = False
 
     def _ensure_loaded(self) -> None:
         if self._backend.is_loaded:
