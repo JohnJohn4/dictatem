@@ -25,13 +25,12 @@ named ADR remain the per-feature spec.
 > the Handoff protocol. It is the first thing the next agent reads._
 
 **Next up: Session 9 — Overlay & focus UX (#96, #97, #163).**
-S8 **landed** (code complete; PRs open): **#161 load-on-arm** (PR **#167**) — the
+S8 **shipped, merged + Windows QA PASS**: **#161 load-on-arm** (PR **#167**) — the
 Whisper load starts at record-start, overlapping speech; **#162 first-run fetch**
 (PR **#168**, stacked on #161) — the tier model downloads to disk on first run so the
 first *dictation* works offline; **#164 docs** (PR **#169**) — README + Usage Guide
-refreshed. S1–S7 done; **S8 code done, PRs awaiting merge + Windows QA**. Merge order:
-**#167 → #168 → #169** (#168 is stacked on #167; #169 is docs-only off `main`). All
-three verified to merge into `main` with no conflicts (combined suite 1073 green).
+refreshed. S1–S7 done; **S8 done — PRs #167/#168/#169 merged + Windows QA PASS
+(2026-06-22; #161/#162 closed, #171 filed)**. (Combined suite was 1073 green at merge.)
 
 **Settled in S7 — do not reopen (ADR-0026 is the spec):**
 - **#96 overlay** — remove the **Status Dot** (retired); the **pill colour carries
