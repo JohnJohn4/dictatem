@@ -119,12 +119,14 @@ class KeyboardHook(Protocol):
     delivering them, so the hotkey classifier never sees a raw OS key code.
 
     The key-event handler — a thread-safe ``Callable[[Key, KeyAction, int],
-    None]`` receiving ``(key, action, timestamp_ms)`` — is injected through
+    bool]`` receiving ``(key, action, timestamp_ms)`` — is injected through
     the adapter's constructor, not passed to ``install``: events arrive on a
     hook thread the adapter owns, so the handler must exist before the OS
-    hook goes live. ``_PlatformAdapters.install_keyboard_hook`` in
-    ``dictatem.daemon`` is the wiring seam that builds the adapter around
-    the daemon's handler and installs it.
+    hook goes live. It returns whether the hook should inject a neutralizing
+    keystroke after the event (the Win+Alt menu/Start mask, #171); platforms
+    with no such side-effect ignore the return.
+    ``_PlatformAdapters.install_keyboard_hook`` in ``dictatem.daemon`` is the
+    wiring seam that builds the adapter around the daemon's handler and installs it.
     """
 
     def install(self) -> None:

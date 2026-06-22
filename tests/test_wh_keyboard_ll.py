@@ -44,9 +44,12 @@ def _make_struct(vk: int, time: int = 1000) -> KBDLLHOOKSTRUCT:
     return s
 
 
-def _make_callback(handler):  # type: ignore[no-untyped-def]
-    """Build a hook and extract its callback without starting the hook thread."""
-    hook = WHKeyboardLLHook(handler)
+def _make_callback(handler, inject_mask=None):  # type: ignore[no-untyped-def]
+    """Build a hook and extract its callback without starting the hook thread.
+
+    Mirrors the real ``_ll_callback``, including the #171 neutralizing-keystroke
+    injection (call ``inject_mask`` when the handler returns True)."""
+    hook = WHKeyboardLLHook(handler, inject_mask=inject_mask)
 
     captured: dict[str, object] = {}
 
@@ -61,7 +64,9 @@ def _make_callback(handler):  # type: ignore[no-untyped-def]
                     is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
                     action = KeyAction.KEY_DOWN if is_down else KeyAction.KEY_UP
                     timestamp_ms = kb.time
-                    handler(vk_to_key(vk), action, timestamp_ms)
+                    mask = handler(vk_to_key(vk), action, timestamp_ms)
+                    if mask and hook._inject_mask is not None:
+                        hook._inject_mask()
             except Exception:
                 pass
             from dictatem.hotkey import wh_keyboard_ll as _mod
@@ -211,3 +216,37 @@ def test_handler_exception_does_not_suppress_key() -> None:
         result = cb(0, WM_KEYDOWN, ctypes.addressof(struct))
 
     assert result != 1
+
+
+# ── Neutralizing keystroke injection (#171) ─────────────────────────────────
+
+
+def test_inject_mask_called_when_handler_returns_true() -> None:
+    """When the handler asks for a mask, the hook injects the neutralizing
+    keystroke AND still passes the real key through (#171)."""
+    injected: list[int] = []
+    struct = _make_struct(VK_LWIN)
+
+    with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
+        mock_u32.CallNextHookEx.return_value = 0
+        cb, _ = _make_callback(
+            lambda vk, action, ts: True, inject_mask=lambda: injected.append(1)
+        )
+        cb(0, WM_KEYUP, ctypes.addressof(struct))
+
+    assert injected == [1]
+    mock_u32.CallNextHookEx.assert_called_once()  # real key still passed through
+
+
+def test_inject_mask_not_called_when_handler_returns_false() -> None:
+    injected: list[int] = []
+    struct = _make_struct(VK_LWIN)
+
+    with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
+        mock_u32.CallNextHookEx.return_value = 0
+        cb, _ = _make_callback(
+            lambda vk, action, ts: False, inject_mask=lambda: injected.append(1)
+        )
+        cb(0, WM_KEYUP, ctypes.addressof(struct))
+
+    assert injected == []

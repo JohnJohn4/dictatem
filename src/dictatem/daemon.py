@@ -169,14 +169,17 @@ class _HotkeyBridge:
 
     def enqueue_key_event(
         self, key: Key, action: KeyAction, timestamp_ms: int
-    ) -> None:
+    ) -> bool:
         """Thread-safe entry point invoked from the keyboard hook thread.
 
-        Keyboard keys are never suppressed (the classifier's decision is ignored
-        here, exactly as before), so this advances the classifier and defers the
-        resulting state-machine work to the next ``tick``.
+        Keyboard keys are never suppressed (the classifier's HookDecision is
+        ignored here, exactly as before), so this advances the classifier and
+        defers the resulting state-machine work to the next ``tick``. Returns
+        whether the hook should inject a neutralizing keystroke after this
+        event — the Win+Alt menu/Start mask (#171).
         """
-        self._advance_and_defer(key, action, timestamp_ms)
+        _decision, mask = self._advance_and_defer(key, action, timestamp_ms)
+        return mask
 
     def process_mouse_event(
         self, key: Key, action: KeyAction, timestamp_ms: int
@@ -186,17 +189,23 @@ class _HotkeyBridge:
         Returns the classifier's per-event ``HookDecision`` synchronously so the
         hook proc can swallow a trigger-button event (ADR-0020); the resulting
         state-machine work is deferred to the next ``tick`` like the keyboard.
+        Mouse events never request a neutralizing mask (a mouse button has no
+        menu/Start side-effect), so the mask flag is discarded here.
         """
-        return self._advance_and_defer(key, action, timestamp_ms)
+        decision, _mask = self._advance_and_defer(key, action, timestamp_ms)
+        return decision
 
     def _advance_and_defer(
         self, key: Key, action: KeyAction, timestamp_ms: int
-    ) -> HookDecision:
+    ) -> tuple[HookDecision, bool]:
         with self._lock:
             decision, actions = self._advance_locked(key, action, timestamp_ms)
             for sm_event in actions:
                 self._actions.put(sm_event)
-        return decision
+            # Read the mask decision under the lock, right after advancing, so it
+            # reflects exactly this event (the classifier resets it per call).
+            mask = self._classifier.pending_mask
+        return decision, mask
 
     def on_key_event(
         self, key: Key, action: KeyAction, timestamp_ms: int
@@ -1533,7 +1542,7 @@ class _PlatformAdapters:
     keystroke: KeystrokeSender | None
     foreground: ForegroundTracker | None
     install_keyboard_hook: (
-        Callable[[Callable[[Key, KeyAction, int], None]], object] | None
+        Callable[[Callable[[Key, KeyAction, int], bool]], object] | None
     )
     install_mouse_hook: (
         Callable[[Callable[[Key, KeyAction, int], HookDecision]], object] | None
@@ -2102,8 +2111,15 @@ def _start_windows_daemon() -> None:
     from dictatem.paste.win32_foreground import Win32ForegroundTracker
     from dictatem.paste.win32_keystroke import Win32KeystrokeSender
 
-    def _install_hook(handler: Callable[[Key, KeyAction, int], None]) -> object:
-        hook = WHKeyboardLLHook(handler)
+    # One keystroke sender, shared by the paste rail AND the keyboard hook's
+    # neutralizing-mask injector (#171), so the hook can emit the Ctrl tap that
+    # stops a lone Win/Alt chord release activating the menu bar / Start menu.
+    keystroke = Win32KeystrokeSender()
+
+    def _install_hook(handler: Callable[[Key, KeyAction, int], bool]) -> object:
+        hook = WHKeyboardLLHook(
+            handler, inject_mask=keystroke.send_modifier_release_mask
+        )
         hook.install()
         return hook
 
@@ -2119,7 +2135,7 @@ def _start_windows_daemon() -> None:
             probe=NvidiaHardwareProbe(),
             autostart_registrar=_platform_autostart_registrar(),
             clipboard=Win32ClipboardIO(),
-            keystroke=Win32KeystrokeSender(),
+            keystroke=keystroke,
             foreground=Win32ForegroundTracker(),
             install_keyboard_hook=_install_hook,
             install_mouse_hook=_install_mouse_hook,
@@ -2151,7 +2167,9 @@ def _start_macos_daemon() -> None:
     from dictatem.paste.mac_keystroke import MacKeystrokeSender
     from dictatem.permissions.mac_tcc import check_permissions
 
-    def _install_hook(handler: Callable[[Key, KeyAction, int], None]) -> object:
+    def _install_hook(handler: Callable[[Key, KeyAction, int], bool]) -> object:
+        # macOS has no menu/Start side-effect to mask (#171 is Windows-only); the
+        # CGEventTap hook ignores the handler's bool return and injects nothing.
         hook = CGEventTapHook(handler)
         hook.install()
         return hook

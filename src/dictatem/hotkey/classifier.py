@@ -51,6 +51,10 @@ ARROW_KEYS = frozenset({Key.LEFT, Key.UP, Key.RIGHT, Key.DOWN})
 # Mouse-button identities, kept distinct from modifier keys: a mouse button is
 # conditionally suppressed (ADR-0020) whereas a modifier always passes through.
 MOUSE_KEYS = frozenset({Key.MOUSE_4, Key.MOUSE_5, Key.MOUSE_MIDDLE})
+# Modifiers whose *lone* release fires an OS side-effect: Alt activates the menu
+# bar, Meta/Win pops the Start menu. When releasing a Win+Alt-style chord these
+# can misfire and steal the caret (#171); see ``pending_mask``.
+SIDE_EFFECT_KEYS = META_KEYS | ALT_KEYS
 
 # Trigger-input name → neutral Key group. ``meta`` is the canonical name for the
 # OS key (Windows key / Command); ``win`` is a permanent alias for it. Mouse
@@ -102,6 +106,13 @@ class HotkeyClassifier:
         # Mouse buttons whose DOWN was suppressed; their matching UP is
         # suppressed too, to keep the down/up pair balanced (ADR-0020).
         self._suppressed_mouse_down: set[Key] = set()
+        # --- Win+Alt menu/Start neutralizing keystroke (#171) ---
+        # Set per key-up: whether the hook should inject a neutralizing keystroke
+        # after this release (read via ``pending_mask``). The native layer taps a
+        # *generic* Ctrl, which feeds back as ``Key.OTHER`` (inert here, exactly
+        # like the paste rail's Ctrl+V), so it never perturbs the combo — even a
+        # Ctrl-containing one — and no guard against that is needed.
+        self._pending_mask = False
 
     def set_active(self, active: bool) -> None:
         self._active = active
@@ -112,9 +123,26 @@ class HotkeyClassifier:
             return False
         return all(bool(self._keys_down & group) for group in self._modifier_groups)
 
+    @property
+    def pending_mask(self) -> bool:
+        """Whether the just-processed event should be followed by a neutralizing
+        keystroke (#171).
+
+        A lone Alt-up activates the menu bar and a lone Win-up pops the Start
+        menu; on a staggered Win+Alt chord release this can move the caret and
+        misfire the next paste. When releasing a combo modifier from an *armed*
+        dictation while another **side-effect** modifier (Alt/Meta) is still
+        held, the daemon injects an innocuous Ctrl tap to mark that still-held
+        modifier's key session as "not lone", so its eventual release no longer
+        triggers the OS side-effect. Reflects only the most recent
+        ``process_event`` call (reset at its start)."""
+        return self._pending_mask
+
     def process_event(
         self, key: Key, action: KeyAction, timestamp_ms: int
     ) -> tuple[HookDecision, HotkeyEvent | None]:
+        # Recomputed for the current event only; a key-down/tick never masks.
+        self._pending_mask = False
         if action is KeyAction.KEY_DOWN:
             return self._on_key_down(key, timestamp_ms)
         return self._on_key_up(key, timestamp_ms)
@@ -163,7 +191,8 @@ class HotkeyClassifier:
         return HookDecision.PASS_THROUGH, None
 
     def _is_trigger_button(self, key: Key) -> bool:
-        """True if *key* is a mouse button bound in the configured combo."""
+        """True if *key* (a mouse button or a keyboard modifier) is bound in the
+        configured combo."""
         return any(key in group for group in self._modifier_groups)
 
     def _on_key_up(
@@ -183,6 +212,11 @@ class HotkeyClassifier:
             self._suppressed_mouse_down.discard(key)
             mouse_decision = HookDecision.SUPPRESS
 
+        # Decide the neutralizing keystroke for this release (#171): only when
+        # THIS release breaks a held combo and a side-effect modifier is still
+        # down (about to become lone).
+        self._pending_mask = self._compute_keyup_mask(key, was_combo, is_combo)
+
         if was_combo and not is_combo and self._combo_pressed_at is not None:
             pressed_at = self._combo_pressed_at
             self._combo_pressed_at = None
@@ -196,3 +230,36 @@ class HotkeyClassifier:
                 return mouse_decision, HotkeyEvent.TAP
 
         return mouse_decision, None
+
+    def _compute_keyup_mask(
+        self, released_key: Key, was_combo: bool, is_combo: bool
+    ) -> bool:
+        """Whether releasing *released_key* should trigger a neutralizing tap (#171).
+
+        Emit one only when this release **breaks** a held combo (``was_combo and
+        not is_combo``) while a **side-effect** modifier (Alt/Meta) is still held:
+        that still-held key is about to become lone, so a Ctrl tap now (while it is
+        still down) marks its session "not lone" and stops its eventual release
+        activating the menu bar / Start menu. Gating on the *break* — not merely
+        "a side-effect key is still down" — means releasing one side of a doubled
+        modifier mid-hold (combo still held) injects nothing. Only keyboard combo
+        modifiers mask: a mouse release has no menu side-effect and its hook
+        discards the flag anyway."""
+        if not (was_combo and not is_combo):
+            return False
+        if not self._is_combo_keyboard_modifier(released_key):
+            return False
+        return self._side_effect_combo_key_still_down()
+
+    def _is_combo_keyboard_modifier(self, key: Key) -> bool:
+        """True if *key* is a configured combo modifier that is a keyboard key
+        (not a mouse button)."""
+        return key not in MOUSE_KEYS and self._is_trigger_button(key)
+
+    def _side_effect_combo_key_still_down(self) -> bool:
+        """True if a configured Alt/Meta combo key is still held — the key whose
+        eventual lone release we are pre-neutralizing."""
+        return any(
+            key in SIDE_EFFECT_KEYS and self._is_trigger_button(key)
+            for key in self._keys_down
+        )
