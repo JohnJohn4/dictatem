@@ -24,42 +24,39 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Session 6 — Windows mouse hook (#120).** Session 4 (CI keystone +
-install hardening) is **implemented and CI-green** — two PRs **open, awaiting the
-user's review/merge: #156 (#81) and #157 (#90)**, all 6 legs green
-(`windows-latest` + `macos-latest` × py3.11–3.13). **Once they merge, close #81 and
-#90** (they're file-disjoint, cut independently off `main` — merge either order).
+**Next up: Session 7 — Cold-start latency design grill (#101).** S6 (#120 Windows
+mouse hook) is **implemented and on PR #159** (open, CI running, awaiting the
+user's review/merge): the `WH_MOUSE_LL` adapter feeds the S2 classifier (#118,
+ADR-0020) so a mouse side button / wheel click arms dictation — standalone
+(`["mouse4"]`) or combined (`["ctrl","mouse4"]`), with conditional suppression of
+the button's normal action. The native plumbing **passed a synthetic `SendInput`
+smoke test on Windows** (the live hook decoded injected middle/X1/X2 events
+correctly), but the **physical click-QA is still owed** — real side-button
+hardware, browser-back suppression, full dictation — checklist at
+[`docs/agents/qa-handoffs/05-windows-mouse-hook-qa.md`](qa-handoffs/05-windows-mouse-hook-qa.md).
+**Leave #120 open until a human runs it**, then close (the user can do it on their
+Windows box). *(S4's #156/#157 merged — #81/#90 should now be closed if not yet.)*
 
-**Key discovery from S4 (so the record is straight):** the CI matrix #81 describes
-**already existed** — it landed with the arm64-windows work (PR #79, `19dc2b8`) and
-has been green all along; the roadmap had overstated it as "no CI today." The only
-missing piece was the **import-safety assertion** (#156 adds `TestNativeAdaptersImport`
-— glob-discovers + imports every native adapter per platform; verified on macOS CI
-too). **#157** pins a uv-managed **CPython 3.12** on Windows **x64** (x64 previously
-let `uv` discover any system Python — the reproducibility hazard) and **aligns the
-pin to 3.12 across x64 + ARM + macOS**; `tests/test_install_python_pin.py` enforces
-every installer pin stays inside the CI matrix. **Decision settled — do not
-reopen: 3.12 everywhere** (the user chose it; ARM bumped 3.11→3.12 because the 3.11
-was arbitrary — ADR-0017 amendment). The ARM bump is CI-tested + reasoned-safe but
-**not re-verified on real ARM hardware** (no device); Windows x64 install QA passed
-on real hardware. The x64 install now *fetches* a managed CPython (mirrors macOS,
-no opt-out) — accepted trade-off, documented in ADR-0017.
+**Settled in S6 — do not reopen:** both hooks now feed **one** classifier via an
+**eager-advance-under-lock + lazy-tick-dispatch** bridge, so a mouse button can
+complete a combo with keyboard modifiers and the mouse hook gets its
+suppress/pass-through decision synchronously; **keyboard timing is unchanged** (the
+old bridge tests still pass). The native hooks' shared latent items
+(`SetWindowsHookExW` restype, no `WM_QUIT` on `uninstall`, first-event handle
+race — all already in `wh_keyboard_ll`, benign in the working keyboard path) are a
+deliberate **out-of-scope "harden both hooks together" follow-up**, not a #120 bug.
 
-This session adds the **#120 `WH_MOUSE_LL` adapter** feeding the already-merged S2
-mouse classifier core (#118, ADR-0020) so a mouse side-button can arm dictation —
-a feature the user wants (mouse-button memory) and **end-to-end Windows-testable
-here**. Keep the hook thin; mirror the existing keyboard hook
-(`hotkey/wh_keyboard_ll.py`); the Tap/Hold decision logic already lives in the pure
-classifier. *QA:* physically click mouse4 / mouse5 / middle. Full handoff:
-[`docs/agents/handoffs/session-06-windows-mouse-hook.md`](handoffs/session-06-windows-mouse-hook.md).
+This session is **code-free, parallel-safe, and the deepest real-user complaint**
+(the long first-transcribe wait + paste misfiring as focus drifts during the load).
+Produce a short ADR + spun-out issues: decide #97's approach (anchor-target-at-
+record-start vs detect-and-warn) and frame #96's overlay states + #67's docs. It
+unblocks **S8** (#96, #97). Read the **S7 row + per-session detail** below and
+follow the **grill-session handoff**.
 
-**Parallel-safe alternative:** **S7 — cold-start latency design grill (#101)** is
-code-free, unblocks S8, and is the deepest real-user complaint; run it any time
-with `grill-with-docs` / `prototype`.
-
-Skills: `run`/`verify`, `diagnose`, `code-review`. Your role: autonomous; the user
-reviews/merges PRs + runs the physical-click QA. Carried-over QA: **#126**
-vocabulary recognition-lift (S2) — `docs/agents/qa-handoffs/02-vocabulary-recognition-qa.md`.
+Skills: `grill-with-docs`, `prototype`. Your role: **decisions-needed** — an HITL
+grill: you ask, challenge, draft the ADR + issues; the user makes the calls.
+**QA owed:** **#120** physical click-QA (`qa-handoffs/05-windows-mouse-hook-qa.md`)
++ carried-over **#126** vocabulary recognition-lift (`qa-handoffs/02-vocabulary-recognition-qa.md`).
 
 ---
 
@@ -128,7 +125,7 @@ session · **M** ≈ one focused session · **L** ≈ may span more than one.
 | **S3** | Docs & discoverability | AFK | S–M | #67 #127 #122 #123 | `run`/`verify`, `code-review` | — |
 | **S4** | CI keystone + install hardening | AFK | M | #81 #90 ~~#92~~ | `code-review`, `diagnose` | PRs #156/#157 green — awaiting merge |
 | ~~**S5**~~ | ~~Clutter-proof clipboard + last-dictation recovery~~ | AFK | M | ✅ PR #141 (#138) · #142 (#119) · #146 (#139) — merged | `tdd`, `run`/`verify`, `code-review` | done 2026-06-14; Win QA PASS |
-| **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | S2 (#118) |
+| **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | PR #159 — phys-QA owed |
 | **S7** | Cold-start latency **design** | Grill | — | #101 (frames #97 #96 #67) | `grill-with-docs`, `prototype` | — *(parallel-safe)* |
 | **S8** | Overlay & focus UX | AFK | M | #96 #97 | `run`/`verify`, `code-review` | S7 |
 | **S9** | macOS QA & polish | Manual-QA + AFK | L | #121 #95 #94 #93 | `verify`/`run`, `tdd`, `diagnose` | S2 (#118), S4 |
@@ -330,6 +327,56 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### S6 — Windows mouse hook — 2026-06-22
+- **Shipped:** the **#120 `WH_MOUSE_LL` adapter** (one PR, **#159**), feeding the
+  S2 mouse classifier (#118, ADR-0020) so a mouse side button / wheel click arms
+  dictation. **Pure keymap** `hotkey/win32_mouse_keymap.py` (`WM_*` + xbutton →
+  `(Key, KeyAction)`: X1=mouse4, X2=mouse5, middle=wheel; left/right/move/wheel →
+  `None`). **Live hook** `hotkey/wh_mouse_ll.py` mirrors `wh_keyboard_ll.py` but
+  applies the classifier's `HookDecision` **synchronously** (returns non-zero from
+  the hook proc to swallow a trigger button — a low-level hook can only suppress
+  from its proc on the hook thread). New `install_mouse_hook` on `_PlatformAdapters`,
+  wired in `_run_daemon`/`_start_windows_daemon` (macOS = `None`, that's #121).
+  Also: `format_hotkey` now renders mouse buttons (a standalone `["mouse4"]` shows
+  "Mouse4 to dictate", not a blank chord) + the Usage Guide notes the click-only-
+  mice graceful degrade (ADR-0020 consequence).
+- **Design (settled — do not reopen):** a mouse button can share one combo with
+  keyboard modifiers (`ctrl+mouse4`), so **both hooks feed ONE classifier**, and
+  the mouse decision needs current keyboard state. So `_HotkeyBridge` now
+  **advances the classifier eagerly under a lock** (on whichever hook thread
+  delivered the event) and **defers the state-machine/Qt dispatch to the GUI
+  tick** — keyboard dispatch timing is unchanged (the old bridge tests, which
+  encode that behaviour, all still pass). The two scary-looking concurrency
+  candidates from `/code-review` (spurious HOLD_START at tick; unpaired KEY_DOWN
+  when a combo breaks) were traced and **refuted** (`classifier.tick` gates on live
+  `combo_held`/`_combo_pressed_at`; the "combo breaks with event=None" reset is the
+  pre-existing path and unreachable when a held combo breaks).
+- **Issues:** **#120 — implemented, NOT closed** (close on the physical click-QA
+  PASS). Opened: none. *(Also: S4's #156/#157 merged — close #81/#90 if not done.)*
+- **PRs:** **#159** (#120) — **open, awaiting review/merge**; CI matrix running
+  (win+mac × 3.11–3.13). Full suite **1054 passed, 4 skipped** locally (+29);
+  `ruff` clean, `pyright` 0 errors. `/code-review` (high, 5 finder angles) run —
+  fixed two cleanups (hoisted the `HotkeyEvent` import out from under the bridge
+  lock; deduped `_MOUSE_LABELS` into `_WORD_NAMES`); the native-plumbing
+  duplication + latent items were documented as an out-of-scope follow-up.
+- **QA owed:** **#120 physical click-QA** — exported as
+  [`qa-handoffs/05-windows-mouse-hook-qa.md`](qa-handoffs/05-windows-mouse-hook-qa.md)
+  (real side-button hardware, browser-back suppression, full dictation; **pending a
+  human on the Windows box**). A **synthetic `SendInput` smoke test PASSED locally**
+  (the live hook installed and decoded injected middle/X1/X2 events to the exact
+  `(Key, action)` — confirms the `MSLLHOOKSTRUCT` HIWORD decode + keymap against
+  real OS event delivery, the part unit tests can't cover). Carried over: **#126**
+  vocabulary recognition-lift (S2) — `qa-handoffs/02-vocabulary-recognition-qa.md`.
+- **Follow-ups / notes:** **harden both native hooks together** (the `wh_mouse_ll`
+  /`wh_keyboard_ll` shared ctypes plumbing: `SetWindowsHookExW` restype, `uninstall`
+  posting `WM_QUIT`, the first-event handle race) — benign today, worth a dedicated
+  pass with re-QA on both. The mouse hook installs inside the keyboard-hook-present
+  branch (it needs the shared bridge/classifier — correct per ADR-0020's "one
+  combo"); revisit only if a mouse-only platform ever appears. Next: **S7 — cold-
+  start latency design grill (#101)** (code-free, parallel-safe, unblocks S8); see
+  the per-session detail. macOS mouse hook (#121) reuses this session's pure
+  classifier path when the macOS QA day comes (S9).
 
 ### S4 — CI keystone + install hardening — 2026-06-22
 - **Shipped:** two issues, one PR each (independent branches off `main`, file-disjoint). **Key discovery:** the CI matrix #81 describes (`windows-latest` + `macos-latest` × py3.11–3.13; `uv sync --extra runtime` + ruff + pyright + pytest, PR-gated) **already existed** — it landed with the arm64-windows work (PR **#79**, `19dc2b8`) and has been green on every PR since; the roadmap/handoff overstated it as "no CI today," so S4 was much smaller than framed. **#81** (PR **#156**) adds the one missing acceptance criterion: a *positive* import-safety test (`TestNativeAdaptersImport`) that, per platform, glob-discovers every native adapter (`win32_*`/`wh_*` on Windows, `mac_*` + `macapp.activation` on macOS) and imports it, so a broken pywin32/PyObjC binding fails in CI not at runtime — the existing inverse purity guard is kept. **#90** (PR **#157**) pins `--managed-python --python 3.12` on Windows **x64** (x64 previously let uv discover any system Python ≥3.11 — the reproducibility hazard) and **aligns the pin to 3.12 across x64 + ARM + macOS** (ARM was an arbitrary 3.11 with no wheel/arch rationale — **ADR-0017 amendment**); new `tests/test_install_python_pin.py` parses both installers and asserts every pin appears in the CI matrix so they can't drift.
