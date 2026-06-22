@@ -94,6 +94,18 @@ class TestFirstUseSection:
         assert "First use" in html
         assert "Preload Model" in html
 
+    def test_explains_one_time_download_then_offline(self) -> None:
+        # ADR-0025 / #164: the model downloads once on first run, then offline.
+        html = usage_guide_html(("win", "alt"), platform="win32").lower()
+        assert "download" in html
+        assert "offline" in html
+
+    def test_mentions_loading_and_downloading_pill_captions(self) -> None:
+        # The two distinct loading-pill captions the user may see (#162/#164).
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        assert "Loading Dict. Model" in html
+        assert "Downloading model" in html
+
 
 class TestChangingHotkeySection:
     """The config-discoverability "Changing your hotkey" section (#123)."""

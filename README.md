@@ -10,7 +10,7 @@ Local, offline voice dictation for **Windows** and **macOS**. Press a global hot
 - **Smart paste** — Saves and restores clipboard content and window focus around each paste
 - **System tray** — Static brand icon, rendered theme-adaptive monochrome so it stays visible on light or dark taskbars; recording state lives on the overlay's status dot, not the tray. Menu items to preload or unload the model on demand
 - **Overlay UI** — Pill that appears in the corner of the active monitor while recording, with an animated waveform proportional to mic level
-- **Fully offline** — All inference runs locally; the only network calls are the one-off model download on first use
+- **Offline after setup** — All inference runs locally; the only network use is a one-time model download on the first run (which the installer triggers), so even your first dictation works offline
 - **Trigger Words** — Say `"summarize"` (or your own custom prompt) right after a dictation paste, and dictatem rewrites the just-pasted text in place via a local Ollama model
 - **TOML config** — Tune model, hotkey, audio, overlay, paste, and startup behaviour
 
@@ -43,7 +43,7 @@ Piping a script from the internet into `iex` runs it immediately. If you'd rathe
 
 **Updating.** Easiest is the tray menu: right-click the tray icon → **Check for Updates…**. Dictatem compares the running version against the latest GitHub release and, if a newer one exists, re-runs the installer for you (stopping the old daemon, re-detecting the GPU/CPU dependency set the same way a fresh install does, and relaunching). You can also update manually by re-running the one-liner with a newer version tag in the URL (e.g. `.../v0.5.7/install.ps1`); see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest) for the current tag. Either way it's safe while Dictatem is running — the installer stops the old daemon first (so the upgrade isn't blocked by a file lock) and relaunches the new version for you. If you originally forced the set with `DICTATEM_GPU`, set it again before a manual re-run (the tray upgrade re-detects rather than remembering the override).
 
-The script never installs or starts Ollama and never downloads a Whisper model. The model lazy-downloads on first dictation, so your **first dictation after launch** (or after the idle-unload timer frees VRAM) pauses a few seconds while the model loads — subsequent dictations are immediate. [Trigger Words](#trigger-words) stay off until you set Ollama up yourself ([Ollama / Transform setup](#ollama--transform-setup)).
+The script never installs or starts Ollama, and never downloads a Whisper model itself. Instead the daemon fetches the model **once, on its first run** (which the installer triggers), so your first *dictation* already works offline; from then on the model load starts the moment you **arm** a dictation, overlapping the time you spend talking, so the wait is largely hidden (see [Model loading & VRAM](#model-loading--vram)). [Trigger Words](#trigger-words) stay off until you set Ollama up yourself ([Ollama / Transform setup](#ollama--transform-setup)).
 
 ### Install on macOS
 
@@ -186,13 +186,15 @@ Right-click the tray icon for: Start/Stop Recording, **Preload Model** (load Whi
 
 ### Model loading & VRAM
 
-Dictatem loads the Whisper model **lazily** — not at startup, but on your first dictation (the very first ever also downloads it). While it loads, the overlay pill shows a **"Loading model…"** caption with cycling dots, not the recording waveform, so a multi-second first response reads as *loading*, not *stuck* — the audio you already spoke is transcribed and pasted automatically once the model is resident (you don't press the hotkey again). Subsequent dictations are immediate.
+**The model loads when you arm a dictation.** Dictatem doesn't hold the model in memory at startup — instead the load starts the instant you **arm** a dictation (press your hotkey / mouse button), so it overlaps the seconds you spend talking rather than landing in the pause after you stop. A short utterance hides the load entirely. If you stop before it finishes, the overlay pill shows a **"Loading Dict. Model…"** caption (cycling dots, not the recording waveform) for the remainder, then transcribes and pastes the audio you already spoke automatically once the model is resident — you don't press the hotkey again. Subsequent dictations are immediate. Pressing Esc while it loads cancels that dictation but lets the load finish (a Whisper load can't be interrupted mid-flight), so your next attempt is warm.
 
-After `[model].idle_unload_minutes` of inactivity (default 30) the model **unloads** to free its memory — about 3 GB of VRAM on the GPU — for other GPU/AI work; the next dictation reloads it in a few seconds. This idle-unload is intentional: Dictatem stays a good GPU citizen when you're not dictating. The [Trigger Words](#trigger-words) LLM (Ollama) is kept warm for the same window, so back-to-back triggers don't re-pay its slower cold load.
+**Downloaded once, then offline.** The model weights download a **single time, on the daemon's first run** (which the installer triggers as its last step) — straight to disk, not into memory. A tray notification marks this one-time download, and if you dictate while it's still running the pill shows a **"Downloading model…"** caption. After it finishes your machine is offline-ready: every dictation, *including the first*, works with no network. If you happen to be offline at that first run the download is skipped and the model downloads on your first dictation instead (the older behaviour) — so only the install and that first run ever need a connection.
 
-**Want an instant first response instead?** Trade some held memory for latency in `~/.dictatem/config.toml`:
+**Idle-unload.** After `[model].idle_unload_minutes` of inactivity (default 30) the model **unloads** to free its memory — about 3 GB of VRAM on the GPU — for other GPU/AI work; the next time you arm a dictation it reloads (again overlapping your speech). This idle-unload is intentional — Dictatem stays a good GPU citizen when you're not dictating — and it remains the *only* thing that unloads the model. The [Trigger Words](#trigger-words) LLM (Ollama) is kept warm for the same window, so back-to-back triggers don't re-pay its slower cold load.
 
-- `preload_model = true` under `[startup]` — load the model when the daemon starts, so even the first dictation is immediate (holds the VRAM from launch).
+**Want the model resident from launch instead?** Trade some held memory for an instant first response in `~/.dictatem/config.toml`:
+
+- `preload_model = true` under `[startup]` — load the model when the daemon starts, so even the first dictation needs no load at all (holds the VRAM from launch).
 - raise `idle_unload_minutes` under `[model]` — keep the model resident longer between dictations (e.g. a whole workday) so it rarely has to reload.
 
 You can also warm the model on demand any time from the tray menu's **Preload Model** item, and release it again with **Unload Model**.
@@ -238,7 +240,7 @@ fade_out_ms = 400
 
 [startup]
 autostart = true
-preload_model = false           # Load the model on daemon startup vs lazily on first use
+preload_model = false           # Load at daemon startup, vs when you first arm a dictation
 
 [logging]
 level = "info"
@@ -336,7 +338,7 @@ The codebase is structured around three principles:
 
 **Pure-logic state machines** — Recording mode, overlay animation, and tray icon state are each modelled as explicit state machines with injected clocks. No sleeps in tests.
 
-**Lazy lifecycle management** — The Whisper model loads on first transcription and auto-unloads after idle. GPU OOM is caught, cache is cleared, and the transcription is retried once before surfacing an error to the user.
+**Lazy lifecycle management** — The Whisper model loads when a dictation is *armed* (so the load overlaps speech, ADR-0025), is fetched to disk once on first run, and auto-unloads after idle. GPU OOM is caught, cache is cleared, and the transcription is retried once before surfacing an error to the user.
 
 ```
 src/dictatem/

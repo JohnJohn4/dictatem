@@ -74,9 +74,18 @@ def _recovery_section() -> str:
 def _first_use_section() -> str:
     return (
         "<h3>First use</h3>"
-        "<p>The first time you dictate or run a trigger word, Dictatem loads the "
-        "matching model, which can take a few seconds. Use <b>Preload Model</b> "
-        "in this menu to warm it up first.</p>"
+        "<p>The speech model downloads <b>once</b>, on Dictatem's first run "
+        "after install — a tray notification marks it. After that it works fully "
+        "offline: every dictation, including the first, needs no network. (If "
+        "you happen to be offline at that first run, the model downloads on your "
+        "first dictation instead.)</p>"
+        "<p>From then on the model loads when you <b>arm</b> a dictation, so the "
+        "load overlaps the time you spend talking. If a load — or that one-time "
+        "download — is still finishing, the pill shows a "
+        "<b>Loading Dict. Model…</b> or <b>Downloading model…</b> caption and "
+        "pastes automatically once it's ready, so you never press the hotkey "
+        "again. Use <b>Preload Model</b> in this menu to warm it up ahead of "
+        "time.</p>"
     )
 
 
