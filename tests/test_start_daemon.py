@@ -421,6 +421,120 @@ class TestHotkeyBridge:
             assert sm.state == State.IDLE, f"cycle {cycle} end: {sm.state}"
 
 
+class TestHotkeyBridgeMouse:
+    """The mouse hook feeds the SAME bridge/classifier as the keyboard (ADR-0020
+    / #120): it returns the suppression decision synchronously, defers the
+    state-machine work to ``tick`` (never touching Qt off the hook thread), and
+    — because both hooks advance one classifier eagerly — a mouse button can
+    complete a combo with a keyboard modifier.
+    """
+
+    def _toggle_daemon(self, sm: StateMachine) -> DaemonCore:
+        return DaemonCore(
+            state_machine=sm,
+            audio_capture=FakeAudioCapture(duration_s=1.0),
+            lifecycle=TranscribeLifecycle(
+                backend=FakeTranscriberBackend(result="hello"),
+                clock=lambda: 0.0,
+            ),
+            overlay=FakeOverlayRenderer(),
+            tray=FakeTrayRenderer(),
+            clipboard=FakeClipboardIO(),
+            keystroke=FakeKeystrokeSender(),
+            foreground=FakeForegroundTracker(),
+        )
+
+    def test_standalone_mouse4_down_is_suppressed(self) -> None:
+        classifier = _clf.HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse4",))
+        bridge = _HotkeyBridge(
+            classifier=classifier, callback=_EventCollector().on_hotkey_event
+        )
+
+        decision = bridge.process_mouse_event(
+            _clf.Key.MOUSE_4, _clf.KeyAction.KEY_DOWN, 0
+        )
+        assert decision == _clf.HookDecision.SUPPRESS
+
+    def test_standalone_mouse4_up_is_suppressed(self) -> None:
+        classifier = _clf.HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse4",))
+        bridge = _HotkeyBridge(
+            classifier=classifier, callback=_EventCollector().on_hotkey_event
+        )
+
+        bridge.process_mouse_event(_clf.Key.MOUSE_4, _clf.KeyAction.KEY_DOWN, 0)
+        decision = bridge.process_mouse_event(
+            _clf.Key.MOUSE_4, _clf.KeyAction.KEY_UP, 50
+        )
+        assert decision == _clf.HookDecision.SUPPRESS
+
+    def test_mouse_dispatch_is_deferred_until_tick(self) -> None:
+        # The hook proc runs off the GUI thread, so it must NOT call the callback
+        # itself — the state-machine work waits for the next tick.
+        classifier = _clf.HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse4",))
+        collector = _EventCollector()
+        bridge = _HotkeyBridge(classifier=classifier, callback=collector.on_hotkey_event)
+
+        bridge.process_mouse_event(_clf.Key.MOUSE_4, _clf.KeyAction.KEY_DOWN, 0)
+        assert collector.events == [], "must not dispatch on the hook thread"
+
+        bridge.tick(0)
+        assert Event.KEY_DOWN in [e for e, _ in collector.events]
+
+    def test_bare_mouse4_passes_through_when_combo_needs_modifier(self) -> None:
+        # ctrl+mouse4 with no Ctrl held: the bare click must pass through so
+        # browser-back still works, and no combo engages.
+        classifier = _clf.HotkeyClassifier(
+            tap_threshold_ms=200, modifiers=("ctrl", "mouse4")
+        )
+        collector = _EventCollector()
+        bridge = _HotkeyBridge(classifier=classifier, callback=collector.on_hotkey_event)
+
+        decision = bridge.process_mouse_event(
+            _clf.Key.MOUSE_4, _clf.KeyAction.KEY_DOWN, 0
+        )
+        assert decision == _clf.HookDecision.PASS_THROUGH
+
+        bridge.tick(0)
+        assert collector.events == []
+
+    def test_keyboard_modifier_then_mouse_complete_one_combo(self) -> None:
+        # Eager advancement: the keyboard Ctrl-down must be reflected in the
+        # classifier before the mouse decision, so ctrl+mouse4 suppresses and
+        # engages the combo. (With lazy keyboard handling the mouse would see
+        # stale state and wrongly pass through.)
+        classifier = _clf.HotkeyClassifier(
+            tap_threshold_ms=200, modifiers=("ctrl", "mouse4")
+        )
+        collector = _EventCollector()
+        bridge = _HotkeyBridge(classifier=classifier, callback=collector.on_hotkey_event)
+
+        bridge.enqueue_key_event(_clf.Key.LEFT_CTRL, _clf.KeyAction.KEY_DOWN, 0)
+        decision = bridge.process_mouse_event(
+            _clf.Key.MOUSE_4, _clf.KeyAction.KEY_DOWN, 10
+        )
+        assert decision == _clf.HookDecision.SUPPRESS
+        assert classifier.combo_held is True
+
+        bridge.tick(20)
+        assert Event.KEY_DOWN in [e for e, _ in collector.events]
+
+    def test_standalone_mouse4_tap_drives_toggle_recording(self) -> None:
+        # End-to-end through the state machine: a mouse4 tap starts toggle
+        # recording, with both the down and up suppressed.
+        classifier = _clf.HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse4",))
+        sm = StateMachine(tap_threshold_ms=200)
+        daemon = self._toggle_daemon(sm)
+        bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
+
+        down = bridge.process_mouse_event(_clf.Key.MOUSE_4, _clf.KeyAction.KEY_DOWN, 0)
+        up = bridge.process_mouse_event(_clf.Key.MOUSE_4, _clf.KeyAction.KEY_UP, 100)
+        bridge.tick(100)
+
+        assert down == _clf.HookDecision.SUPPRESS
+        assert up == _clf.HookDecision.SUPPRESS
+        assert sm.state == State.TOGGLE_REC
+
+
 # ── Full adapter integration ────────────────────────────────────────────
 
 

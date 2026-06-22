@@ -268,6 +268,8 @@ class TestStarterAdapterSets:
         assert adapters.keystroke is not None
         assert adapters.foreground is not None
         assert adapters.install_keyboard_hook is not None
+        # The macOS mouse-trigger hook (#121) is not built yet — absent, not faked.
+        assert adapters.install_mouse_hook is None
         # The CGPreflight permission check (#57) — passed as a reference,
         # never called here (this runs on a headless TCC-less runner).
         assert adapters.check_permissions is not None
@@ -332,6 +334,8 @@ class TestStarterAdapterSets:
         assert adapters.foreground is not None
         assert adapters.autostart_registrar is not None
         assert adapters.install_keyboard_hook is not None
+        # The WH_MOUSE_LL trigger hook (#120 / ADR-0020) is wired on Windows.
+        assert adapters.install_mouse_hook is not None
         # Windows has no guided permission UX — the mic permission surfaces
         # in-flow when capture fails.
         assert adapters.check_permissions is None
