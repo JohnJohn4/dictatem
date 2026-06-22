@@ -22,6 +22,7 @@ from tests.fakes import (
     FakeTranscriberBackend,
     FakeTrayRenderer,
 )
+from tests.support import wait_until
 
 
 @pytest.fixture
@@ -152,16 +153,28 @@ class TestModelLoadingOverlay:
     transcribing dot once the model is resident; a warm model skips it (#74)."""
 
     def test_cold_first_tap_shows_loading_then_transcribing(
-        self, core: DaemonCore, overlay: FakeOverlayRenderer
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        overlay: FakeOverlayRenderer,
     ) -> None:
-        # backend starts unloaded, so the first transcription is a cold load.
-        _do_ptt_cycle(core)
+        # With load-on-arm (#161) the load starts at record-start; hold it open
+        # so the model is still loading when transcription begins (a short
+        # utterance that doesn't fully cover the load) → the loading pill shows.
+        backend.block_load()
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=1500)
+        # _do_transcribe ran with the model not yet resident → loading pill.
+        loading = [c for c in overlay.calls if c[0] == "show_loading"]
+        assert loading and loading[0][1] == "Loading Dict. Model"
+        # Release the load and drain → the pill flips to the transcribing dot.
+        backend.release_load()
+        wait_until(lambda: backend.is_loaded)
+        core.drain_transcription_for_test(now_ms=2000)
         names = [c[0] for c in overlay.calls]
-        assert "show_loading" in names
         assert "show_transcribing" in names
         assert names.index("show_loading") < names.index("show_transcribing")
-        loading = [c for c in overlay.calls if c[0] == "show_loading"]
-        assert loading[0][1] == "Loading Dict. Model"
 
     def test_warm_model_skips_loading_pill(
         self,
@@ -174,6 +187,75 @@ class TestModelLoadingOverlay:
         names = [c[0] for c in overlay.calls]
         assert "show_loading" not in names
         assert "show_transcribing" in names
+
+
+class TestLoadOnArm:
+    """Load-on-arm (ADR-0025 / #161): the Whisper load starts the instant
+    dictation is armed (record-start), overlapping the speech, rather than
+    lazily after the user stops talking."""
+
+    def test_record_start_kicks_background_load(
+        self, core: DaemonCore, backend: FakeTranscriberBackend
+    ) -> None:
+        assert backend.load_count == 0
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        wait_until(lambda: backend.load_count >= 1)
+        assert backend.load_count == 1
+        assert backend.is_loaded
+
+    def test_load_finished_during_recording_skips_loading_pill(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        overlay: FakeOverlayRenderer,
+    ) -> None:
+        # Arm → the load starts and finishes while the user is still "talking",
+        # so by transcribe-time the model is resident and no loading pill shows.
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        wait_until(lambda: backend.is_loaded)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=1500)
+        core.drain_transcription_for_test(now_ms=1500)
+        names = [c[0] for c in overlay.calls]
+        assert "show_loading" not in names
+        assert "show_transcribing" in names
+
+    def test_esc_during_load_leaves_it_running_to_completion(
+        self, core: DaemonCore, backend: FakeTranscriberBackend
+    ) -> None:
+        # faster-whisper's load can't be cancelled mid-flight (ADR-0016); a
+        # cancel must leave the in-flight load running, never unload it.
+        backend.block_load()
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        wait_until(lambda: backend.load_count >= 1)
+        core.on_hotkey_event(Event.ESC, now_ms=100)  # cancel mid-load
+        backend.release_load()
+        wait_until(lambda: backend.is_loaded)
+        assert backend.unload_count == 0  # cancel never unloaded the model
+        assert backend.is_loaded  # the load completed despite the cancel
+
+    def test_rearm_during_in_flight_load_does_not_double_load(
+        self, core: DaemonCore, backend: FakeTranscriberBackend
+    ) -> None:
+        backend.block_load()
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        wait_until(lambda: backend.load_count >= 1)
+        core.on_hotkey_event(Event.ESC, now_ms=100)
+        # Re-arm while the first load is still in flight: preload() guards on
+        # the in-flight load (synchronously, no new thread) so it is reused.
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=200)
+        backend.release_load()
+        wait_until(lambda: backend.is_loaded)
+        assert backend.load_count == 1  # exactly one load across the re-arm
+
+    def test_warm_model_arm_is_a_noop_load(
+        self, core: DaemonCore, backend: FakeTranscriberBackend
+    ) -> None:
+        backend._loaded = True  # already resident
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        # preload() short-circuits synchronously on a resident model — no thread
+        # is spawned, so load_count is deterministically 0 with no wait.
+        assert backend.load_count == 0
 
 
 # ── Tray icon state updates ──────────────────────────────────────────

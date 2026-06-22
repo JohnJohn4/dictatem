@@ -548,6 +548,22 @@ class DaemonCore:
             raise _AbortCommandChain from None
         self._overlay.show(RecordingMode.PTT)
         self._tray.set_recording()
+        # Load-on-arm (ADR-0025 / #161): kick the Whisper load the instant
+        # dictation is armed so the cold load overlaps the seconds the user
+        # spends talking, not the dead air after the utterance. preload() is
+        # idempotent (a no-op when the model is already resident or a load is
+        # in flight) and returns immediately — the load runs on a background
+        # thread — so this only ever starts the load EARLIER, never blocks
+        # record-start. A cancel (Esc) leaves the in-flight load running to
+        # completion (faster-whisper's load can't be cancelled — ADR-0016), and
+        # idle-unload stays the sole reaper, so no extra VRAM is held when idle.
+        # Guarded so a rare thread-spawn hiccup can't bubble to on_hotkey_event
+        # and abort the recording already started above; the load then simply
+        # falls back to lazy-load at transcribe.
+        try:
+            self._lifecycle.preload()
+        except Exception:
+            logger.error("Error starting load-on-arm preload", exc_info=True)
 
     def _do_transcribe(self, *, now_ms: int = 0) -> None:
         try:
