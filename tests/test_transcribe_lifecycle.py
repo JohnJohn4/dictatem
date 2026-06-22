@@ -188,6 +188,104 @@ class TestPreload:
         assert lc.is_loaded is False
 
 
+class TestPrefetchToDisk:
+    """First-run fetch (ADR-0025 / #162): download the weights to disk without
+    loading them into VRAM, best-effort, on a background thread."""
+
+    def test_prefetch_downloads_without_loading(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+
+        lc.prefetch_to_disk()
+        wait_until(lambda: not lc.is_downloading)
+
+        assert backend.download_to_disk_count == 1
+        assert backend.load_count == 0  # to disk only — never loaded into VRAM
+        assert backend.is_loaded is False
+        assert lc.last_download_succeeded is True
+
+    def test_is_downloading_true_while_in_flight(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+
+        backend.block_download()
+        lc.prefetch_to_disk()
+        wait_until(lambda: backend.download_to_disk_count >= 1)
+        assert lc.is_downloading is True
+
+        backend.release_download()
+        wait_until(lambda: not lc.is_downloading)
+
+    def test_prefetch_failure_is_swallowed(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.queue_download_error(RuntimeError("offline"))
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+
+        lc.prefetch_to_disk()  # must not raise
+        wait_until(lambda: not lc.is_downloading)
+
+        assert backend.download_to_disk_count == 1
+        assert lc.last_download_succeeded is False
+        assert backend.is_loaded is False  # a failed fetch loads nothing
+
+    def test_prefetch_noop_when_already_loaded(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+
+        lc.transcribe(AUDIO)  # loads the model
+        assert backend.is_loaded is True
+
+        lc.prefetch_to_disk()  # resident → nothing to fetch (synchronous no-op)
+        assert lc.is_downloading is False
+        assert backend.download_to_disk_count == 0
+
+    def test_prefetch_noop_while_a_load_is_in_flight(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+
+        backend.block_load()
+        lc.preload()  # is_loading → a load is already pulling the weights
+        wait_until(lambda: backend.load_count >= 1)
+
+        lc.prefetch_to_disk()  # skip — the load downloads anyway
+        assert backend.download_to_disk_count == 0
+
+        backend.release_load()
+        wait_until(lambda: backend.is_loaded)
+
+    def test_no_double_prefetch_while_in_flight(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+
+        backend.block_download()
+        lc.prefetch_to_disk()
+        wait_until(lambda: backend.download_to_disk_count >= 1)
+        lc.prefetch_to_disk()  # second call while in flight → no-op
+
+        backend.release_download()
+        wait_until(lambda: not lc.is_downloading)
+        assert backend.download_to_disk_count == 1
+
+    def test_prefetch_does_not_arm_idle_unload(self) -> None:
+        """Prefetch leaves nothing resident, so the idle timer has nothing to
+        reap and check_idle is a no-op (no spurious unload)."""
+        current_time = 0.0
+
+        def clock() -> float:
+            return current_time
+
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=clock, idle_timeout_s=1800.0)
+
+        lc.prefetch_to_disk()
+        wait_until(lambda: not lc.is_downloading)
+        assert backend.is_loaded is False
+
+        current_time = 60 * 60  # well past the idle timeout
+        lc.check_idle()
+        assert backend.unload_count == 0
+
+
 class TestEmptyResultDetection:
     def test_empty_string(self) -> None:
         backend = FakeTranscriberBackend(result="")

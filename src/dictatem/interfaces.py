@@ -175,6 +175,15 @@ class TranscriberBackend(Protocol):
         """Unload the model and free resources."""
         ...
 
+    def download_to_disk(self) -> None:
+        """Fetch the model weights into the on-disk cache WITHOUT loading them.
+
+        The first-run, offline-after-setup fetch (ADR-0025): the weights enter
+        the cache but no model is loaded into VRAM/RAM. Idempotent — an
+        already-cached model returns near-instantly with no network.
+        """
+        ...
+
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
         """Transcribe an audio chunk and return the result."""
         ...

@@ -423,6 +423,10 @@ class DaemonCore:
         # both Whisper and the (best-effort) LLM warm finish.
         self._loading_for_transcribe: bool = False
         self._preload_pill_active: bool = False
+        # _awaiting_download_completion: a first-run model fetch (ADR-0025 /
+        # #162) is in flight; the tick polls it to fire the "ready" tray
+        # notification once (and only on success).
+        self._awaiting_download_completion: bool = False
         self._llm_warming: bool = False
         self._llm_warm_thread: threading.Thread | None = None
         # Monotonic-ms deadline until which the LLM is presumed warm (#74).
@@ -578,7 +582,15 @@ class DaemonCore:
             self._overlay.show_transcribing()
             self._loading_for_transcribe = False
         else:
-            self._overlay.show_loading("Loading Dict. Model")
+            # When the one-time first-run weights download is still in flight,
+            # the load is waiting on it — show the distinct "Downloading model…"
+            # caption rather than "Loading Dict. Model" (ADR-0025/-0016 family).
+            label = (
+                "Downloading model"
+                if self._lifecycle.is_downloading
+                else "Loading Dict. Model"
+            )
+            self._overlay.show_loading(label)
             self._loading_for_transcribe = True
 
         if audio is None:
@@ -1103,6 +1115,56 @@ class DaemonCore:
         except Exception:
             logger.error("Error updating loading overlay", exc_info=True)
 
+    def begin_first_run_model_fetch(self) -> None:
+        """Kick the one-time, best-effort first-run model download (ADR-0025 / #162).
+
+        Downloads the resolved tier's weights to the on-disk cache (NOT into
+        VRAM) so the first *dictation* works offline, lifting the multi-GB
+        download out of the dictation latency path. Announces it with a tray
+        notification; if the user dictates while it runs, the pill shows a
+        distinct "Downloading model…" caption. Best-effort and non-blocking: an
+        offline/failed download is swallowed by the lifecycle and the model
+        lazy-downloads on the first dictation instead. A no-op if a load (e.g.
+        startup preload) is already pulling the weights.
+        """
+        try:
+            if self._lifecycle.is_loaded or self._lifecycle.is_loading:
+                return
+            logger.info("First run — fetching the model to disk (one-time)")
+            self._tray.show_notification(
+                "Dictatem — one-time setup",
+                "Downloading the speech model — a one-time background setup. "
+                "Once it finishes, dictation works fully offline.",
+            )
+            # Await a completion notification only if the prefetch actually
+            # started (it no-ops if a load already began pulling the weights),
+            # so check_model_download never reports a download that didn't run.
+            self._awaiting_download_completion = self._lifecycle.prefetch_to_disk()
+        except Exception:
+            logger.error("Error starting first-run model fetch", exc_info=True)
+
+    def check_model_download(self) -> None:
+        """Surface the one-time first-run model download finishing (#162).
+
+        Polled on the tick. On a successful download a tray notification closes
+        the loop; a failed/offline download stays quiet — the lifecycle already
+        logged it and the model falls back to lazy-download on the first
+        dictation, so there is nothing actionable to surface.
+        """
+        try:
+            if (
+                self._awaiting_download_completion
+                and not self._lifecycle.is_downloading
+            ):
+                self._awaiting_download_completion = False
+                if self._lifecycle.last_download_succeeded:
+                    self._tray.show_notification(
+                        "Dictatem — ready",
+                        "Speech model downloaded. Dictation now works offline.",
+                    )
+        except Exception:
+            logger.error("Error polling first-run model download", exc_info=True)
+
     def on_tray_start_recording(self) -> None:
         if self._sm.state is not State.IDLE:
             return
@@ -1568,6 +1630,10 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # First run with no config: probe the machine once and bake the resolved
     # Hardware Tier (model/device/compute_type + transform tag) into the file.
     # Existing configs are read unchanged and the probe is not consulted.
+    # Capture "is this a first run?" BEFORE load_config writes the file — it is
+    # the signal to fetch the model to disk so the first dictation works offline
+    # (ADR-0025 / #162), the run the installer triggers as its last step.
+    is_first_run = not config_path.exists()
     probe = adapters.probe
     config = load_config(config_path, probe=probe)
 
@@ -1861,12 +1927,22 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         logger.info("Startup preload enabled — loading model in background")
         daemon.on_tray_preload()
 
+    # First-run model fetch (ADR-0025 / #162): on the daemon's first run — the
+    # run the installer triggers, right after tier resolution, while the network
+    # is still up — download the resolved tier's weights to disk so the first
+    # *dictation* works offline. Deferred like the balloons below so the tray
+    # icon + event loop are up first (a QSystemTrayIcon notification needs a
+    # running loop). Best-effort and non-blocking; the daemon never waits on it.
+    if is_first_run:
+        QTimer.singleShot(2500, daemon.begin_first_run_model_fetch)
+
     def _on_tick() -> None:
         now = int(time.monotonic() * 1000)
         if bridge is not None:
             bridge.tick(now)
         overlay.update_level(audio_capture._buffer.current_level())
         daemon.check_loading_overlay(now_ms=now)
+        daemon.check_model_download()
         daemon.check_transcription_result(now_ms=now)
         daemon.check_transform_result(now_ms=now)
 

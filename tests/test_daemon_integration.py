@@ -258,6 +258,88 @@ class TestLoadOnArm:
         assert backend.load_count == 0
 
 
+class TestFirstRunModelFetch:
+    """First-run fetch (ADR-0025 / #162): on first run, download the resolved
+    tier's weights to disk so the first dictation works offline — signalled by a
+    tray notification and a distinct "Downloading model…" pill, best-effort."""
+
+    def test_kicks_prefetch_to_disk_and_notifies(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        lifecycle: TranscribeLifecycle,
+        tray: FakeTrayRenderer,
+    ) -> None:
+        core.begin_first_run_model_fetch()
+        wait_until(lambda: not lifecycle.is_downloading)
+        assert backend.download_to_disk_count == 1
+        assert backend.load_count == 0  # to disk only — not loaded into VRAM
+        assert backend.is_loaded is False
+        assert any("setup" in title.lower() for title, _ in tray.notifications)
+
+    def test_skips_when_model_already_resident(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        tray: FakeTrayRenderer,
+    ) -> None:
+        backend._loaded = True  # e.g. a startup preload already loaded it
+        core.begin_first_run_model_fetch()  # guard returns synchronously
+        assert backend.download_to_disk_count == 0
+        assert tray.notifications == []
+
+    def test_offline_fetch_is_swallowed_and_stays_quiet(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        lifecycle: TranscribeLifecycle,
+        tray: FakeTrayRenderer,
+    ) -> None:
+        backend.queue_download_error(RuntimeError("offline"))
+        core.begin_first_run_model_fetch()  # must not raise
+        wait_until(lambda: not lifecycle.is_downloading)
+        core.check_model_download()
+        # The one-time-setup notice fired, but no "ready" one (the fetch failed).
+        assert len(tray.notifications) == 1
+        assert not any("ready" in title.lower() for title, _ in tray.notifications)
+
+    def test_successful_download_fires_ready_notification_once(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        lifecycle: TranscribeLifecycle,
+        tray: FakeTrayRenderer,
+    ) -> None:
+        core.begin_first_run_model_fetch()
+        wait_until(lambda: not lifecycle.is_downloading)
+        core.check_model_download()
+        core.check_model_download()  # idempotent — must not double-notify
+        ready = [t for t, _ in tray.notifications if "ready" in t.lower()]
+        assert len(ready) == 1
+
+    def test_pill_shows_downloading_caption_during_first_run_download(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        overlay: FakeOverlayRenderer,
+    ) -> None:
+        # Hold both gates: the download is in flight AND the load waits on it
+        # (mirrors WhisperModel blocking on the HuggingFace download lock).
+        backend.block_load()
+        backend.block_download()
+        core.begin_first_run_model_fetch()
+        wait_until(lambda: backend.download_to_disk_count >= 1)
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)  # arm → load-on-arm parks
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=1500)  # transcribe: downloading
+        loading = [c for c in overlay.calls if c[0] == "show_loading"]
+        assert loading and loading[-1][1] == "Downloading model"
+        backend.release_download()
+        backend.release_load()
+        wait_until(lambda: backend.is_loaded)
+        core.drain_transcription_for_test(now_ms=2000)
+
+
 # ── Tray icon state updates ──────────────────────────────────────────
 
 

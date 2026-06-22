@@ -122,6 +122,19 @@ class FasterWhisperBackend:
         self._model = None
         self.empty_cache()
 
+    def download_to_disk(self) -> None:
+        """Fetch the model weights into the on-disk cache WITHOUT loading them.
+
+        Uses faster-whisper's ``download_model`` (a ``huggingface_hub``
+        snapshot download), so the weights enter the same cache a later
+        ``WhisperModel(...)`` reads from, but no model is constructed — no
+        GPU/CPU memory is touched and no CUDA DLLs are needed. Idempotent: an
+        already-cached model returns near-instantly with no network (ADR-0025).
+        """
+        from faster_whisper import download_model  # type: ignore[import-not-found]
+
+        download_model(self._model_name)
+
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
         if self._model is None:
             return EmptyResult()
