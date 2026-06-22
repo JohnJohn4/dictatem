@@ -136,6 +136,11 @@ class TestChangingHotkeySection:
         for name in VALID_MODIFIER_NAMES:
             assert name in section, f"{name} missing from the hotkey section"
 
+    def test_notes_click_only_mice_cannot_hold_to_talk(self) -> None:
+        # ADR-0020 consequence: don't imply every mouse can push-to-talk.
+        section = self._section(usage_guide_html(("win", "alt"), platform="win32"))
+        assert "hold-to-talk" in section
+
 
 class TestDocumentShape:
     def test_is_wrapped_html(self) -> None:

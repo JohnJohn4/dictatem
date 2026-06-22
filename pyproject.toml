@@ -65,6 +65,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "TC"]
 # Platform-only native modules guard with `if sys.platform != ...: raise`, so
 # their OS-binding imports legitimately sit after that runtime check (E402).
 "src/dictatem/hotkey/wh_keyboard_ll.py" = ["E402"]
+"src/dictatem/hotkey/wh_mouse_ll.py" = ["E402"]
 "src/dictatem/hotkey/mac_hook.py" = ["E402"]
 "src/dictatem/paste/mac_clipboard.py" = ["E402"]
 "src/dictatem/paste/mac_keystroke.py" = ["E402"]

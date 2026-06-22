@@ -10,8 +10,13 @@ unit-tested; the menu wiring (``qt_tray``) is manual-QA.
 
 from __future__ import annotations
 
-# Windows / generic word names, keyed by the canonical modifier name.
-_WORD_NAMES = {"win": "Win", "meta": "Win", "alt": "Alt", "ctrl": "Ctrl", "shift": "Shift"}
+# Windows / generic word names, keyed by the canonical trigger-input name. The
+# mouse side buttons and wheel click (ADR-0020) are trigger inputs too, so a
+# standalone ``["mouse4"]`` renders a real label instead of a blank chord.
+_WORD_NAMES = {
+    "win": "Win", "meta": "Win", "alt": "Alt", "ctrl": "Ctrl", "shift": "Shift",
+    "mouse4": "Mouse4", "mouse5": "Mouse5", "middle": "Middle",
+}
 
 # macOS glyphs, keyed by canonical modifier name.
 _MAC_GLYPHS = {"win": "⌘", "meta": "⌘", "alt": "⌥", "ctrl": "⌃", "shift": "⇧"}
@@ -19,20 +24,28 @@ _MAC_GLYPHS = {"win": "⌘", "meta": "⌘", "alt": "⌥", "ctrl": "⌃", "shift"
 # The order macOS renders modifier glyphs in, regardless of config order.
 _MAC_GLYPH_ORDER = ("⌃", "⌥", "⇧", "⌘")
 
+# Mouse buttons have no standard glyph, so they keep a word label on macOS too,
+# rendered after the modifier glyphs (e.g. ``⌃Mouse4``). At most one mouse button
+# is ever in a combo (ADR-0020), so no separator is needed between them.
+_MOUSE_LABELS = {"mouse4": "Mouse4", "mouse5": "Mouse5", "middle": "Middle"}
+
 
 def format_hotkey(modifiers: tuple[str, ...], *, platform: str) -> str:
     """Format *modifiers* as a platform-appropriate chord string.
 
     macOS (``darwin``) renders the modifier glyphs in canonical ``⌃⌥⇧⌘`` order
-    with no separator; every other platform spells the names out joined by ``+``
-    in the configured order. Unknown names are dropped (config validation already
-    rejects them); an empty or all-unknown set yields ``""`` so the tray hides the
-    hint rather than showing an empty chord.
+    with no separator, with any mouse button appended as a word (``⌃Mouse4``);
+    every other platform spells the names out joined by ``+`` in the configured
+    order. Unknown names are dropped (config validation already rejects them); an
+    empty or all-unknown set yields ``""`` so the tray hides the hint rather than
+    showing an empty chord.
     """
     names = [name.lower() for name in modifiers]
     if platform == "darwin":
         glyphs = {_MAC_GLYPHS[name] for name in names if name in _MAC_GLYPHS}
-        return "".join(glyph for glyph in _MAC_GLYPH_ORDER if glyph in glyphs)
+        ordered = "".join(glyph for glyph in _MAC_GLYPH_ORDER if glyph in glyphs)
+        mouse = "".join(_MOUSE_LABELS[name] for name in names if name in _MOUSE_LABELS)
+        return ordered + mouse
     return "+".join(_WORD_NAMES[name] for name in names if name in _WORD_NAMES)
 
 

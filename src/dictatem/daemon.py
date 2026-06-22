@@ -27,7 +27,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from dictatem.audio.buffer import AudioBuffer
-    from dictatem.hotkey.classifier import HotkeyClassifier, HotkeyEvent, Key, KeyAction
+    from dictatem.hotkey.classifier import (
+        HookDecision,
+        HotkeyClassifier,
+        HotkeyEvent,
+        Key,
+        KeyAction,
+    )
     from dictatem.interfaces import (
         AudioCapture,
         AutostartRegistrar,
@@ -120,11 +126,22 @@ class _OverlayAdapter:
 class _HotkeyBridge:
     """Maps HotkeyClassifier events to StateMachine events and forwards them.
 
-    The OS keyboard hook runs on a separate thread; Qt widget operations
-    must run on the GUI thread.  ``enqueue_key_event`` is the thread-safe
-    entry point for the hook thread, and ``tick`` (driven by a Qt timer on
-    the GUI thread) drains the queue and runs all classifier + dispatch
-    logic single-threaded.
+    The keyboard and mouse hooks each run on their own OS thread, but a mouse
+    button can share one Hotkey Combo with keyboard modifiers (``ctrl+mouse4``,
+    ADR-0020), so both must feed **one** classifier. The classifier is advanced
+    *eagerly* on whichever hook thread delivered the event (under ``_lock``, so
+    the two threads never mutate it concurrently) and the resulting state-machine
+    work is *deferred* to a thread-safe queue. ``tick`` — driven by a Qt timer on
+    the GUI thread — drains that queue and invokes the callback, so every Qt
+    widget touch happens on the GUI thread. Keyboard timing is unchanged: the
+    callback still fires on the tick, not on the hook thread.
+
+    Why eager advancement: the mouse hook needs the suppress/pass-through
+    decision *synchronously* (a low-level hook can only swallow an event from its
+    proc on the hook thread). For ``ctrl+mouse4`` that decision depends on
+    whether Ctrl is currently held, so the classifier must already reflect the
+    keyboard state when the mouse event arrives — hence both hooks advance it the
+    moment their event lands, not lazily on the next tick.
     """
 
     def __init__(
@@ -136,56 +153,122 @@ class _HotkeyBridge:
         self._classifier = classifier
         self._callback = callback
         self._combo_active = False
-        self._queue: queue.Queue[tuple[Key, KeyAction, int]] = queue.Queue()
+        self._lock = threading.Lock()
+        # Deferred state-machine work, produced under ``_lock`` on hook threads
+        # and drained on the GUI thread by ``tick`` — never touch Qt off-thread.
+        self._actions: queue.Queue[tuple[Event, int]] = queue.Queue()
 
     def enqueue_key_event(
         self, key: Key, action: KeyAction, timestamp_ms: int
     ) -> None:
-        """Thread-safe entry point invoked from the keyboard hook thread."""
-        self._queue.put((key, action, timestamp_ms))
+        """Thread-safe entry point invoked from the keyboard hook thread.
 
-    def on_key_event(self, key: Key, action: KeyAction, timestamp_ms: int) -> object:
+        Keyboard keys are never suppressed (the classifier's decision is ignored
+        here, exactly as before), so this advances the classifier and defers the
+        resulting state-machine work to the next ``tick``.
+        """
+        self._advance_and_defer(key, action, timestamp_ms)
+
+    def process_mouse_event(
+        self, key: Key, action: KeyAction, timestamp_ms: int
+    ) -> HookDecision:
+        """Thread-safe entry point invoked from the mouse hook thread.
+
+        Returns the classifier's per-event ``HookDecision`` synchronously so the
+        hook proc can swallow a trigger-button event (ADR-0020); the resulting
+        state-machine work is deferred to the next ``tick`` like the keyboard.
+        """
+        return self._advance_and_defer(key, action, timestamp_ms)
+
+    def _advance_and_defer(
+        self, key: Key, action: KeyAction, timestamp_ms: int
+    ) -> HookDecision:
+        with self._lock:
+            decision, actions = self._advance_locked(key, action, timestamp_ms)
+            for sm_event in actions:
+                self._actions.put(sm_event)
+        return decision
+
+    def on_key_event(
+        self, key: Key, action: KeyAction, timestamp_ms: int
+    ) -> HookDecision:
+        """Advance the classifier and dispatch synchronously.
+
+        The synchronous sibling of ``enqueue_key_event`` — used where the caller
+        is already on the dispatch thread (the tests) — so it advances and fires
+        the callback in one call rather than deferring to ``tick``.
+        """
+        with self._lock:
+            decision, actions = self._advance_locked(key, action, timestamp_ms)
+        for sm_event, ts in actions:
+            self._callback(sm_event, now_ms=ts)
+        return decision
+
+    def _advance_locked(
+        self, key: Key, action: KeyAction, timestamp_ms: int
+    ) -> tuple[HookDecision, list[tuple[Event, int]]]:
+        """Advance the classifier and return ``(decision, state-machine work)``.
+
+        Pure bookkeeping — never calls the callback — so callers choose whether
+        to dispatch now or defer. Must be called with ``_lock`` held.
+        """
         decision, event = self._classifier.process_event(key, action, timestamp_ms)
         is_combo = self._classifier.combo_held
+        actions: list[tuple[Event, int]] = []
 
         if not self._combo_active and is_combo:
             self._combo_active = True
-            self._callback(Event.KEY_DOWN, now_ms=timestamp_ms)
+            actions.append((Event.KEY_DOWN, timestamp_ms))
 
         if event is not None:
-            self._dispatch_event(event, timestamp_ms)
+            actions.extend(self._event_to_actions(event, timestamp_ms))
 
         if self._combo_active and not is_combo and event is None:
             self._combo_active = False
 
-        return decision
+        return decision, actions
 
     def tick(self, timestamp_ms: int) -> None:
+        # Advance time for HOLD_START detection under the lock, then dispatch all
+        # pending work on this (GUI) thread: the deferred input-driven actions
+        # first (FIFO), then any HOLD action this tick produced.
+        with self._lock:
+            event = self._classifier.tick(timestamp_ms)
+            hold_actions = self._event_to_actions(event, timestamp_ms)
+
         while True:
             try:
-                key, action, ev_ts = self._queue.get_nowait()
+                sm_event, ts = self._actions.get_nowait()
             except queue.Empty:
                 break
-            self.on_key_event(key, action, ev_ts)
+            self._callback(sm_event, now_ms=ts)
 
-        event = self._classifier.tick(timestamp_ms)
-        if event is not None:
-            self._dispatch_event(event, timestamp_ms)
+        for sm_event, ts in hold_actions:
+            self._callback(sm_event, now_ms=ts)
 
-    def _dispatch_event(self, event: HotkeyEvent, timestamp_ms: int) -> None:
+    def _event_to_actions(
+        self, event: HotkeyEvent | None, timestamp_ms: int
+    ) -> list[tuple[Event, int]]:
+        """Translate a classifier ``HotkeyEvent`` into state-machine work.
+
+        Owns the ``_combo_active`` resets that used to live in ``_dispatch_event``
+        so all of that state is mutated under ``_lock`` by the ``_advance_locked``
+        / ``tick`` callers. Must be called with ``_lock`` held.
+        """
         from dictatem.hotkey.classifier import HotkeyEvent
 
-        if event == HotkeyEvent.TAP:
-            self._callback(Event.KEY_UP, now_ms=timestamp_ms)
+        if event is HotkeyEvent.TAP:
             self._combo_active = False
-        elif event == HotkeyEvent.HOLD_START:
-            self._callback(Event.TIMER_EXPIRED, now_ms=timestamp_ms)
-        elif event == HotkeyEvent.HOLD_END:
-            self._callback(Event.KEY_UP, now_ms=timestamp_ms)
+            return [(Event.KEY_UP, timestamp_ms)]
+        if event is HotkeyEvent.HOLD_START:
+            return [(Event.TIMER_EXPIRED, timestamp_ms)]
+        if event is HotkeyEvent.HOLD_END:
             self._combo_active = False
-        elif event == HotkeyEvent.ESC:
-            self._callback(Event.ESC, now_ms=timestamp_ms)
+            return [(Event.KEY_UP, timestamp_ms)]
+        if event is HotkeyEvent.ESC:
             self._combo_active = False
+            return [(Event.ESC, timestamp_ms)]
+        return []
 
 
 class _TrayAdapter:
@@ -1289,6 +1372,13 @@ class _PlatformAdapters:
     the lifetime of the event loop). ``None`` means the platform has no
     global-hotkey adapter — recording then runs from the tray menu only.
 
+    ``install_mouse_hook`` is its mouse counterpart (ADR-0020): it receives the
+    thread-safe mouse-event handler — which, unlike the keyboard handler, returns
+    a ``HookDecision`` so the hook can suppress a trigger button — installs the
+    platform mouse hook, and returns it. It feeds the *same* classifier as the
+    keyboard hook so a mouse button can share a combo with modifiers. ``None``
+    means the platform has no mouse-trigger adapter yet (macOS: #121).
+
     ``check_permissions`` probes the platform's manually-granted permissions
     once at startup and returns the guidance to show (#57 / ADR-0014) — empty
     means all granted, show nothing. ``None`` means the platform has no guided
@@ -1303,6 +1393,9 @@ class _PlatformAdapters:
     foreground: ForegroundTracker | None
     install_keyboard_hook: (
         Callable[[Callable[[Key, KeyAction, int], None]], object] | None
+    )
+    install_mouse_hook: (
+        Callable[[Callable[[Key, KeyAction, int], HookDecision]], object] | None
     )
     check_permissions: Callable[[], tuple[PermissionGuidance, ...]] | None
 
@@ -1712,10 +1805,15 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         )
         classifier.set_active(True)
         bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
-        # The returned hook must outlive this scope (on Windows its ctypes
-        # callback would otherwise be collected); app.exec() below keeps the
-        # reference alive until the daemon exits.
+        # The returned hook(s) must outlive this scope (on Windows their ctypes
+        # callbacks would otherwise be collected); app.exec() below keeps the
+        # references alive until the daemon exits.
         _hook = adapters.install_keyboard_hook(bridge.enqueue_key_event)
+        # The mouse hook (ADR-0020) feeds the SAME bridge/classifier so a mouse
+        # button can complete a combo alongside keyboard modifiers; it returns a
+        # HookDecision so the hook can suppress a trigger button.
+        if adapters.install_mouse_hook is not None:
+            _mouse_hook = adapters.install_mouse_hook(bridge.process_mouse_event)
         # Tell the user what to press, derived from the live config and formatted
         # for this platform (#104). Only when a hook is live — advertising a
         # hotkey the platform can't fire would mislead.
@@ -1844,12 +1942,20 @@ def _start_windows_daemon() -> None:
     """Build the Windows adapter set (lazy imports) and run the daemon."""
     from dictatem.hardware.nvidia_probe import NvidiaHardwareProbe
     from dictatem.hotkey.wh_keyboard_ll import WHKeyboardLLHook
+    from dictatem.hotkey.wh_mouse_ll import WHMouseLLHook
     from dictatem.paste.win32_clipboard import Win32ClipboardIO
     from dictatem.paste.win32_foreground import Win32ForegroundTracker
     from dictatem.paste.win32_keystroke import Win32KeystrokeSender
 
     def _install_hook(handler: Callable[[Key, KeyAction, int], None]) -> object:
         hook = WHKeyboardLLHook(handler)
+        hook.install()
+        return hook
+
+    def _install_mouse_hook(
+        handler: Callable[[Key, KeyAction, int], HookDecision],
+    ) -> object:
+        hook = WHMouseLLHook(handler)
         hook.install()
         return hook
 
@@ -1861,6 +1967,7 @@ def _start_windows_daemon() -> None:
             keystroke=Win32KeystrokeSender(),
             foreground=Win32ForegroundTracker(),
             install_keyboard_hook=_install_hook,
+            install_mouse_hook=_install_mouse_hook,
             check_permissions=None,
         )
     )
@@ -1937,6 +2044,8 @@ def _start_macos_daemon() -> None:
             keystroke=MacKeystrokeSender(),
             foreground=MacForegroundTracker(),
             install_keyboard_hook=_install_hook,
+            # macOS mouse-trigger hook (CGEventTap otherMouse*) is #121 (S9).
+            install_mouse_hook=None,
             check_permissions=check_permissions,
         )
     )

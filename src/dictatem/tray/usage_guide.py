@@ -109,6 +109,8 @@ def _changing_hotkey_section(modifiers: tuple[str, ...], platform: str) -> str:
         "<p>Use one on its own (e.g. <code>[\"mouse4\"]</code>) or combine several "
         "(e.g. <code>[\"ctrl\", \"alt\"]</code>). Any other name is ignored and the "
         "default is kept.</p>"
+        "<p><i>Heads up: some mice only report a click, not a held press. On those, "
+        "a mouse-button trigger taps to toggle but can't hold-to-talk.</i></p>"
     )
 
 

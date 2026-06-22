@@ -49,6 +49,33 @@ class TestFormatHotkeyMacOS:
         assert format_hotkey(("meta",), platform="darwin") == "⌘"
 
 
+class TestFormatHotkeyMouseButtons:
+    """Mouse buttons are trigger inputs too (ADR-0020) — they must render a real
+    label, not a blank chord, when used standalone or combined."""
+
+    def test_standalone_mouse4_windows(self) -> None:
+        assert format_hotkey(("mouse4",), platform="win32") == "Mouse4"
+
+    def test_standalone_mouse5_windows(self) -> None:
+        assert format_hotkey(("mouse5",), platform="win32") == "Mouse5"
+
+    def test_standalone_middle_windows(self) -> None:
+        assert format_hotkey(("middle",), platform="win32") == "Middle"
+
+    def test_combined_ctrl_mouse4_windows(self) -> None:
+        assert format_hotkey(("ctrl", "mouse4"), platform="win32") == "Ctrl+Mouse4"
+
+    def test_standalone_mouse4_macos(self) -> None:
+        # No glyph for a mouse button; it keeps its word label.
+        assert format_hotkey(("mouse4",), platform="darwin") == "Mouse4"
+
+    def test_combined_ctrl_mouse4_macos_appends_after_glyphs(self) -> None:
+        assert format_hotkey(("ctrl", "mouse4"), platform="darwin") == "⌃Mouse4"
+
+    def test_label_states_standalone_mouse_button(self) -> None:
+        assert hotkey_hint_label(("mouse4",), platform="win32") == "Mouse4 to dictate"
+
+
 class TestFormatHotkeyEdgeCases:
     def test_empty_modifiers_is_empty_string(self) -> None:
         assert format_hotkey((), platform="win32") == ""
