@@ -24,39 +24,46 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Session 7 — Cold-start latency design grill (#101).** S6 (#120 Windows
-mouse hook) is **implemented and on PR #159** (open, CI running, awaiting the
-user's review/merge): the `WH_MOUSE_LL` adapter feeds the S2 classifier (#118,
-ADR-0020) so a mouse side button / wheel click arms dictation — standalone
-(`["mouse4"]`) or combined (`["ctrl","mouse4"]`), with conditional suppression of
-the button's normal action. The **physical click-QA PASSED on real hardware** (2026-06-22, Logitech MX Master
-3S): keyboard regression, default-inert mouse, standalone `["mouse4"]`
-(tap/hold/suppress), combined `["ctrl","mouse4"]` (bare passes through, Ctrl+
-suppresses + arms), and `["middle"]` all confirmed — evidence on #120,
-checklist [`qa-handoffs/05-windows-mouse-hook-qa.md`](qa-handoffs/05-windows-mouse-hook-qa.md).
-**#120 closes on PR #159 merge** — it's review-ready and CI-green. *(S4's #156/#157
-merged — #81/#90 should now be closed if not yet.)*
+**Next up: Session 7 — Cold-start latency design grill (#101).** S6 **landed**: the
+Windows `WH_MOUSE_LL` mouse hook (#120, ADR-0020) is **merged to `main`** (PR #159)
+and **physical click-QA passed** on real hardware (Logitech MX Master 3S) — a mouse
+side button / wheel click now arms dictation, standalone (`["mouse4"]`) or combined
+(`["ctrl","mouse4"]`), with the button's normal action conditionally suppressed.
+S1–S6 are done.
 
-**Settled in S6 — do not reopen:** both hooks now feed **one** classifier via an
-**eager-advance-under-lock + lazy-tick-dispatch** bridge, so a mouse button can
-complete a combo with keyboard modifiers and the mouse hook gets its
-suppress/pass-through decision synchronously; **keyboard timing is unchanged** (the
-old bridge tests still pass). The native hooks' shared latent items
-(`SetWindowsHookExW` restype, no `WM_QUIT` on `uninstall`, first-event handle
-race — all already in `wh_keyboard_ll`, benign in the working keyboard path) are a
-deliberate **out-of-scope "harden both hooks together" follow-up**, not a #120 bug.
+**Settled in S6 — do not reopen:** both the keyboard and mouse hooks feed **one**
+classifier via an **eager-advance-under-lock + lazy-tick-dispatch** bridge (so a
+mouse button can complete a combo with modifiers and the mouse hook gets its
+suppress/pass-through decision synchronously); **keyboard timing is unchanged**. The
+native hooks' shared latent items (`SetWindowsHookExW` restype, no `WM_QUIT` on
+`uninstall`, first-event handle race — all already in `wh_keyboard_ll`, benign in
+the working path) are a deliberate **out-of-scope "harden both hooks together"
+follow-up**, not a bug.
 
-This session is **code-free, parallel-safe, and the deepest real-user complaint**
-(the long first-transcribe wait + paste misfiring as focus drifts during the load).
-Produce a short ADR + spun-out issues: decide #97's approach (anchor-target-at-
-record-start vs detect-and-warn) and frame #96's overlay states + #67's docs. It
-unblocks **S8** (#96, #97). Read the **S7 row + per-session detail** below and
-follow the **grill-session handoff**.
+**This session is a code-free design grill (HITL), not an AFK build.** Cold-start
+latency is the **deepest real-user complaint**: the model takes seconds to
+cold-load on the first dictation, and focus can drift during that wait so the paste
+misfires. Read **#101** + the issues it frames, plus **ADR-0007** (the one-shot
+latency tip) and the README "Model loading & VRAM" section (shipped by #67), then
+grill the user to a decision and produce **a short ADR + spun-out implementation
+issues** (the **grill-session handoff**, not a PR). The calls to make:
+- **#97** — stop the paste misfiring when focus drifts during the load: anchor the
+  paste target at *record-start* vs. detect-and-warn. (This is what **S8** implements.)
+- **#96** — frame the overlay states (drop the dead red dot; encode state via
+  waveform colour) so S8 can build them.
+- The cold-start **docs** already shipped in **S3 (#67 — now CLOSED)** deliberately
+  factual, pending this design — if the outcome changes the story, spin a **new**
+  docs issue; **do not reopen #67.**
 
-Skills: `grill-with-docs`, `prototype`. Your role: **decisions-needed** — an HITL
-grill: you ask, challenge, draft the ADR + issues; the user makes the calls.
-**QA owed:** none for S6 (#120 physical click-QA **PASSED** 2026-06-22, MX Master
-3S). Carried-over: **#126** vocabulary recognition-lift (`qa-handoffs/02-vocabulary-recognition-qa.md`).
+This unblocks **S8** (#96, #97). The other open path, **S9 (macOS)**, waits for a
+real Mac.
+
+Skills: `grill-with-docs` (sharpen the decision against CONTEXT.md + the ADRs),
+`prototype` (only if a runnable spike clarifies a state/latency question). Your
+role: **decisions-needed** — you ask, challenge, draft the ADR + issues; the user
+makes the calls. **QA owed (carried-over only):** **#126** vocabulary
+recognition-lift — `qa-handoffs/02-vocabulary-recognition-qa.md` (real-model run on
+Windows; foldable into any future Windows session).
 
 ---
 
@@ -123,10 +130,10 @@ session · **M** ≈ one focused session · **L** ≈ may span more than one.
 | ~~**S1**~~ | ~~Triage & close-out~~ | AFK | S | ✅ #82 #83 #34 #51 — closed | `triage` | done 2026-06-11 |
 | ~~**S2**~~ | ~~Pure-logic feature cores~~ | AFK | M | ✅ PR #133 (#118) · PR #134 (#125 #126) | `tdd`, `code-review` | done 2026-06-11 |
 | **S3** | Docs & discoverability | AFK | S–M | #67 #127 #122 #123 | `run`/`verify`, `code-review` | — |
-| **S4** | CI keystone + install hardening | AFK | M | #81 #90 ~~#92~~ | `code-review`, `diagnose` | PRs #156/#157 green — awaiting merge |
+| **S4** | CI keystone + install hardening | AFK | M | #81 #90 ~~#92~~ | `code-review`, `diagnose` | done 2026-06-22 (#156/#157 merged) |
 | ~~**S5**~~ | ~~Clutter-proof clipboard + last-dictation recovery~~ | AFK | M | ✅ PR #141 (#138) · #142 (#119) · #146 (#139) — merged | `tdd`, `run`/`verify`, `code-review` | done 2026-06-14; Win QA PASS |
-| **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | PR #159 — QA PASS |
-| **S7** | Cold-start latency **design** | Grill | — | #101 (frames #97 #96 #67) | `grill-with-docs`, `prototype` | — *(parallel-safe)* |
+| **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | done 2026-06-22 (PR #159, QA PASS) |
+| **S7** | Cold-start latency **design** | Grill | — | #101 (frames #97 #96; #67 docs done) | `grill-with-docs`, `prototype` | — *(parallel-safe)* |
 | **S8** | Overlay & focus UX | AFK | M | #96 #97 | `run`/`verify`, `code-review` | S7 |
 | **S9** | macOS QA & polish | Manual-QA + AFK | L | #121 #95 #94 #93 | `verify`/`run`, `tdd`, `diagnose` | S2 (#118), S4 |
 | **S10** | Signing decision | Grill | — | #91 | `grill-me` | user spend call |
@@ -179,8 +186,10 @@ copy, and "paste" recovery.
 
 **S7 — Cold-start latency design (grill).** #101 grilling session → a short ADR +
 spun-out implementation issues; decide #97's approach (anchor-target-at-record-
-start vs detect-and-warn) and frame #96's overlay states + #67's docs. Code-free.
-Follows the **grill-session handoff**.
+start vs detect-and-warn) and frame #96's overlay states. Code-free. Follows the
+**grill-session handoff**. (#67's model-loading docs already shipped in S3 and is
+**closed** — if this design changes the story, spin a *new* docs issue rather than
+reopening #67.)
 
 **S8 — Overlay & focus UX.** #96 remove the non-interactive red dot → encode state
 via waveform colour; #97 anchor the paste target (per S7's decision). *QA:*
@@ -352,10 +361,10 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
   when a combo breaks) were traced and **refuted** (`classifier.tick` gates on live
   `combo_held`/`_combo_pressed_at`; the "combo breaks with event=None" reset is the
   pre-existing path and unreachable when a held combo breaks).
-- **Issues:** **#120 — implemented + physical-QA PASS; closes on PR #159 merge.**
-  Opened: none. *(Also: S4's #156/#157 merged — close #81/#90 if not done.)*
-- **PRs:** **#159** (#120) — **open, awaiting review/merge**; CI matrix running
-  (win+mac × 3.11–3.13). Full suite **1054 passed, 4 skipped** locally (+29);
+- **Issues:** **#120 — implemented + physical-QA PASS; CLOSED on PR #159 merge
+  (2026-06-22).** Opened: none. *(S4's #156/#157 merged; #81/#90 closed.)*
+- **PRs:** **#159** (#120) — **merged to `main`** 2026-06-22 (all 6 CI legs green,
+  win+mac × 3.11–3.13). Full suite **1054 passed, 4 skipped** locally (+29);
   `ruff` clean, `pyright` 0 errors. `/code-review` (high, 5 finder angles) run —
   fixed two cleanups (hoisted the `HotkeyEvent` import out from under the bridge
   lock; deduped `_MOUSE_LABELS` into `_WORD_NAMES`); the native-plumbing
