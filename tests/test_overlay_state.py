@@ -8,11 +8,10 @@ import sys
 import pytest
 
 from dictatem.overlay.state import (
-    Color,
-    DotStyle,
     MonitorRect,
     OverlayPhase,
     OverlayState,
+    PillColor,
     Point,
     WaveformFrame,
 )
@@ -81,51 +80,95 @@ class TestFadeIn:
         assert state.phase == OverlayPhase.RECORDING
 
 
-class TestDotColor:
-    def test_red_during_recording(
+class TestPillColor:
+    """Recording phase is encoded by pill COLOUR, not a dot (#96 / ADR-0026).
+
+    The Status Dot is retired; ``current_color()`` is the phase→colour mapping
+    the Qt widget renders (the exact hues are an implementer call).
+    """
+
+    def test_accent_during_recording(
         self, state: OverlayState, clock: FakeClock
     ) -> None:
         state.show_recording(RecordingMode.PTT)
         clock.advance_ms(100)
         state.tick()
-        assert state.current_dot_color() == Color.RED
+        assert state.current_color() == PillColor.ACCENT
 
-    def test_amber_during_transcribing(
+    def test_accent_during_fade_in(self, state: OverlayState) -> None:
+        state.show_recording(RecordingMode.PTT)
+        assert state.current_color() == PillColor.ACCENT
+
+    def test_processing_during_transcribing(
         self, state: OverlayState, clock: FakeClock
     ) -> None:
         state.show_recording(RecordingMode.PTT)
         clock.advance_ms(100)
         state.tick()
         state.show_transcribing()
-        assert state.current_dot_color() == Color.AMBER
+        assert state.current_color() == PillColor.PROCESSING
 
-    def test_red_during_fade_in(self, state: OverlayState) -> None:
+    def test_computing_is_distinct_from_transcribing(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        # A Transform computing reads as a DISTINCT colour from transcribing
+        # (#96): both are "processing" phases but the user gets different hues.
         state.show_recording(RecordingMode.PTT)
-        assert state.current_dot_color() == Color.RED
+        clock.advance_ms(100)
+        state.tick()
+        state.show_computing()
+        assert state.current_color() == PillColor.COMPUTING
+        assert PillColor.COMPUTING != PillColor.PROCESSING
 
-
-class TestDotStyle:
-    def test_outline_for_ptt(
+    def test_error_colour_during_error_flash(
         self, state: OverlayState, clock: FakeClock
     ) -> None:
         state.show_recording(RecordingMode.PTT)
         clock.advance_ms(100)
         state.tick()
-        assert state.current_dot_style() == DotStyle.OUTLINE
+        state.flash_error()
+        assert state.current_color() == PillColor.ERROR
 
-    def test_filled_for_toggle(
+
+class TestNoDotApi:
+    """The retired Status Dot's API is gone (#96 / ADR-0026)."""
+
+    def test_dot_color_method_removed(self, state: OverlayState) -> None:
+        assert not hasattr(state, "current_dot_color")
+
+    def test_dot_style_method_removed(self, state: OverlayState) -> None:
+        assert not hasattr(state, "current_dot_style")
+
+
+class TestComputing:
+    """show_computing() drives the Transform/Trigger-Fire 'computing' phase.
+
+    A warm LLM generating is a tinted processing indicator by COLOUR (ADR-0026)
+    — not the old 'LLM Model Computing' text caption (which was a LOADING state).
+    """
+
+    def test_show_computing_enters_computing_phase(self, state: OverlayState) -> None:
+        state.show_computing()
+        assert state.phase == OverlayPhase.COMPUTING
+
+    def test_opacity_one_during_computing(self, state: OverlayState) -> None:
+        state.show_computing()
+        assert state.current_opacity() == 1.0
+
+    def test_computing_is_held_across_ticks(
         self, state: OverlayState, clock: FakeClock
     ) -> None:
-        state.show_recording(RecordingMode.TOGGLE)
-        clock.advance_ms(100)
+        # Like LOADING/TRANSCRIBING, COMPUTING never auto-transitions: the daemon
+        # hides it once the Transform result lands.
+        state.show_computing()
+        clock.advance_ms(5000)
         state.tick()
-        assert state.current_dot_style() == DotStyle.FILLED
+        assert state.phase == OverlayPhase.COMPUTING
 
-    def test_style_during_fade_in_reflects_mode(
-        self, state: OverlayState
-    ) -> None:
-        state.show_recording(RecordingMode.TOGGLE)
-        assert state.current_dot_style() == DotStyle.FILLED
+    def test_hide_leaves_computing(self, state: OverlayState) -> None:
+        state.show_computing()
+        state.hide()
+        assert state.phase == OverlayPhase.FADING_OUT
 
 
 class TestWaveformFrame:
@@ -324,15 +367,6 @@ class TestFlashError:
         state.tick()
         state.flash_error()
         assert state.phase == OverlayPhase.ERROR_FLASH
-
-    def test_dot_color_red_during_error_flash(
-        self, state: OverlayState, clock: FakeClock
-    ) -> None:
-        state.show_recording(RecordingMode.PTT)
-        clock.advance_ms(100)
-        state.tick()
-        state.flash_error()
-        assert state.current_dot_color() == Color.RED
 
     def test_opacity_one_during_error_flash(
         self, state: OverlayState, clock: FakeClock

@@ -218,12 +218,15 @@ The transient, **informational** floating indicator shown in a corner of the
 active monitor while dictation is active. It is the user's primary at-a-glance
 feedback during a recording and carries **no interactive control** — it is
 click-through; a recording is stopped with [Esc](#hold) or a toggle [Tap](#tap),
-not by clicking the pill.
+not by clicking the pill. It also **never takes focus or steals activation** when
+shown, so raising it never deactivates the user's window or caret — the property
+that lets it stay purely informational (it is *because* the pill grabs no focus
+that no clickable stop control is offered).
 
 The pill encodes recording **phase by colour**: a live waveform in the accent
-colour while recording, and a tinted processing indicator while transcribing and
-while a [Transform](#transform) computes. (This replaces the former
-[Status Dot](#status-dot); see
+colour while recording, a distinct processing colour while transcribing, and a
+*further* distinct colour while a [Transform](#transform) computes (a warm LLM
+generating). (This replaces the former [Status Dot](#status-dot); see
 [ADR-0026](docs/adr/0026-focus-drift-holds-the-dictation-overlay-shows-phase-by-colour.md).)
 
 While a model is still loading or downloading — the first dictation's Whisper
@@ -232,8 +235,10 @@ the one-time first-run model **download** — the pill instead shows a text capt
 naming what is happening ("Loading Dict. Model", "Loading LLM Model", "Preloading
 Models", or "Downloading model…") with dots cycling 1→2→3 and no waveform,
 flipping to the recording-phase colour once the model is resident. When the LLM is
-already resident, a [Trigger Word](#trigger-word) instead shows "LLM Model
-Computing" while it generates — the same pill with an accurate verb. See
+already resident, a [Trigger Word](#trigger-word) instead shows the **computing
+colour** while it generates (no caption — a warm generation is a *phase*, not a
+load; ADR-0026 refines ADR-0016's former "LLM Model Computing" caption to a
+colour). See
 [ADR-0016](docs/adr/0016-overlay-pill-model-loading-state.md) and
 [ADR-0025](docs/adr/0025-cold-start-load-on-arm-fetch-on-first-run.md).
 

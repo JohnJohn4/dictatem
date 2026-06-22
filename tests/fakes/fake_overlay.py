@@ -37,6 +37,10 @@ class FakeOverlayRenderer:
         self.state = "transcribing"
         self.calls.append(("show_transcribing",))
 
+    def show_computing(self) -> None:
+        self.state = "computing"
+        self.calls.append(("show_computing",))
+
     def show_error(self) -> None:
         self.state = "error"
         self.calls.append(("show_error",))

@@ -303,6 +303,13 @@ class OverlayRenderer(Protocol):
         """Transition the overlay to the 'transcribing' visual state."""
         ...
 
+    def show_computing(self) -> None:
+        """Transition the overlay to the 'computing' visual state — a warm
+        Transform/Trigger Fire generating, shown as a distinct processing colour
+        (#96 / ADR-0026). A model *load* still uses :meth:`show_loading` (a text
+        caption); this is the resident-and-generating case."""
+        ...
+
     def show_error(self) -> None:
         """Flash the overlay to indicate an error (e.g. empty result)."""
         ...

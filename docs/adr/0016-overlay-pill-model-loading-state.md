@@ -1,5 +1,11 @@
 # The Overlay Pill shows a Model-Loading state while a model loads
 
+> **Refined by [ADR-0026](0026-focus-drift-holds-the-dictation-overlay-shows-phase-by-colour.md)
+> (#96):** recording **phase** moved off the Status Dot onto the pill **colour**,
+> and the warm-LLM "LLM Model Computing" *caption* below became a distinct pill
+> **colour** (a generation is a phase, not a load). The model-*loading* and
+> *downloading* **captions** described here are unchanged.
+
 The first dictation of a session pays a cold model load — Whisper into VRAM
 (seconds) and, on the first [Trigger Word](../../CONTEXT.md#trigger-word), the
 Ollama [Transform](../../CONTEXT.md#transform) model (a large tag like the former
