@@ -91,8 +91,13 @@ focused, or the focused control was not a text field), so it carries no
 the **`paste`** [Trigger Word](#trigger-word) and the [Tray Icon](#tray-icon)
 "Copy last dictation" item recover, which is how Dictatem guarantees a dictation
 is **never lost**: if text lands nowhere, focus where it should go and say
-"paste" (or copy it from the tray). See
-[ADR-0023](docs/adr/0023-dictation-is-never-lost-clipboard-fallback.md).
+"paste" (or copy it from the tray). It is also where a regular dictation is **held
+instead of pasted** when the foreground **identity changed between record-start
+and paste** — i.e. focus drifted during a load wait: rather than mispaste into the
+wrong window, Dictatem keeps the text here with a quiet flash, and the same
+recovery applies. See
+[ADR-0023](docs/adr/0023-dictation-is-never-lost-clipboard-fallback.md) and
+[ADR-0026](docs/adr/0026-focus-drift-holds-the-dictation-overlay-shows-phase-by-colour.md).
 
 ### Trigger Word
 
@@ -209,27 +214,38 @@ the regular-dictation path. See
 
 ### Overlay Pill
 
-The transient floating indicator shown in a corner of the active monitor
-while dictation is active. It carries the [Status Dot](#status-dot) and a
-live waveform. It is the user's primary at-a-glance feedback during a
-recording.
+The transient, **informational** floating indicator shown in a corner of the
+active monitor while dictation is active. It is the user's primary at-a-glance
+feedback during a recording and carries **no interactive control** — it is
+click-through; a recording is stopped with [Esc](#hold) or a toggle [Tap](#tap),
+not by clicking the pill.
 
-While a model is still loading — the first dictation's Whisper load, the first
-[Trigger Word](#trigger-word)'s LLM load, or a tray **Preload** — the pill
-instead shows a loading caption naming what is loading ("Loading Dict. Model",
-"Loading LLM Model", or "Preloading Models") with dots cycling 1→2→3 and no
-waveform, flipping to the [Status Dot](#status-dot) once the model is resident.
-When the LLM is already resident, a [Trigger Word](#trigger-word) instead shows
-"LLM Model Computing" while it generates — the same pill with an accurate verb.
-See [ADR-0016](docs/adr/0016-overlay-pill-model-loading-state.md).
+The pill encodes recording **phase by colour**: a live waveform in the accent
+colour while recording, and a tinted processing indicator while transcribing and
+while a [Transform](#transform) computes. (This replaces the former
+[Status Dot](#status-dot); see
+[ADR-0026](docs/adr/0026-focus-drift-holds-the-dictation-overlay-shows-phase-by-colour.md).)
+
+While a model is still loading or downloading — the first dictation's Whisper
+load, the first [Trigger Word](#trigger-word)'s LLM load, a tray **Preload**, or
+the one-time first-run model **download** — the pill instead shows a text caption
+naming what is happening ("Loading Dict. Model", "Loading LLM Model", "Preloading
+Models", or "Downloading model…") with dots cycling 1→2→3 and no waveform,
+flipping to the recording-phase colour once the model is resident. When the LLM is
+already resident, a [Trigger Word](#trigger-word) instead shows "LLM Model
+Computing" while it generates — the same pill with an accurate verb. See
+[ADR-0016](docs/adr/0016-overlay-pill-model-loading-state.md) and
+[ADR-0025](docs/adr/0025-cold-start-load-on-arm-fetch-on-first-run.md).
 
 ### Status Dot
 
-The dot on the [Overlay Pill](#overlay-pill) that signals recording phase
-(red while recording, amber while transcribing) and recording mode (an
-outline dot for a push-to-talk [Hold](#hold), a filled dot for a toggle
-[Tap](#tap)). The Status Dot is where Dictatem communicates recording
-**state**.
+**Retired.** The dot on the [Overlay Pill](#overlay-pill) formerly signalled
+recording phase (red recording / amber transcribing) and mode (an outline dot for
+a push-to-talk [Hold](#hold), a filled dot for a toggle [Tap](#tap)). It read as a
+stop *button* it was not, and competed with the waveform — so recording **phase**
+now lives in the pill's **colour**, the dot is removed, and the Tap/Hold **mode**
+cue is dropped (the user knows the gesture they just made). See
+[ADR-0026](docs/adr/0026-focus-drift-holds-the-dictation-overlay-shows-phase-by-colour.md).
 
 ### Tray Icon
 
