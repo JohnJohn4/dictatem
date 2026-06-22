@@ -24,10 +24,11 @@ _MAC_GLYPHS = {"win": "⌘", "meta": "⌘", "alt": "⌥", "ctrl": "⌃", "shift"
 # The order macOS renders modifier glyphs in, regardless of config order.
 _MAC_GLYPH_ORDER = ("⌃", "⌥", "⇧", "⌘")
 
-# Mouse buttons have no standard glyph, so they keep a word label on macOS too,
-# rendered after the modifier glyphs (e.g. ``⌃Mouse4``). At most one mouse button
-# is ever in a combo (ADR-0020), so no separator is needed between them.
-_MOUSE_LABELS = {"mouse4": "Mouse4", "mouse5": "Mouse5", "middle": "Middle"}
+# Mouse buttons have no standard glyph, so they keep their word label (from
+# ``_WORD_NAMES``, the single source of labels) on macOS too, rendered after the
+# modifier glyphs (e.g. ``⌃Mouse4``). At most one mouse button is ever in a combo
+# (ADR-0020), so no separator is needed between them.
+_MOUSE_NAMES = frozenset({"mouse4", "mouse5", "middle"})
 
 
 def format_hotkey(modifiers: tuple[str, ...], *, platform: str) -> str:
@@ -44,7 +45,7 @@ def format_hotkey(modifiers: tuple[str, ...], *, platform: str) -> str:
     if platform == "darwin":
         glyphs = {_MAC_GLYPHS[name] for name in names if name in _MAC_GLYPHS}
         ordered = "".join(glyph for glyph in _MAC_GLYPH_ORDER if glyph in glyphs)
-        mouse = "".join(_MOUSE_LABELS[name] for name in names if name in _MOUSE_LABELS)
+        mouse = "".join(_WORD_NAMES[name] for name in names if name in _MOUSE_NAMES)
         return ordered + mouse
     return "+".join(_WORD_NAMES[name] for name in names if name in _WORD_NAMES)
 

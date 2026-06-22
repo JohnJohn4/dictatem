@@ -17,6 +17,11 @@ from dictatem.exceptions import (
     TranscriptionFailedError,
     TransformFailedError,
 )
+
+# HotkeyEvent is a pure, light enum used by _HotkeyBridge on the hot
+# per-event/tick path, so it is imported eagerly rather than lazily under the
+# bridge lock (the heavier classifier types stay TYPE_CHECKING-only below).
+from dictatem.hotkey.classifier import HotkeyEvent
 from dictatem.state import Command, Event, State
 from dictatem.transform.detector import PASTE_ACTION, match_builtin_action
 from dictatem.transform.last_paste import LastPaste
@@ -30,7 +35,6 @@ if TYPE_CHECKING:
     from dictatem.hotkey.classifier import (
         HookDecision,
         HotkeyClassifier,
-        HotkeyEvent,
         Key,
         KeyAction,
     )
@@ -255,8 +259,6 @@ class _HotkeyBridge:
         so all of that state is mutated under ``_lock`` by the ``_advance_locked``
         / ``tick`` callers. Must be called with ``_lock`` held.
         """
-        from dictatem.hotkey.classifier import HotkeyEvent
-
         if event is HotkeyEvent.TAP:
             self._combo_active = False
             return [(Event.KEY_UP, timestamp_ms)]
