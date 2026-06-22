@@ -31,6 +31,7 @@ from tests.fakes import (
     FakeTranscriberBackend,
     FakeTrayRenderer,
 )
+from tests.support import wait_until
 
 
 @pytest.fixture
@@ -339,7 +340,13 @@ class TestAudioCaptureError:
 
 
 class TestModelLoadError:
-    """AC: ModelLoadError → tray notify, ERROR log with traceback, daemon survives, retries."""
+    """AC: ModelLoadError → tray notify, ERROR log with traceback, daemon survives, retries.
+
+    Under load-on-arm (#161) the load is attempted on BOTH the record-start
+    preload thread and the transcribe worker. A persistent failure (CUDA
+    missing) must still surface to the user on the transcribe path; a transient
+    one is recovered within the same dictation by the transcribe retry.
+    """
 
     def test_model_load_error_notifies_and_logs(
         self,
@@ -349,7 +356,10 @@ class TestModelLoadError:
         sm: StateMachine,
         caplog: pytest.LogCaptureFixture,
     ) -> None:
-        backend.queue_load_error(ModelLoadError("CUDA missing"))
+        # A persistent failure: the record-start preload fails (swallowed +
+        # logged by the lifecycle) and the transcribe load fails too, surfacing
+        # to the user — deterministic regardless of which thread loads first.
+        backend.fail_load_always(ModelLoadError("CUDA missing"))
 
         with caplog.at_level(logging.ERROR, logger="dictatem.daemon"):
             _do_ptt_cycle(core)
@@ -360,21 +370,32 @@ class TestModelLoadError:
         assert any(r.exc_info is not None and r.exc_info[0] is not None for r in caplog.records)
         assert sm.state is State.IDLE
 
-    def test_retries_load_on_next_transcription(
+    def test_transient_load_failure_recovered_within_same_dictation(
         self,
         core: DaemonCore,
         backend: FakeTranscriberBackend,
+        lifecycle: TranscribeLifecycle,
         keystroke: FakeKeystrokeSender,
         sm: StateMachine,
     ) -> None:
+        # Hold the load open so the one-shot error is deterministically consumed
+        # by the record-start preload, not the transcribe worker. The preload
+        # fails (swallowed), then the dictation's own transcribe step retries
+        # the load and succeeds — the user's single dictation still lands.
+        backend.block_load()
         backend.queue_load_error(ModelLoadError("CUDA missing"))
-        _do_ptt_cycle(core)
-        assert sm.state is State.IDLE
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        wait_until(lambda: backend.load_count >= 1)  # preload entered load_model
+        backend.release_load()
+        wait_until(lambda: not lifecycle.is_loading)  # preload load failed + settled
 
-        _do_ptt_cycle(core)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=1500)
+        core.drain_transcription_for_test(now_ms=1500)
+
         assert sm.state is State.IDLE
-        assert keystroke.paste_count == 1
-        assert backend.load_count == 2
+        assert keystroke.paste_count == 1  # the retry within the dictation landed
+        assert backend.load_count == 2  # failed preload + successful transcribe
 
 
 class TestTopLevelErrorHandlers:

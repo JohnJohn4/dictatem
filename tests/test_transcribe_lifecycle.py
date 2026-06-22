@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import time
-
 import numpy as np
 import pytest
 
@@ -11,6 +9,7 @@ from dictatem.exceptions import GPUOutOfMemoryError, TranscriptionFailedError
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
 from dictatem.types import EmptyResult
 from tests.fakes import FakeTranscriberBackend
+from tests.support import wait_until
 
 AUDIO = np.zeros(16000, dtype=np.float32)
 
@@ -130,8 +129,7 @@ class TestPreload:
         lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
 
         lc.preload()
-        # Give the background thread time to complete
-        time.sleep(0.1)
+        wait_until(lambda: lc.is_loaded)
 
         assert backend.load_count == 1
         assert backend.is_loaded is True
@@ -141,7 +139,7 @@ class TestPreload:
         lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
 
         lc.preload()
-        time.sleep(0.1)
+        wait_until(lambda: lc.is_loaded)
 
         result = lc.transcribe(AUDIO)
         assert backend.load_count == 1
@@ -154,8 +152,7 @@ class TestPreload:
         lc.transcribe(AUDIO)
         assert backend.load_count == 1
 
-        lc.preload()
-        time.sleep(0.1)
+        lc.preload()  # already resident → synchronous no-op, no thread spawned
         assert backend.load_count == 1
 
     def test_is_loading_false_before_preload(self) -> None:
@@ -167,7 +164,7 @@ class TestPreload:
         backend = FakeTranscriberBackend()
         lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
         lc.preload()
-        time.sleep(0.1)
+        wait_until(lambda: lc.is_loaded)
         assert lc.is_loading is False
         assert lc.is_loaded is True
 
@@ -183,7 +180,7 @@ class TestPreload:
             backend=backend, clock=clock, idle_timeout_s=1800.0
         )
         lc.preload()
-        time.sleep(0.1)
+        wait_until(lambda: lc.is_loaded)
         assert lc.is_loaded is True
 
         current_time = 30 * 60

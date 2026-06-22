@@ -108,6 +108,18 @@ class TranscribeLifecycle:
             # eventually unloads it even if no transcription has run yet.
             if self._last_activity is None:
                 self._last_activity = self._clock()
+        except Exception:
+            # A background load (tray Preload or load-on-arm, #161) is
+            # best-effort: a failure must not surface as an unhandled thread
+            # exception. The model stays unloaded and the next transcribe
+            # re-attempts the load on the worker thread, where the failure is
+            # caught and surfaced to the user. A persistent failure (e.g. CUDA
+            # missing) is logged here once per attempt.
+            logger.warning(
+                "Background model load failed; the next transcription will "
+                "retry the load",
+                exc_info=True,
+            )
         finally:
             self._is_loading = False
 
