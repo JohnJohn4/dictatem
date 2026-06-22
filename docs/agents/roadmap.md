@@ -24,46 +24,45 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Session 8 — Cold-start latency implementation (#161, #162; docs #164).**
-S7 **landed** (design, code-free): the cold-start grill (#101) produced **ADR-0025**
-(the model loads on arm + is fetched on first run) and **ADR-0026** (focus drift
-holds the dictation; the overlay shows phase by colour), updated CONTEXT.md, and
-spun out seven issues. S1–S6 done; **S7 done**.
+**Next up: Session 9 — Overlay & focus UX (#96, #97, #163).**
+S8 **landed** (code complete; PRs open): **#161 load-on-arm** (PR **#167**) — the
+Whisper load starts at record-start, overlapping speech; **#162 first-run fetch**
+(PR **#168**, stacked on #161) — the tier model downloads to disk on first run so the
+first *dictation* works offline; **#164 docs** (PR **#169**) — README + Usage Guide
+refreshed. S1–S7 done; **S8 code done, PRs awaiting merge + Windows QA**. Merge order:
+**#167 → #168 → #169** (#168 is stacked on #167; #169 is docs-only off `main`). All
+three verified to merge into `main` with no conflicts (combined suite 1073 green).
 
-**Settled in S7 — do not reopen (the ADRs are the spec):**
-- **Load-on-arm** (#161): start the Whisper load at **record-start**, overlapping
-  speech (reuse `TranscribeLifecycle.preload()`); Esc lets the load finish (a
-  faster-whisper load can't be cancelled — ADR-0016); idle-unload (30 min) stays the
-  sole reaper. **Not** preload-on-launch by default.
-- **First-run fetch** (#162): download the tier model **to disk only** on the
-  daemon's first run (which the installer triggers), best-effort, lazy-fallback if
-  offline → the first *dictation* works offline. Lives in the **daemon** (only it
-  knows the exact tier). Signalled via tray notification + Usage Guide + a
-  "Downloading model…" pill caption. Cloud/BYO (#165) was **rejected as a cold-start
-  fix** and parked.
-- **#97 detect-and-hold** (S9): anchor `target_id` at record-start for **comparison
-  only**; changed target → hold in the Most-recent buffer + quiet flash, **no sound,
-  never refocus** (sidesteps the Mac `activateWithOptions_` fragility).
-- **#96 overlay** (S9): remove the dot; **pill colour carries phase**; purely
-  informational; drop the Tap/Hold cue. Plus **#163**: make the pill never steal
-  activation.
+**Settled in S7 — do not reopen (ADR-0026 is the spec):**
+- **#96 overlay** — remove the **Status Dot** (retired); the **pill colour carries
+  phase** (recording / transcribing / loading), purely informational; **drop the
+  Tap/Hold cue**. A clickable control would break click-through + reintroduce
+  focus-stealing (the ADR-0026 interlock with #163) — the pill stays non-interactive.
+- **#97 detect-and-hold** — anchor `target_id` at **record-start** for **comparison
+  only**; if the foreground target changed by paste time, **hold** the dictation in
+  the Most-recent buffer (#119) + a **quiet flash**, **no sound, never refocus**
+  (sidesteps the Mac `activateWithOptions_` fragility; *less* pushy than today's
+  per-paste `restore()`).
+- **#163** — make the [Overlay Pill](../../CONTEXT.md#overlay-pill) **never steal
+  activation** (a likely root-cause for "caret deactivates while talking"; fix at
+  source — it **complements**, not replaces, #97's detect-and-hold).
 
-**This session (S8) is AFK.** Implement **#161** (load-on-arm) and **#162**
-(first-run fetch + its honest signalling) per **ADR-0025**, then **#164** (docs
-refresh — README "Model loading & VRAM" + Usage Guide; **supersedes #67's framing —
-do not reopen #67**). Keep the lifecycle / gating logic **pure + unit-tested**;
-daemon, install, and native wiring **thin** (the architecture seam). #161 and #162
-are mostly file-disjoint → candidates for two parallel worktree agents (commit
-first). Run `/code-review` before each PR; PRs target `main`.
-
-**Then S9 — Overlay & focus UX** (#96, #97, #163) per **ADR-0026**.
+**This session (S9) is AFK.** Implement **#96**, **#97**, **#163** per **ADR-0026**.
+Keep the decision logic **pure + unit-tested** (the target-changed / no-target
+comparison; the phase→colour mapping on `OverlayState`) and the Qt pill widget +
+win32/mac activation wiring **thin** (the architecture seam — manual-QA). #96 and
+#163 both touch the pill (one combined slice, or carefully file-disjoint); #97 is the
+paste-rail comparison. Run `/code-review` before each PR; PRs target `main`.
 
 Skills: `tdd`, `run`/`verify`, `code-review`, `diagnose`. Your role: **autonomous**.
-**QA tail (S8):** a Windows **offline first-dictation** check (install online →
-disconnect the network → first dictation still works) + a load-overlaps-speech
-eyeball — run it on Windows or **export a QA handoff**. **QA owed (carried over):**
-**#126** vocabulary recognition-lift — `qa-handoffs/02-vocabulary-recognition-qa.md`
-(real-model run on Windows).
+**QA tail (S9):** Windows **overlay** (pill colour reads recording/transcribing/
+loading; no dot; the pill never steals focus while you click around) + **focus-drift**
+(start a dictation, click into another window before it lands → held in the
+Most-recent buffer with a quiet flash, no sound, no refocus) — run on Windows or
+**export a QA handoff**. **QA owed (carried in):** **S8 cold-start** —
+`qa-handoffs/06-s8-cold-start-qa.md` (offline first-dictation + load-overlaps-speech;
+**needs the S8 PRs merged first**); **#126** vocabulary recognition-lift —
+`qa-handoffs/02-vocabulary-recognition-qa.md` (real-model run on Windows).
 
 ---
 
@@ -134,7 +133,7 @@ session · **M** ≈ one focused session · **L** ≈ may span more than one.
 | ~~**S5**~~ | ~~Clutter-proof clipboard + last-dictation recovery~~ | AFK | M | ✅ PR #141 (#138) · #142 (#119) · #146 (#139) — merged | `tdd`, `run`/`verify`, `code-review` | done 2026-06-14; Win QA PASS |
 | **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | done 2026-06-22 (PR #159, QA PASS) |
 | ~~**S7**~~ | ~~Cold-start latency **design**~~ | Grill | — | ✅ #101 → ADR-0025/0026; spun #161 #162 #163 #164 #165 (#96/#97 re-scoped) | `grill-with-docs` | done 2026-06-22 |
-| **S8** | Cold-start latency **implementation** | AFK | M | #161 #162 #164 | `tdd`, `run`/`verify`, `code-review` | S7 |
+| **S8** | Cold-start latency **implementation** | AFK | M | #161 #162 #164 | `tdd`, `run`/`verify`, `code-review` | done 2026-06-22 (PRs #167/#168/#169 open; Win QA owed) |
 | **S9** | Overlay & focus UX | AFK | M | #96 #97 #163 | `run`/`verify`, `code-review` | S7 |
 | **S10** | macOS QA & polish | Manual-QA + AFK | L | #121 #95 #94 #93 | `verify`/`run`, `tdd`, `diagnose` | S2 (#118), S4 |
 | **S11** | Signing decision | Grill | — | #91 | `grill-me` | user spend call |
@@ -349,6 +348,61 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### S8 — Cold-start latency implementation — 2026-06-22
+- **Shipped:** three PRs implementing **ADR-0025**. **#161 load-on-arm** (PR **#167**):
+  `_do_record_start` kicks the existing background `TranscribeLifecycle.preload()`, so
+  the Whisper load starts at record-start and overlaps speech (strictly dominates
+  lazy-at-transcribe — the load can only ever start *earlier*). Esc leaves the
+  in-flight load running (a faster-whisper load can't be cancelled — ADR-0016);
+  idle-unload stays the sole reaper. `_background_load` now swallows+logs a load
+  failure instead of leaking an unhandled thread exception (the transcribe path still
+  surfaces a *persistent* failure and retries a *transient* one within the dictation).
+  **#162 first-run fetch** (PR **#168**, stacked on #161): new
+  `TranscriberBackend.download_to_disk()` (faster-whisper `download_model` → HF
+  snapshot into the same cache the load reads, **no VRAM**) + `prefetch_to_disk()` on
+  the lifecycle (`is_downloading`/`last_download_succeeded`, background, best-effort,
+  **never raises into startup**); the daemon fetches the resolved tier's weights to
+  disk on first run (captured as `not config_path.exists()` **before** `load_config`),
+  so the first *dictation* works offline. Signalled via a tray notification, a distinct
+  **"Downloading model…"** pill caption, and a **success-only** "ready" notification.
+  **#164 docs** (PR **#169**): README "Model loading & VRAM" + Usage Guide rewritten;
+  fixed two stale lazy-load-at-transcribe lines; **supersedes #67's framing** (#67 stays
+  closed).
+- **Decisions (settled in S7 — ADRs are the spec; not reopened):** load-on-arm (not
+  preload-on-launch); first-run fetch lives in the **daemon** (only it knows the exact
+  tier — ADR-0011 thin install); best-effort + silent lazy-fallback if offline;
+  download-to-disk-only. New this session (accepted, low-risk, from `/code-review`):
+  (a) `_background_load` now catches+logs (was an unhandled thread exception) — an
+  improvement load-on-arm motivated; (b) the first-run start notification makes **no
+  per-run offline promise** (honest if offline at first run); (c) `prefetch_to_disk`
+  returns whether it kicked, so the "ready" flag can't dangle. A "double-download"
+  candidate was **refuted** (HF file locks coordinate the concurrent load-on-arm load —
+  the intended overlap).
+- **Issues:** #161, #162, #164 — **implemented, not yet closed** (close on PR merge +
+  QA). Opened: none. Real download-% via the stubbed `on_download_progress` seam is a
+  **noted follow-up** inside #162 (out of scope).
+- **PRs:** **#167** (#161 → `main`) · **#168** (#162 → stacked on #167) · **#169** (#164
+  → `main`, docs-only). All **open**. **Merge order: #167 → #168 → #169** — #168 is
+  stacked, so GitHub retargets it to `main` once #167 merges; if `--delete-branch` on
+  #167 auto-closes #168 (the S5 #143 hazard), reopen it — the commits are intact.
+  Verified locally: all three merge into `main` with **no conflicts**; combined suite
+  **1073 passed, 4 skipped**, `ruff` clean, `pyright` 0 errors. Each PR ran
+  `/code-review` (high): #161 applied test-determinism cleanups (a fake load-gate +
+  shared `tests/support.wait_until`, replacing fixed sleeps); #162 applied the honesty +
+  flag-robustness fixes; #169 fixed two stale README lines a finder caught.
+- **QA owed:** **S8 Windows QA pending** — `qa-handoffs/06-s8-cold-start-qa.md` (offline
+  first-dictation via a throwaway `HF_HOME` + load-overlaps-speech eyeball; **needs the
+  PRs merged first**). Carried over: **#126** vocabulary recognition-lift —
+  `qa-handoffs/02-vocabulary-recognition-qa.md`.
+- **Follow-ups / notes:** real download-% via `on_download_progress` (stubbed today) is
+  the optional follow-up in #162. The "Downloading model…" pill caption is latched once
+  at transcribe-time (cosmetic: it can persist through the brief VRAM-load phase after
+  the download finishes) — not worth tick-refresh complexity. The S8 split (#161 latency
+  + #162 fetch + #164 docs) shipped as three PRs rather than the roadmap's hinted
+  parallel worktrees, because #161/#162 share `daemon.py`/`fake_transcriber.py` hunks —
+  stacking #162 on #161 was the lower-conflict path. Next: **S9 — Overlay & focus UX
+  (#96/#97/#163)** per ADR-0026.
 
 ### S7 — Cold-start latency design (grill) — 2026-06-22
 - **Shipped:** no code — design decisions. **ADR-0025** (cold-start: the model loads
