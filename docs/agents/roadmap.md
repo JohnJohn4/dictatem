@@ -29,13 +29,13 @@ mouse hook) is **implemented and on PR #159** (open, CI running, awaiting the
 user's review/merge): the `WH_MOUSE_LL` adapter feeds the S2 classifier (#118,
 ADR-0020) so a mouse side button / wheel click arms dictation — standalone
 (`["mouse4"]`) or combined (`["ctrl","mouse4"]`), with conditional suppression of
-the button's normal action. The native plumbing **passed a synthetic `SendInput`
-smoke test on Windows** (the live hook decoded injected middle/X1/X2 events
-correctly), but the **physical click-QA is still owed** — real side-button
-hardware, browser-back suppression, full dictation — checklist at
-[`docs/agents/qa-handoffs/05-windows-mouse-hook-qa.md`](qa-handoffs/05-windows-mouse-hook-qa.md).
-**Leave #120 open until a human runs it**, then close (the user can do it on their
-Windows box). *(S4's #156/#157 merged — #81/#90 should now be closed if not yet.)*
+the button's normal action. The **physical click-QA PASSED on real hardware** (2026-06-22, Logitech MX Master
+3S): keyboard regression, default-inert mouse, standalone `["mouse4"]`
+(tap/hold/suppress), combined `["ctrl","mouse4"]` (bare passes through, Ctrl+
+suppresses + arms), and `["middle"]` all confirmed — evidence on #120,
+checklist [`qa-handoffs/05-windows-mouse-hook-qa.md`](qa-handoffs/05-windows-mouse-hook-qa.md).
+**#120 closes on PR #159 merge** — it's review-ready and CI-green. *(S4's #156/#157
+merged — #81/#90 should now be closed if not yet.)*
 
 **Settled in S6 — do not reopen:** both hooks now feed **one** classifier via an
 **eager-advance-under-lock + lazy-tick-dispatch** bridge, so a mouse button can
@@ -55,8 +55,8 @@ follow the **grill-session handoff**.
 
 Skills: `grill-with-docs`, `prototype`. Your role: **decisions-needed** — an HITL
 grill: you ask, challenge, draft the ADR + issues; the user makes the calls.
-**QA owed:** **#120** physical click-QA (`qa-handoffs/05-windows-mouse-hook-qa.md`)
-+ carried-over **#126** vocabulary recognition-lift (`qa-handoffs/02-vocabulary-recognition-qa.md`).
+**QA owed:** none for S6 (#120 physical click-QA **PASSED** 2026-06-22, MX Master
+3S). Carried-over: **#126** vocabulary recognition-lift (`qa-handoffs/02-vocabulary-recognition-qa.md`).
 
 ---
 
@@ -125,7 +125,7 @@ session · **M** ≈ one focused session · **L** ≈ may span more than one.
 | **S3** | Docs & discoverability | AFK | S–M | #67 #127 #122 #123 | `run`/`verify`, `code-review` | — |
 | **S4** | CI keystone + install hardening | AFK | M | #81 #90 ~~#92~~ | `code-review`, `diagnose` | PRs #156/#157 green — awaiting merge |
 | ~~**S5**~~ | ~~Clutter-proof clipboard + last-dictation recovery~~ | AFK | M | ✅ PR #141 (#138) · #142 (#119) · #146 (#139) — merged | `tdd`, `run`/`verify`, `code-review` | done 2026-06-14; Win QA PASS |
-| **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | PR #159 — phys-QA owed |
+| **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | PR #159 — QA PASS |
 | **S7** | Cold-start latency **design** | Grill | — | #101 (frames #97 #96 #67) | `grill-with-docs`, `prototype` | — *(parallel-safe)* |
 | **S8** | Overlay & focus UX | AFK | M | #96 #97 | `run`/`verify`, `code-review` | S7 |
 | **S9** | macOS QA & polish | Manual-QA + AFK | L | #121 #95 #94 #93 | `verify`/`run`, `tdd`, `diagnose` | S2 (#118), S4 |
@@ -352,22 +352,27 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
   when a combo breaks) were traced and **refuted** (`classifier.tick` gates on live
   `combo_held`/`_combo_pressed_at`; the "combo breaks with event=None" reset is the
   pre-existing path and unreachable when a held combo breaks).
-- **Issues:** **#120 — implemented, NOT closed** (close on the physical click-QA
-  PASS). Opened: none. *(Also: S4's #156/#157 merged — close #81/#90 if not done.)*
+- **Issues:** **#120 — implemented + physical-QA PASS; closes on PR #159 merge.**
+  Opened: none. *(Also: S4's #156/#157 merged — close #81/#90 if not done.)*
 - **PRs:** **#159** (#120) — **open, awaiting review/merge**; CI matrix running
   (win+mac × 3.11–3.13). Full suite **1054 passed, 4 skipped** locally (+29);
   `ruff` clean, `pyright` 0 errors. `/code-review` (high, 5 finder angles) run —
   fixed two cleanups (hoisted the `HotkeyEvent` import out from under the bridge
   lock; deduped `_MOUSE_LABELS` into `_WORD_NAMES`); the native-plumbing
   duplication + latent items were documented as an out-of-scope follow-up.
-- **QA owed:** **#120 physical click-QA** — exported as
-  [`qa-handoffs/05-windows-mouse-hook-qa.md`](qa-handoffs/05-windows-mouse-hook-qa.md)
-  (real side-button hardware, browser-back suppression, full dictation; **pending a
-  human on the Windows box**). A **synthetic `SendInput` smoke test PASSED locally**
-  (the live hook installed and decoded injected middle/X1/X2 events to the exact
-  `(Key, action)` — confirms the `MSLLHOOKSTRUCT` HIWORD decode + keymap against
-  real OS event delivery, the part unit tests can't cover). Carried over: **#126**
-  vocabulary recognition-lift (S2) — `qa-handoffs/02-vocabulary-recognition-qa.md`.
+- **QA owed:** none — **#120 physical click-QA PASSED on real hardware 2026-06-22**
+  (Windows 11, Logitech MX Master 3S; run from the dev clone, evidence on #120):
+  keyboard regression (tap+hold, no change); default-inert mouse (unconfigured
+  buttons do their normal OS action, hook passes through); standalone `["mouse4"]`
+  (tray "Mouse4 to dictate", tap+hold arm, back-nav suppressed); combined
+  `["ctrl","mouse4"]` (bare press still navigates back, Ctrl+ arms **and**
+  suppresses); `["middle"]` (wheel-click arms + suppressed). mouse5 not physically
+  clicked — same `WM_XBUTTON` path as mouse4. A **synthetic `SendInput` smoke test
+  also PASSED** earlier (the live hook decoded injected middle/X1/X2 to the exact
+  `(Key, action)` — confirms the `MSLLHOOKSTRUCT` HIWORD decode against real OS
+  event delivery). Checklist: [`qa-handoffs/05-windows-mouse-hook-qa.md`](qa-handoffs/05-windows-mouse-hook-qa.md).
+  Carried over: **#126** vocabulary recognition-lift (S2) —
+  `qa-handoffs/02-vocabulary-recognition-qa.md`.
 - **Follow-ups / notes:** **harden both native hooks together** (the `wh_mouse_ll`
   /`wh_keyboard_ll` shared ctypes plumbing: `SetWindowsHookExW` restype, `uninstall`
   posting `WM_QUIT`, the first-event handle race) — benign today, worth a dedicated

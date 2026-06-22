@@ -1,5 +1,9 @@
 # QA Handoff — Session S6: Windows mouse hook (#120 / ADR-0020)
 
+> **STATUS: PASSED — 2026-06-22**, Windows 11 on a Logitech MX Master 3S (all
+> phases below + keyboard regression). Evidence on #120. Kept as the regression
+> checklist for future native-hook changes and the macOS mouse hook (#121).
+
 **Device required:** Windows 11, with a real Whisper model + your usual
 microphone, and a **mouse with side buttons** (Mouse4/Mouse5) and a wheel click.
 For the suppression checks you also need a **browser** (Mouse4 = browser-back by
