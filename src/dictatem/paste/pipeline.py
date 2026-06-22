@@ -66,6 +66,7 @@ def paste(
     keystroke: KeystrokeSender,
     foreground: ForegroundTracker,
     replace_chars: int = 0,
+    target_id: int | None = None,
     schedule_restore: RestoreScheduler | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
@@ -79,6 +80,14 @@ def paste(
     clipboard-restore and the target window's paste handler (see #23) and
     leaves the user's clipboard untouched as a bonus.
 
+    *target_id*, when given, is the foreground identity to restore focus to —
+    the single source of truth for *where* this paste lands. The daemon passes
+    the same value it compared for focus drift and records as the Last Paste
+    (#97), so the drift decision, the restore target, and the Last Paste can
+    never disagree from re-capturing the foreground at slightly different
+    instants. When omitted (direct callers/tests) the foreground is captured
+    here as before.
+
     *schedule_restore*, when given, defers the clipboard restore off-thread by
     ``_RESTORE_DELAY_S`` so the target reads our text before the user's
     clipboard is put back (#66). Without it, the restore runs synchronously
@@ -86,7 +95,8 @@ def paste(
     security-hooked machines.
     """
     normalized = normalize_pasted_text(text)
-    target_id = foreground.capture()
+    if target_id is None:
+        target_id = foreground.capture()
     logger.info(
         "Paste: captured foreground target_id=%s, text length=%d, replace_chars=%d",
         target_id,

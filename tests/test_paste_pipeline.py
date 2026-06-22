@@ -397,6 +397,46 @@ class TestReplaceChars:
         assert ks.typed_texts == []
 
 
+class TestExplicitTargetId:
+    """A caller-supplied target_id is the single source of truth for where the
+    paste lands — no extra foreground.capture() (#97)."""
+
+    def test_supplied_target_id_skips_capture_and_restores_it(self) -> None:
+        clip = FakeClipboardIO()
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker(target_id=42)
+
+        paste("hi", clipboard=clip, keystroke=ks, foreground=fg, target_id=777)
+
+        # No internal capture; focus restored to the supplied target, not fg's 42.
+        assert fg.captured == []
+        assert fg.restored == [777]
+
+    def test_supplied_target_id_on_typed_path(self) -> None:
+        clip = FakeClipboardIO()
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker(target_id=42)
+
+        paste(
+            "hi", clipboard=clip, keystroke=ks, foreground=fg,
+            replace_chars=3, target_id=777,
+        )
+
+        assert fg.captured == []
+        assert fg.restored == [777]
+        assert ks.typed_texts == ["hi "]
+
+    def test_omitted_target_id_captures_as_before(self) -> None:
+        clip = FakeClipboardIO()
+        ks = FakeKeystrokeSender()
+        fg = FakeForegroundTracker(target_id=42)
+
+        paste("hi", clipboard=clip, keystroke=ks, foreground=fg)
+
+        assert fg.captured == [42]
+        assert fg.restored == [42]
+
+
 class TestImportSafety:
     """paste.pipeline must not import pywin32 or Win32 modules."""
 

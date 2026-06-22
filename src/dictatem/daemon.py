@@ -384,6 +384,13 @@ class DaemonCore:
         self._silence_timeout_s = silence_timeout_s
         self._max_recording_s = max_recording_s
         self._last_text: str | None = None
+        # --- Focus-drift anchor (ADR-0026 / #97) ---
+        # The foreground identity (target_id) captured at record-start, compared
+        # against the live foreground at paste time. If focus drifted to another
+        # window/app during the wait (e.g. a long cold model load), a regular
+        # dictation is HELD in the Most-recent buffer rather than mispasted into
+        # the wrong window. A comparison anchor only — never used to move focus.
+        self._record_start_target_id: int | None = None
         # --- Most-recent dictation buffer (ADR-0023 / #119) ---
         # The exact payload of the last REGULAR dictation (normalised, with
         # Replacements applied) — the text that was (or would have been) pasted.
@@ -555,6 +562,16 @@ class DaemonCore:
             )
             self._recover_to_idle()
             raise _AbortCommandChain from None
+        # Anchor the foreground for focus-drift detection (ADR-0026 / #97): this
+        # is the window the user is focused on as they arm dictation. At paste
+        # time the live foreground is compared to it; if it changed (focus drifted
+        # during a long load), the dictation is held instead of mispasted. A
+        # comparison token only — Dictatem never moves focus on the dictation path.
+        # Captured BEFORE showing the pill so the anchor can never accidentally be
+        # the overlay window itself, independent of how the pill is shown.
+        self._record_start_target_id = (
+            self._foreground.capture() if self._foreground is not None else None
+        )
         self._overlay.show(RecordingMode.PTT)
         self._tray.set_recording()
         # Load-on-arm (ADR-0025 / #161): kick the Whisper load the instant
@@ -946,7 +963,38 @@ class DaemonCore:
         self._pending_replace_chars = 0
 
         if self._last_text and self._clipboard and self._keystroke and self._foreground:
+            from dictatem.paste.focus_drift import focus_drifted
             from dictatem.paste.pipeline import normalize_pasted_text, paste
+
+            normalized = normalize_pasted_text(self._last_text)
+            current_target_id = self._foreground.capture()
+
+            # Focus-drift detect-and-hold (ADR-0026 / #97): for a REGULAR
+            # dictation (replace == 0) whose foreground changed since
+            # record-start, do NOT mispaste into the wrong window — hold the text
+            # in the Most-recent buffer with a quiet flash (no sound, no refocus)
+            # so "paste"/tray recovery lands it in the right place. A Trigger Fire
+            # (replace > 0) is exempt: its own same-target rail already gated it
+            # in _handle_trigger_fire, so re-checking here would double-guard it.
+            if replace == 0 and focus_drifted(
+                self._record_start_target_id, current_target_id
+            ):
+                logger.info(
+                    "Focus drifted between record-start and paste "
+                    "(anchor=%s, now=%s); holding %d-char dictation for recovery",
+                    self._record_start_target_id,
+                    current_target_id,
+                    len(normalized),
+                )
+                self._most_recent_dictation = normalized
+                self._tray.set_has_last_dictation(True)
+                # The quiet "saved — say paste" flash: the overlay's error flash
+                # carries no sound (there is no sound surface), and we never call
+                # foreground.restore — so this is informational, not pushy.
+                self._overlay.show_error()
+                self._tray.set_idle()
+                self._last_text = None
+                return
 
             paste(
                 self._last_text,
@@ -954,13 +1002,16 @@ class DaemonCore:
                 keystroke=self._keystroke,
                 foreground=self._foreground,
                 replace_chars=replace,
+                # One captured target drives the drift check, the focus restore,
+                # AND the Last Paste below — so they can't disagree from
+                # re-capturing the foreground at slightly different instants (#97).
+                target_id=current_target_id,
                 schedule_restore=self._restore_scheduler,
             )
-            normalized = normalize_pasted_text(self._last_text)
             self._last_paste = LastPaste(
                 text=normalized,
                 char_count=len(normalized),
-                target_id=self._foreground.capture(),
+                target_id=current_target_id,
                 pasted_at_ms=now_ms,
             )
             # Retain regular dictation for voice/tray recovery (ADR-0023 / #119).
@@ -986,6 +1037,9 @@ class DaemonCore:
         self._transform_active = False
         self._pending_replace_chars = 0
         self._last_paste = None
+        # The anchor is only valid between record-start and its matching paste;
+        # clear it on an aborted dictation so it can never be consulted stale (#97).
+        self._record_start_target_id = None
         try:
             self._audio_capture.stop()
         except Exception:
@@ -1188,6 +1242,7 @@ class DaemonCore:
         self._transform_active = False
         self._pending_replace_chars = 0
         self._last_paste = None
+        self._record_start_target_id = None  # stale-anchor guard (#97), see _do_cancel
         self._sm._state = State.IDLE
         try:
             self._audio_capture.stop()
