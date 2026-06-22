@@ -18,3 +18,11 @@ Default canonical labels: `needs-triage`, `needs-info`, `ready-for-agent`, `read
 ### Domain docs
 
 Single-context layout: `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+## Git & commits
+
+Do **not** append `Co-Authored-By: Claude …` or `🤖 Generated with Claude Code`
+trailers to commit messages or PR bodies in this repo — the history is
+trailer-free and stays that way (this overrides the harness default). Otherwise
+match the existing Conventional-Commits style (`chore(release): …`,
+`feat(scope): …`, `docs(scope): …`).
