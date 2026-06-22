@@ -24,54 +24,44 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Session 9 — Overlay & focus UX (#96, #97, #163) + #171.**
-S8 **shipped, merged + Windows QA PASS**: **#161 load-on-arm** (PR **#167**) — the
-Whisper load starts at record-start, overlapping speech; **#162 first-run fetch**
-(PR **#168**, stacked on #161) — the tier model downloads to disk on first run so the
-first *dictation* works offline; **#164 docs** (PR **#169**) — README + Usage Guide
-refreshed. S1–S7 done; **S8 done — PRs #167/#168/#169 merged + Windows QA PASS
-(2026-06-22; #161/#162 closed, #171 filed)**. (Combined suite was 1073 green at merge.)
+**Next up: land S9, then Session 10 — macOS QA & polish (#121 #95 #94 #93) — or S11.**
 
-**Settled in S7 — do not reopen (ADR-0026 is the spec):**
-- **#96 overlay** — remove the **Status Dot** (retired); the **pill colour carries
-  phase** (recording / transcribing / loading), purely informational; **drop the
-  Tap/Hold cue**. A clickable control would break click-through + reintroduce
-  focus-stealing (the ADR-0026 interlock with #163) — the pill stays non-interactive.
-- **#97 detect-and-hold** — anchor `target_id` at **record-start** for **comparison
-  only**; if the foreground target changed by paste time, **hold** the dictation in
-  the Most-recent buffer (#119) + a **quiet flash**, **no sound, never refocus**
-  (sidesteps the Mac `activateWithOptions_` fragility; *less* pushy than today's
-  per-paste `restore()`).
-- **#163** — make the [Overlay Pill](../../CONTEXT.md#overlay-pill) **never steal
-  activation** (a likely root-cause for "caret deactivates while talking"; fix at
-  source — it **complements**, not replaces, #97's detect-and-hold).
+**S9 (Overlay & focus UX) shipped as three open PRs** (AFK, 2026-06-22) — implementing
+**ADR-0026** plus **#171**: **PR #173** (#96 retire the Status Dot → pill **colour** carries
+phase + #163 the pill **never steals activation**), **PR #174** (#97 focus-drift
+**detect-and-hold**, never refocus), **PR #175** (#171 **Win+Alt** chord-release
+neutralizing Ctrl tap so a lone Alt-up can't activate the menu bar). All three are
+**independent**, cut from `main`, and an octopus merge of all three is **conflict-free**
+(combined suite **1112 green**, `ruff`/`pyright` clean). S1–S8 done.
 
-**Folded into S9 (found in S8 QA — NOT part of ADR-0026):**
-- **#171** — a **Win+Alt** hotkey bug: a lone **Alt**-up on chord release activates the
-  app menu bar and **deactivates the caret**, so the first paste can misfire. Distinct
-  root cause from #97 (window-level target change) and #163 (the pill) — it's the
-  **modifier key's own** OS side-effect. Proposed fix: inject a **neutralizing keystroke
-  on modifier release** (also covers a lone Win-up popping Start); keep the keyboard-hook
-  decision pure + unit-tested, the SendInput thin. See **#171** for acceptance criteria.
+**The immediately-actionable work is to LAND S9, not start fresh:**
+1. **Merge #173 / #174 / #175** (any order — disjoint `daemon.py` methods) once reviewed.
+2. **Run the S9 Windows QA** — [`qa-handoffs/07-s9-overlay-focus-qa.md`](qa-handoffs/07-s9-overlay-focus-qa.md):
+   overlay phase-by-colour + no dot (#96), pill-never-steals-focus (#163), focus-drift hold +
+   `paste` recovery (#97), Win+Alt menu-bar non-activation (#171). On PASS, close #96/#97/#163/#171
+   and tick the S9 ledger; on FAIL, comment evidence and keep open. You have a Windows box — run it,
+   or hand the file to a QA agent.
 
-**This session (S9) is AFK.** Implement **#96**, **#97**, **#163** per **ADR-0026**, plus
-**#171** (the focus bug above).
-Keep the decision logic **pure + unit-tested** (the target-changed / no-target
-comparison; the phase→colour mapping on `OverlayState`) and the Qt pill widget +
-win32/mac activation wiring **thin** (the architecture seam — manual-QA). #96 and
-#163 both touch the pill (one combined slice, or carefully file-disjoint); #97 is the
-paste-rail comparison. Run `/code-review` before each PR; PRs target `main`.
+**Then the next NEW session** is **S10 — macOS QA & polish** (#121 macOS mouse hook, #95
+first-run onboarding, #94 QA runbook, #93 paste-not-landing) — but it **needs a real Mac**
+(export a QA handoff if none) — **or S11 — signing decision grill** (#91), which **needs the
+user's spend call** ($99/yr Apple Developer). Both are gated on external things, so confirm
+availability with the user before picking.
 
-Skills: `tdd`, `run`/`verify`, `code-review`, `diagnose`. Your role: **autonomous**.
-**QA tail (S9):** Windows **overlay** (pill colour reads recording/transcribing/
-loading; no dot; the pill never steals focus while you click around) + **focus-drift**
-(start a dictation, click into another window before it lands → held in the
-Most-recent buffer with a quiet flash, no sound, no refocus) + **#171 Win+Alt** (after a
-Win+Alt dictation released in any key order, the menu bar is not activated and the caret
-holds; paste lands at the caret) — run on Windows or **export a QA handoff**.
-**QA owed (carried in):** only **#126** vocabulary recognition-lift —
-`qa-handoffs/02-vocabulary-recognition-qa.md` (real-model run on Windows). *(S8 cold-start
-QA passed 2026-06-22 — #161/#162 closed; it surfaced #171, now folded into S9.)*
+**Settled — do not reopen (ADR-0026 is the spec; S9 implemented it):** phase-by-colour
+(no dot, no Tap/Hold cue; the warm-LLM "computing" signal is now a **colour**, refining
+ADR-0016); detect-and-hold **never refocuses** (anchor `target_id` at record-start, hold in
+the Most-recent buffer + a **silent** flash on drift — Dictatem has no sound surface); the
+pill **never activates**. **#171:** the neutralizing keystroke is a **generic Ctrl tap**
+(maps to `Key.OTHER`, inert), emitted when a key-up **breaks** a held combo while a
+side-effect modifier is still down — covers `win+alt` and ctrl-combos; a *single*
+side-effect-modifier combo (e.g. `["alt"]`) is the documented uncovered edge.
+
+Skills: `verify`/`run`, `code-review`, `tdd`, `diagnose`. Your role for landing S9:
+**merge + manual-QA**; for S10/S11: **manual-QA on a Mac / decisions-needed** (confirm with
+the user first).
+**QA owed:** **S9** (above, `qa-handoffs/07-…`, PENDING) + carried-over **#126** vocabulary
+recognition-lift — `qa-handoffs/02-vocabulary-recognition-qa.md` (real-model run on Windows).
 
 ---
 
@@ -143,7 +133,7 @@ session · **M** ≈ one focused session · **L** ≈ may span more than one.
 | **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | done 2026-06-22 (PR #159, QA PASS) |
 | ~~**S7**~~ | ~~Cold-start latency **design**~~ | Grill | — | ✅ #101 → ADR-0025/0026; spun #161 #162 #163 #164 #165 (#96/#97 re-scoped) | `grill-with-docs` | done 2026-06-22 |
 | **S8** | Cold-start latency **implementation** | AFK | M | #161 #162 #164 | `tdd`, `run`/`verify`, `code-review` | done 2026-06-22 (PRs #167/#168/#169 merged; Win QA PASS) |
-| **S9** | Overlay & focus UX | AFK | M | #96 #97 #163 #171 | `run`/`verify`, `code-review` | S7 |
+| **S9** | Overlay & focus UX | AFK | M | #96 #97 #163 #171 | `run`/`verify`, `code-review` | impl 2026-06-22 (PRs #173/#174/#175 open; QA owed) |
 | **S10** | macOS QA & polish | Manual-QA + AFK | L | #121 #95 #94 #93 | `verify`/`run`, `tdd`, `diagnose` | S2 (#118), S4 |
 | **S11** | Signing decision | Grill | — | #91 | `grill-me` | user spend call |
 | **—** | Parked backlog | — | — | #72 #80 #129 #130 #131 | `prototype` (#130 spike) | fresh go-ahead |
@@ -360,6 +350,62 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### S9 — Overlay & focus UX — 2026-06-22
+- **Shipped:** three PRs, one per slice, each `/code-review`'d (high, 8 angles) before
+  opening. **#96 + #163 overlay** (PR **#173**): retired the **Status Dot** — recording
+  **phase is the pill colour** now (`OverlayState.PillColor` + `current_color()`, a pure
+  phase→colour map; the Qt pill paints the waveform in the phase hue: blue recording /
+  amber transcribing / violet computing / red error-flash, no dot, Tap/Hold mode cue
+  dropped). The warm-LLM **"LLM Model Computing" caption became the computing colour**
+  (`show_computing()`/`OverlayPhase.COMPUTING`) per ADR-0026 — **refines ADR-0016**
+  (noted in it); model loading/downloading stay text captions. #163: the pill gained
+  `WindowDoesNotAcceptFocus` + `WA_ShowWithoutActivating` so *showing* it can't deactivate
+  the user's window/caret. **#97 detect-and-hold** (PR **#174**): anchor the foreground
+  `target_id` at record-start, compare at paste via a pure `paste/focus_drift.focus_drifted()`;
+  a regular dictation whose foreground changed is **held** in the Most-recent buffer with the
+  existing (silent) error flash, **no refocus** — recovered by `paste`/tray. Trigger Fire
+  (replace>0) is exempt (its own rail already gates it). **#171 Win+Alt mask** (PR **#175**):
+  the pure classifier decides a neutralizing keystroke (`pending_mask`) when a key-up **breaks**
+  a held combo while a side-effect modifier (Alt/Meta) is still down; the Windows keyboard hook
+  injects a **generic Ctrl tap** (`Win32KeystrokeSender.send_modifier_release_mask`). The
+  keyboard handler return type became `bool` across the `KeyboardHook` protocol + both platform
+  hooks (macOS ignores it).
+- **Decisions (settled in S7 — ADR-0026 is the spec; not reopened):** phase-by-colour +
+  detect-and-hold-never-refocus + pill-never-activates. New this session (accepted, from
+  `/code-review`): (a) **#96** the warm-computing signal is a colour, not the old caption
+  (ADR-0026 §Decision; ADR-0016 refined). (b) **#97** thread one captured `target_id` through
+  `pipeline.paste()` so the drift check, the focus restore, and the Last Paste are one source
+  of truth (was a paste-time double-`capture()` race). (c) **#171** the injected mask is a
+  **generic `VK_CONTROL` (0x11)** → `vk_to_key` → `Key.OTHER` (inert, like the paste rail's
+  Ctrl+V), so **no guard against Ctrl-containing combos is needed**; gating on the combo
+  *break* (not "any side-effect key still held") both extended the fix to `ctrl+win`/`ctrl+alt`
+  and removed a spurious mid-hold Ctrl tap on doubled-modifier release — this dropped
+  `_combo_was_armed`/`_ctrl_is_trigger` and simplified the classifier. **No error sound**
+  for the drift hold is honest: Dictatem has **no sound surface at all** (grep-verified).
+- **Issues:** #96, #97, #163, #171 — **implemented, not yet closed** (close on PR merge + QA).
+  Opened: none.
+- **PRs:** **#173** (#96+#163 → `main`) · **#174** (#97 → `main`) · **#175** (#171 → `main`).
+  All **open**, independent (cut from `main`, not stacked). All three touch `daemon.py` in
+  **disjoint methods**; verified locally with an octopus merge of all three into `main` — **no
+  conflicts**, combined suite **1112 passed, 4 skipped**, `ruff` clean, `pyright` 0 errors.
+  Merge in any order. Each PR's `/code-review` applied fixes (see Decisions); PR #173 also
+  hoisted the pill's per-frame QColor map to a module constant + covered `show_computing` in
+  `test_interfaces`.
+- **QA owed:** **S9 Windows manual-QA — PENDING.** Exported:
+  [`qa-handoffs/07-s9-overlay-focus-qa.md`](qa-handoffs/07-s9-overlay-focus-qa.md) — overlay
+  phase-by-colour + no dot (#96), pill-never-steals-focus (#163), focus-drift hold + recovery
+  (#97), Win+Alt menu-bar non-activation (#171). Run on Windows after the PRs merge (or on a
+  scratch branch merging all three). Carried over: **#126** vocabulary recognition-lift —
+  `qa-handoffs/02-vocabulary-recognition-qa.md`.
+- **Follow-ups / notes:** **Known limitation (#171):** a *single* side-effect-modifier combo
+  (e.g. `["alt"]` alone) can't be pre-neutralized this way (no second key to leave held) —
+  default `win+alt` and all multi-key combos are covered; documented in the issue + a test.
+  The native injection (`send_modifier_release_mask`) and the no-activate window flags are the
+  only un-unit-tested bits (manual-QA, per the architecture seam). The S6 "harden both native
+  hooks together" follow-up still stands. Next: **S10 — macOS QA & polish** (needs a Mac) or
+  **S11 — signing grill** (needs the user's spend call); both are gated on external things, so
+  the immediately-actionable work is **merging the three PRs + running the S9 QA handoff**.
 
 ### S8 — Cold-start latency implementation — 2026-06-22
 - **Shipped:** three PRs implementing **ADR-0025**. **#161 load-on-arm** (PR **#167**):
