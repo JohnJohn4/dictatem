@@ -1,8 +1,14 @@
 # QA Handoff — Session S8: Cold-start latency (#161 load-on-arm, #162 first-run fetch)
 
-> **STATUS: PENDING** — needs a real Windows 11 machine with an NVIDIA GPU (or a
-> CPU-only Windows box), a real microphone, and the ability to disconnect the
-> network. Tests the *combined* behaviour of #161 + #162.
+> **STATUS: PASS ✅ (2026-06-22)** — ran on Windows 11 + NVIDIA GPU (16 GB),
+> model `large-v3-turbo`, from the dev clone on `main` @ `65637ec`. All four
+> sections passed: **A** offline-after-setup · **B** first-run download +
+> signalling · **C** load-overlaps-speech · **D** offline-first-run lazy
+> fallback. #161 and #162 closed with the log evidence. Test **D** used
+> `HF_HUB_OFFLINE=1` to simulate an unreachable Hub (a literal disconnect would
+> sever the QA agent's own API link; identical model-fetch code path). A
+> separate Win+Alt menu-activation focus bug surfaced during QA (see the S8
+> ledger follow-ups).
 
 **Device required:** Windows 11, a real Whisper model + your usual microphone,
 and a way to **toggle the network off** (unplug Ethernet / turn off Wi-Fi /

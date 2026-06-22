@@ -59,9 +59,9 @@ Skills: `tdd`, `run`/`verify`, `code-review`, `diagnose`. Your role: **autonomou
 loading; no dot; the pill never steals focus while you click around) + **focus-drift**
 (start a dictation, click into another window before it lands → held in the
 Most-recent buffer with a quiet flash, no sound, no refocus) — run on Windows or
-**export a QA handoff**. **QA owed (carried in):** **S8 cold-start** —
-`qa-handoffs/06-s8-cold-start-qa.md` (offline first-dictation + load-overlaps-speech;
-**needs the S8 PRs merged first**); **#126** vocabulary recognition-lift —
+**export a QA handoff**. **QA owed (carried in):** **S8 cold-start QA — PASS ✅ 2026-06-22**
+(`qa-handoffs/06-s8-cold-start-qa.md`; #161/#162 closed; surfaced the Win+Alt focus
+bug **#171**). Still owed: **#126** vocabulary recognition-lift —
 `qa-handoffs/02-vocabulary-recognition-qa.md` (real-model run on Windows).
 
 ---
@@ -391,18 +391,26 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
   `/code-review` (high): #161 applied test-determinism cleanups (a fake load-gate +
   shared `tests/support.wait_until`, replacing fixed sleeps); #162 applied the honesty +
   flag-robustness fixes; #169 fixed two stale README lines a finder caught.
-- **QA owed:** **S8 Windows QA pending** — `qa-handoffs/06-s8-cold-start-qa.md` (offline
-  first-dictation via a throwaway `HF_HOME` + load-overlaps-speech eyeball; **needs the
-  PRs merged first**). Carried over: **#126** vocabulary recognition-lift —
-  `qa-handoffs/02-vocabulary-recognition-qa.md`.
+- **QA owed:** **S8 Windows QA — PASS ✅ 2026-06-22** (`qa-handoffs/06-s8-cold-start-qa.md`,
+  dev clone on `main` @ `65637ec`, Win 11 + NVIDIA GPU, `large-v3-turbo`): **A** offline-
+  after-setup, **B** first-run download + signalling (throwaway `HF_HOME`), **C** load-
+  overlaps-speech, **D** offline-first-run lazy fallback — **all pass**; **#161/#162 closed**
+  with log evidence. Test **D** simulated an unreachable Hub via `HF_HUB_OFFLINE=1` (a literal
+  disconnect would sever the QA agent's own API link; identical model-fetch path). Carried
+  over: **#126** vocabulary recognition-lift — `qa-handoffs/02-vocabulary-recognition-qa.md`.
 - **Follow-ups / notes:** real download-% via `on_download_progress` (stubbed today) is
   the optional follow-up in #162. The "Downloading model…" pill caption is latched once
   at transcribe-time (cosmetic: it can persist through the brief VRAM-load phase after
   the download finishes) — not worth tick-refresh complexity. The S8 split (#161 latency
   + #162 fetch + #164 docs) shipped as three PRs rather than the roadmap's hinted
   parallel worktrees, because #161/#162 share `daemon.py`/`fake_transcriber.py` hunks —
-  stacking #162 on #161 was the lower-conflict path. Next: **S9 — Overlay & focus UX
-  (#96/#97/#163)** per ADR-0026.
+  stacking #162 on #161 was the lower-conflict path. **QA surfaced two follow-ups:**
+  (1) **#171** — a Win+Alt hotkey bug where a lone Alt-up on chord release activates the app
+  menu bar and deactivates the caret (S9-focus-adjacent but a distinct root cause from
+  #97/#163; `needs-triage`); (2) minor — the offline first-run fetch WARNING logs a full
+  chained `exc_info` traceback, noisy for an expected-offline condition (could log without
+  the stack trace). Next: **S9 — Overlay & focus UX (#96/#97/#163)** per ADR-0026 — consider
+  folding **#171** into that session.
 
 ### S7 — Cold-start latency design (grill) — 2026-06-22
 - **Shipped:** no code — design decisions. **ADR-0025** (cold-start: the model loads
