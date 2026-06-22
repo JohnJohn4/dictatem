@@ -1,10 +1,16 @@
 # QA Handoff — Session S9: Overlay & focus UX (#96 #163 #97 #171)
 
-> **STATUS: PENDING** — needs a human on real Windows. Pure logic is unit-tested
-> (overlay phase→colour, focus-drift comparison, the Win+Alt mask decision; 1112
-> passing on the integrated branch); this confirms the Qt rendering, the native
-> activation behaviour, the end-to-end focus drift, and the physical Win+Alt
-> timing — none machine-verifiable.
+> **STATUS: PASS (2026-06-23)** — run on Windows 11 (dev clone on `main` after
+> #173/#174/#175). All four sections passed; **#96/#163/#97/#171 closed** with
+> evidence. A — phase colours render (blue→white recording / amber / violet / red
+> + loading caption, no dot; machine-verified via `QWidget.grab()` + live, Tap/Hold
+> OK). B — pill never steals focus (objective `GetForegroundWindow` watch: Notepad
+> held through recording; Win32 `WS_EX_NOACTIVATE`/`TRANSPARENT`/`TOPMOST` land;
+> paste `target_id` tracks the real window). C — drift **held + recovered** via
+> voice `paste` *and* tray copy (`Focus drifted … holding … for recovery`). D —
+> staggered Win+Alt release activated no menu; Alt-alone still does. Follow-ups:
+> recording hue reverted blue→white (06765e0); delayed-release edge → **#177**.
+> Pure cores **1112 green**.
 
 **Device required:** Windows 11, your usual microphone, and an app with a **menu
 bar and a text caret** (Notepad is ideal for section D). A second window to click
