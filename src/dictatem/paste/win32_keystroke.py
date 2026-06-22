@@ -108,6 +108,39 @@ class Win32KeystrokeSender:
                 err,
             )
 
+    def send_modifier_release_mask(self) -> None:
+        """Inject a no-op Ctrl tap to neutralize a lone Win/Alt key-up (#171).
+
+        A lone Alt release activates the menu bar and a lone Win release pops the
+        Start menu, which can move the caret and misfire the next paste. Injecting
+        an innocuous Ctrl down+up while another combo modifier is still held marks
+        that modifier's key session as "not lone", so its eventual release no
+        longer triggers the OS side-effect. Ctrl is the masking key because a lone
+        Ctrl tap has no UI effect of its own (the same trick AutoHotkey uses).
+
+        MUST stay the *generic* ``VK_CONTROL`` (0x11), never side-specific
+        ``VK_LCONTROL``/``VK_RCONTROL`` (0xA2/0xA3): this injected tap re-enters
+        the low-level keyboard hook, and only the side-specific codes map to a real
+        ``Key`` — generic 0x11 maps to ``Key.OTHER`` (inert), so the classifier can
+        never mistake our own mask for a combo key, even in a Ctrl-containing combo
+        (the same reason the paste rail's injected Ctrl+V is harmless). See
+        ``hotkey/win32_keymap.py`` and ``HotkeyClassifier.pending_mask``.
+        """
+        inputs = (_INPUT * 2)(
+            _key_input(VK_CONTROL),
+            _key_input(VK_CONTROL, KEYEVENTF_KEYUP),
+        )
+        sent = ctypes.windll.user32.SendInput(
+            2, ctypes.byref(inputs), ctypes.sizeof(_INPUT)
+        )
+        if sent != 2:
+            err = ctypes.windll.kernel32.GetLastError()
+            logger.warning(
+                "SendInput dispatched %d/2 neutralizing-mask events (GetLastError=%d)",
+                sent,
+                err,
+            )
+
     def send_text(self, text: str) -> None:
         if not text:
             return

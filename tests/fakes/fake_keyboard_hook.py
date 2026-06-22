@@ -14,7 +14,7 @@ class FakeKeyboardHook:
     """In-memory ``KeyboardHook``: the key-event handler is constructor-injected,
     matching the production hooks; ``simulate_event`` plays the hook thread."""
 
-    def __init__(self, on_key_event: Callable[[Key, KeyAction, int], None]) -> None:
+    def __init__(self, on_key_event: Callable[[Key, KeyAction, int], bool]) -> None:
         self._on_key_event = on_key_event
         self.installed: bool = False
 

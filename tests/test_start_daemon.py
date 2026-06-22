@@ -535,6 +535,45 @@ class TestHotkeyBridgeMouse:
         assert sm.state == State.TOGGLE_REC
 
 
+class TestHotkeyBridgeMask:
+    """The keyboard hook learns whether to inject a neutralizing keystroke from
+    enqueue_key_event's return (#171). The mouse path never masks.
+    """
+
+    def test_enqueue_returns_mask_on_staggered_win_alt_release(self) -> None:
+        classifier = _clf.HotkeyClassifier(tap_threshold_ms=200)  # win+alt default
+        bridge = _HotkeyBridge(
+            classifier=classifier, callback=_EventCollector().on_hotkey_event
+        )
+        bridge.enqueue_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_DOWN, 0)
+        bridge.enqueue_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_DOWN, 10)
+        # Win released first while Alt is still held → mask; the final Alt-up → no.
+        mask_win = bridge.enqueue_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_UP, 500)
+        mask_alt = bridge.enqueue_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_UP, 520)
+        assert mask_win is True
+        assert mask_alt is False
+
+    def test_enqueue_key_down_never_masks(self) -> None:
+        classifier = _clf.HotkeyClassifier(tap_threshold_ms=200)
+        bridge = _HotkeyBridge(
+            classifier=classifier, callback=_EventCollector().on_hotkey_event
+        )
+        assert (
+            bridge.enqueue_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_DOWN, 0)
+            is False
+        )
+
+    def test_mouse_event_returns_decision_not_mask(self) -> None:
+        classifier = _clf.HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse4",))
+        bridge = _HotkeyBridge(
+            classifier=classifier, callback=_EventCollector().on_hotkey_event
+        )
+        decision = bridge.process_mouse_event(
+            _clf.Key.MOUSE_4, _clf.KeyAction.KEY_DOWN, 0
+        )
+        assert decision == _clf.HookDecision.SUPPRESS  # a HookDecision, not a bool
+
+
 # ── Full adapter integration ────────────────────────────────────────────
 
 

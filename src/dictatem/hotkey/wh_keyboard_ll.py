@@ -76,9 +76,15 @@ class WHKeyboardLLHook:
     """Low-level keyboard hook that forwards events to a thread-safe handler."""
 
     def __init__(
-        self, on_key_event: Callable[[Key, KeyAction, int], None]
+        self,
+        on_key_event: Callable[[Key, KeyAction, int], bool],
+        inject_mask: Callable[[], None] | None = None,
     ) -> None:
         self._on_key_event = on_key_event
+        # Optional neutralizing-keystroke injector (#171): called after a key-up
+        # for which the handler returns True, so a lone Win/Alt release on a chord
+        # cannot activate the menu bar / Start menu. None disables masking.
+        self._inject_mask = inject_mask
         self._hook_handle: int | None = None
         self._hook_thread: threading.Thread | None = None
         self._proc: ctypes.CFUNCTYPE | None = None  # type: ignore[type-arg]
@@ -115,7 +121,14 @@ class WHKeyboardLLHook:
                     # clocks have a non-zero offset, a single tap fires a
                     # spurious HOLD_START → PTT_REC → instant stop.
                     timestamp_ms = int(time.monotonic() * 1000)
-                    self._on_key_event(vk_to_key(vk), action, timestamp_ms)
+                    mask = self._on_key_event(vk_to_key(vk), action, timestamp_ms)
+                    # Neutralizing keystroke for a lone Win/Alt chord release
+                    # (#171). Injected here (the other combo modifier is still
+                    # down, so the injected key lands within its key session) and
+                    # passed through to the system below. Best-effort: an injection
+                    # hiccup must never block the real key from reaching the app.
+                    if mask and self._inject_mask is not None:
+                        self._inject_mask()
             except Exception:
                 logger.error("Error in keyboard hook callback", exc_info=True)
 

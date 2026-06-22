@@ -53,7 +53,11 @@ opinionated by default and configurable only as an escape hatch
 
 While a mouse button is actively completing the combo it is **suppressed** — it
 does not also fire its usual action (e.g. browser-back) — whereas modifier keys
-always pass through.
+always pass through. Because a lone **Alt** release activates the Windows menu bar
+and a lone **Win** release pops the Start menu, releasing a Win+Alt-style chord
+would otherwise let a fractionally-staggered release misfire one of those and
+steal the caret; on Windows the keyboard hook injects a no-op **Ctrl** tap on the
+chord release to neutralise it (#171).
 
 `meta` is the canonical cross-platform name for the OS key; `win` is a
 permanent alias kept for existing Windows configs. The default combo is

@@ -66,8 +66,10 @@ class CGEventTapHook:
     """CGEventTap keyboard hook that forwards events to a thread-safe handler."""
 
     def __init__(
-        self, on_key_event: Callable[[Key, KeyAction, int], None]
+        self, on_key_event: Callable[[Key, KeyAction, int], bool]
     ) -> None:
+        # The handler returns a Win+Alt-mask flag (#171); macOS has no such
+        # side-effect, so the return is ignored here (listen-only tap).
         self._on_key_event = on_key_event
         self._tap: object | None = None  # CFMachPortRef while the tap is live
         self._run_loop: object | None = None  # the hook thread's CFRunLoopRef

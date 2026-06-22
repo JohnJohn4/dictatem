@@ -515,3 +515,136 @@ class TestMouseSuppression:
         c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 10)
         up, _ = c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 50)
         assert up == HookDecision.SUPPRESS
+
+
+class TestMenuMaskOnRelease:
+    """A neutralizing keystroke is requested on a staggered Win+Alt chord release
+    so a lone Alt-up doesn't activate the menu bar / a lone Win-up the Start menu
+    (#171). The classifier only DECIDES (pending_mask); the native hook injects.
+    """
+
+    def _arm_win_alt(self, c: HotkeyClassifier) -> None:
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_DOWN, 0)
+        c.process_event(Key.LEFT_META, KeyAction.KEY_DOWN, 10)
+
+    def test_mask_on_win_up_while_alt_held(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200)  # win+alt default
+        self._arm_win_alt(c)
+        c.process_event(Key.LEFT_META, KeyAction.KEY_UP, 500)
+        # Win released first, Alt still held → mask to protect Alt's lone release.
+        assert c.pending_mask is True
+
+    def test_no_mask_on_final_alt_up(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200)
+        self._arm_win_alt(c)
+        c.process_event(Key.LEFT_META, KeyAction.KEY_UP, 500)
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_UP, 520)
+        # Alt is the last to go up — nothing left to protect; it was already
+        # neutralized while Win was released.
+        assert c.pending_mask is False
+
+    def test_mask_on_alt_up_while_win_held_reverse_order(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200)
+        self._arm_win_alt(c)
+        # Alt released first, Win (a side-effect key) still held → mask.
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_UP, 500)
+        assert c.pending_mask is True
+        c.process_event(Key.LEFT_META, KeyAction.KEY_UP, 520)
+        assert c.pending_mask is False
+
+    def test_tap_release_also_masks(self) -> None:
+        # Even a quick tap (toggle) must neutralize the chord release.
+        c = HotkeyClassifier(tap_threshold_ms=200)
+        self._arm_win_alt(c)
+        c.process_event(Key.LEFT_META, KeyAction.KEY_UP, 50)
+        assert c.pending_mask is True
+
+    def test_no_mask_for_lone_alt_not_forming_combo(self) -> None:
+        # Alt is part of win+alt, but pressing Alt ALONE never armed the combo —
+        # so its release keeps its normal menu-bar behaviour (no mask).
+        c = HotkeyClassifier(tap_threshold_ms=200)
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_DOWN, 0)
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_UP, 100)
+        assert c.pending_mask is False
+
+    def test_no_mask_for_lone_win_not_forming_combo(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200)
+        c.process_event(Key.LEFT_META, KeyAction.KEY_DOWN, 0)
+        c.process_event(Key.LEFT_META, KeyAction.KEY_UP, 100)
+        assert c.pending_mask is False
+
+    def test_key_down_never_masks(self) -> None:
+        c = HotkeyClassifier(tap_threshold_ms=200)
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_DOWN, 0)
+        assert c.pending_mask is False
+        c.process_event(Key.LEFT_META, KeyAction.KEY_DOWN, 10)
+        assert c.pending_mask is False
+
+    def test_non_combo_key_release_does_not_mask(self) -> None:
+        # A stray letter released mid-chord is not a combo modifier → no mask.
+        c = HotkeyClassifier(tap_threshold_ms=200)
+        self._arm_win_alt(c)
+        c.process_event(Key.OTHER, KeyAction.KEY_DOWN, 100)
+        c.process_event(Key.OTHER, KeyAction.KEY_UP, 110)
+        assert c.pending_mask is False
+
+    def test_shift_win_combo_masks_on_shift_release(self) -> None:
+        # shift+win: releasing shift leaves Win (side-effect) held → mask. Ctrl is
+        # not a trigger here, so the Ctrl neutralizer is safe to inject.
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("shift", "win"))
+        c.process_event(Key.LEFT_SHIFT, KeyAction.KEY_DOWN, 0)
+        c.process_event(Key.LEFT_META, KeyAction.KEY_DOWN, 10)
+        c.process_event(Key.LEFT_SHIFT, KeyAction.KEY_UP, 500)
+        assert c.pending_mask is True
+
+    def test_ctrl_alt_combo_masks_safely(self) -> None:
+        # ctrl+alt: releasing Ctrl leaves Alt about to be lone → mask to protect
+        # Alt's menu side-effect. This is safe even though the neutralizer is a
+        # Ctrl tap, because the native layer taps a *generic* Ctrl, which feeds
+        # back as Key.OTHER and so can never re-complete the ctrl+alt combo.
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("ctrl", "alt"))
+        c.process_event(Key.LEFT_CTRL, KeyAction.KEY_DOWN, 0)
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_DOWN, 10)
+        c.process_event(Key.LEFT_CTRL, KeyAction.KEY_UP, 500)
+        assert c.pending_mask is True
+
+    def test_doubled_modifier_release_mid_hold_does_not_mask(self) -> None:
+        # Both Meta keys + Alt held; releasing ONE Meta leaves the combo still
+        # fully held (the other Meta sustains it), so nothing becomes lone and no
+        # OS side-effect would fire — injecting a Ctrl tap mid-hold would be wrong.
+        c = HotkeyClassifier(tap_threshold_ms=200)  # win+alt
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_DOWN, 0)
+        c.process_event(Key.LEFT_META, KeyAction.KEY_DOWN, 10)
+        c.process_event(Key.RIGHT_META, KeyAction.KEY_DOWN, 20)
+        assert c.combo_held is True
+        c.process_event(Key.LEFT_META, KeyAction.KEY_UP, 500)
+        assert c.combo_held is True  # RIGHT_META still sustains the combo
+        assert c.pending_mask is False
+
+    def test_mouse_release_does_not_mask(self) -> None:
+        # A mouse trigger has no menu side-effect and is suppressed anyway.
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("mouse4",))
+        c.process_event(Key.MOUSE_4, KeyAction.KEY_DOWN, 0)
+        c.process_event(Key.MOUSE_4, KeyAction.KEY_UP, 100)
+        assert c.pending_mask is False
+
+    def test_single_side_effect_modifier_combo_does_not_mask(self) -> None:
+        # Known limitation: an alt-ONLY combo has no second key to leave held, so
+        # its lone release cannot be pre-neutralized (it would need suppress-and-
+        # resynthesize). The default win+alt is unaffected; documented in #171.
+        c = HotkeyClassifier(tap_threshold_ms=200, modifiers=("alt",))
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_DOWN, 0)
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_UP, 100)
+        assert c.pending_mask is False
+
+    def test_no_stale_mask_after_previous_dictation(self) -> None:
+        # After a full chord release, a later lone Alt tap (which never re-forms
+        # the combo) must not mask.
+        c = HotkeyClassifier(tap_threshold_ms=200)
+        self._arm_win_alt(c)
+        c.process_event(Key.LEFT_META, KeyAction.KEY_UP, 500)
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_UP, 520)
+        # New, unrelated lone Alt press/release.
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_DOWN, 2000)
+        c.process_event(Key.LEFT_ALT, KeyAction.KEY_UP, 2100)
+        assert c.pending_mask is False
