@@ -24,46 +24,46 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Session 7 — Cold-start latency design grill (#101).** S6 **landed**: the
-Windows `WH_MOUSE_LL` mouse hook (#120, ADR-0020) is **merged to `main`** (PR #159)
-and **physical click-QA passed** on real hardware (Logitech MX Master 3S) — a mouse
-side button / wheel click now arms dictation, standalone (`["mouse4"]`) or combined
-(`["ctrl","mouse4"]`), with the button's normal action conditionally suppressed.
-S1–S6 are done.
+**Next up: Session 8 — Cold-start latency implementation (#161, #162; docs #164).**
+S7 **landed** (design, code-free): the cold-start grill (#101) produced **ADR-0025**
+(the model loads on arm + is fetched on first run) and **ADR-0026** (focus drift
+holds the dictation; the overlay shows phase by colour), updated CONTEXT.md, and
+spun out seven issues. S1–S6 done; **S7 done**.
 
-**Settled in S6 — do not reopen:** both the keyboard and mouse hooks feed **one**
-classifier via an **eager-advance-under-lock + lazy-tick-dispatch** bridge (so a
-mouse button can complete a combo with modifiers and the mouse hook gets its
-suppress/pass-through decision synchronously); **keyboard timing is unchanged**. The
-native hooks' shared latent items (`SetWindowsHookExW` restype, no `WM_QUIT` on
-`uninstall`, first-event handle race — all already in `wh_keyboard_ll`, benign in
-the working path) are a deliberate **out-of-scope "harden both hooks together"
-follow-up**, not a bug.
+**Settled in S7 — do not reopen (the ADRs are the spec):**
+- **Load-on-arm** (#161): start the Whisper load at **record-start**, overlapping
+  speech (reuse `TranscribeLifecycle.preload()`); Esc lets the load finish (a
+  faster-whisper load can't be cancelled — ADR-0016); idle-unload (30 min) stays the
+  sole reaper. **Not** preload-on-launch by default.
+- **First-run fetch** (#162): download the tier model **to disk only** on the
+  daemon's first run (which the installer triggers), best-effort, lazy-fallback if
+  offline → the first *dictation* works offline. Lives in the **daemon** (only it
+  knows the exact tier). Signalled via tray notification + Usage Guide + a
+  "Downloading model…" pill caption. Cloud/BYO (#165) was **rejected as a cold-start
+  fix** and parked.
+- **#97 detect-and-hold** (S9): anchor `target_id` at record-start for **comparison
+  only**; changed target → hold in the Most-recent buffer + quiet flash, **no sound,
+  never refocus** (sidesteps the Mac `activateWithOptions_` fragility).
+- **#96 overlay** (S9): remove the dot; **pill colour carries phase**; purely
+  informational; drop the Tap/Hold cue. Plus **#163**: make the pill never steal
+  activation.
 
-**This session is a code-free design grill (HITL), not an AFK build.** Cold-start
-latency is the **deepest real-user complaint**: the model takes seconds to
-cold-load on the first dictation, and focus can drift during that wait so the paste
-misfires. Read **#101** + the issues it frames, plus **ADR-0007** (the one-shot
-latency tip) and the README "Model loading & VRAM" section (shipped by #67), then
-grill the user to a decision and produce **a short ADR + spun-out implementation
-issues** (the **grill-session handoff**, not a PR). The calls to make:
-- **#97** — stop the paste misfiring when focus drifts during the load: anchor the
-  paste target at *record-start* vs. detect-and-warn. (This is what **S8** implements.)
-- **#96** — frame the overlay states (drop the dead red dot; encode state via
-  waveform colour) so S8 can build them.
-- The cold-start **docs** already shipped in **S3 (#67 — now CLOSED)** deliberately
-  factual, pending this design — if the outcome changes the story, spin a **new**
-  docs issue; **do not reopen #67.**
+**This session (S8) is AFK.** Implement **#161** (load-on-arm) and **#162**
+(first-run fetch + its honest signalling) per **ADR-0025**, then **#164** (docs
+refresh — README "Model loading & VRAM" + Usage Guide; **supersedes #67's framing —
+do not reopen #67**). Keep the lifecycle / gating logic **pure + unit-tested**;
+daemon, install, and native wiring **thin** (the architecture seam). #161 and #162
+are mostly file-disjoint → candidates for two parallel worktree agents (commit
+first). Run `/code-review` before each PR; PRs target `main`.
 
-This unblocks **S8** (#96, #97). The other open path, **S9 (macOS)**, waits for a
-real Mac.
+**Then S9 — Overlay & focus UX** (#96, #97, #163) per **ADR-0026**.
 
-Skills: `grill-with-docs` (sharpen the decision against CONTEXT.md + the ADRs),
-`prototype` (only if a runnable spike clarifies a state/latency question). Your
-role: **decisions-needed** — you ask, challenge, draft the ADR + issues; the user
-makes the calls. **QA owed (carried-over only):** **#126** vocabulary
-recognition-lift — `qa-handoffs/02-vocabulary-recognition-qa.md` (real-model run on
-Windows; foldable into any future Windows session).
+Skills: `tdd`, `run`/`verify`, `code-review`, `diagnose`. Your role: **autonomous**.
+**QA tail (S8):** a Windows **offline first-dictation** check (install online →
+disconnect the network → first dictation still works) + a load-overlaps-speech
+eyeball — run it on Windows or **export a QA handoff**. **QA owed (carried over):**
+**#126** vocabulary recognition-lift — `qa-handoffs/02-vocabulary-recognition-qa.md`
+(real-model run on Windows).
 
 ---
 
@@ -133,15 +133,18 @@ session · **M** ≈ one focused session · **L** ≈ may span more than one.
 | **S4** | CI keystone + install hardening | AFK | M | #81 #90 ~~#92~~ | `code-review`, `diagnose` | done 2026-06-22 (#156/#157 merged) |
 | ~~**S5**~~ | ~~Clutter-proof clipboard + last-dictation recovery~~ | AFK | M | ✅ PR #141 (#138) · #142 (#119) · #146 (#139) — merged | `tdd`, `run`/`verify`, `code-review` | done 2026-06-14; Win QA PASS |
 | **S6** | Windows mouse hook | AFK | M | #120 | `run`/`verify`, `diagnose`, `code-review` | done 2026-06-22 (PR #159, QA PASS) |
-| **S7** | Cold-start latency **design** | Grill | — | #101 (frames #97 #96; #67 docs done) | `grill-with-docs`, `prototype` | — *(parallel-safe)* |
-| **S8** | Overlay & focus UX | AFK | M | #96 #97 | `run`/`verify`, `code-review` | S7 |
-| **S9** | macOS QA & polish | Manual-QA + AFK | L | #121 #95 #94 #93 | `verify`/`run`, `tdd`, `diagnose` | S2 (#118), S4 |
-| **S10** | Signing decision | Grill | — | #91 | `grill-me` | user spend call |
+| ~~**S7**~~ | ~~Cold-start latency **design**~~ | Grill | — | ✅ #101 → ADR-0025/0026; spun #161 #162 #163 #164 #165 (#96/#97 re-scoped) | `grill-with-docs` | done 2026-06-22 |
+| **S8** | Cold-start latency **implementation** | AFK | M | #161 #162 #164 | `tdd`, `run`/`verify`, `code-review` | S7 |
+| **S9** | Overlay & focus UX | AFK | M | #96 #97 #163 | `run`/`verify`, `code-review` | S7 |
+| **S10** | macOS QA & polish | Manual-QA + AFK | L | #121 #95 #94 #93 | `verify`/`run`, `tdd`, `diagnose` | S2 (#118), S4 |
+| **S11** | Signing decision | Grill | — | #91 | `grill-me` | user spend call |
 | **—** | Parked backlog | — | — | #72 #80 #129 #130 #131 | `prototype` (#130 spike) | fresh go-ahead |
 
-**Critical path:** S1 → S2 (#118) → S6 / S9 (mouse hooks). **Slot S4 early** — it
+**Critical path:** S1 → S2 (#118) → S6 / S10 (mouse hooks). **Slot S4 early** — it
 is the CI verification surface that turns most macOS work into machine-checkable
-work. **S7 is code-free and parallel-safe** — run it any time; it unblocks S8.
+work. **S7 (cold-start design) is done** — it unblocks **S8** (latency) and **S9**
+(overlay & focus), which are independent of each other (run in either order or
+parallel).
 
 ### Per-session detail
 
@@ -184,24 +187,34 @@ copy, and "paste" recovery.
 **S6 — Windows mouse hook.** #120 `WH_MOUSE_LL` adapter feeding the S2 classifier
 (ADR-0020). *QA:* Windows — physically click mouse4/mouse5/middle.
 
-**S7 — Cold-start latency design (grill).** #101 grilling session → a short ADR +
-spun-out implementation issues; decide #97's approach (anchor-target-at-record-
-start vs detect-and-warn) and frame #96's overlay states. Code-free. Follows the
-**grill-session handoff**. (#67's model-loading docs already shipped in S3 and is
-**closed** — if this design changes the story, spin a *new* docs issue rather than
-reopening #67.)
+**S7 — Cold-start latency design (grill). ✅ Done 2026-06-22.** #101 → **ADR-0025**
+(load-on-arm + first-run model fetch) and **ADR-0026** (focus-drift detect-and-hold
++ overlay phase-by-colour). Spun #161 #162 #163 #164 (`ready-for-agent`) + #165
+(parked cloud/BYO, `needs-triage`); re-scoped #96/#97 to ADR-0026; CONTEXT.md
+updated. The **new docs issue #164** supersedes #67's framing (#67 stays closed).
 
-**S8 — Overlay & focus UX.** #96 remove the non-interactive red dot → encode state
-via waveform colour; #97 anchor the paste target (per S7's decision). *QA:*
-Windows overlay.
+**S8 — Cold-start latency implementation.** #161 load-on-arm (start the Whisper load
+at record-start, overlapping speech; reuse `preload()`), #162 first-run model fetch
+(download the tier model to disk on first run, best-effort, lazy-fallback — the
+first dictation then works offline) + its honest signalling, #164 docs refresh
+(README "Model loading & VRAM" + Usage Guide). Per **ADR-0025**. Keep lifecycle /
+gating pure + tested; daemon/install/native wiring thin. *QA:* Windows **offline
+first-dictation** (install online → disconnect → first dictation works) +
+load-overlaps-speech eyeball.
 
-**S9 — macOS QA & polish.** #121 macOS mouse hook (after #118), #95 first-run
+**S9 — Overlay & focus UX.** #96 remove the dot → pill-colour phase, purely
+informational (drop the Tap/Hold cue); #97 polite **detect-and-hold** (anchor
+`target_id` at record-start for comparison only; changed target → hold in the
+Most-recent buffer + quiet flash, no sound, never refocus); #163 make the pill never
+steal activation. Per **ADR-0026**. *QA:* Windows overlay + focus-drift.
+
+**S10 — macOS QA & polish.** #121 macOS mouse hook (after #118), #95 first-run
 onboarding (pure permission mapper is testable; dialog copy + re-prompt-on-use),
 #94 finish the QA runbook, #93 diagnose intermittent paste-not-landing. CI (S4)
 makes the pure parts machine-checkable; the rest is **real-Mac Manual-QA** — if no
 Mac is available, export a QA handoff.
 
-**S10 — Signing decision (grill).** #91 clean TCC identity — a **decision**, not a
+**S11 — Signing decision (grill).** #91 clean TCC identity — a **decision**, not a
 ticket: pay for a Developer-ID + notarization pipeline vs. accept the `python3.12`
 label (ADR-0014 amendment). Needs the user's spend call.
 
@@ -336,6 +349,46 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### S7 — Cold-start latency design (grill) — 2026-06-22
+- **Shipped:** no code — design decisions. **ADR-0025** (cold-start: the model loads
+  on arm, and is fetched on first run) and **ADR-0026** (focus drift holds the
+  dictation; the overlay shows phase by colour). **CONTEXT.md** updated: *Overlay
+  Pill* (phase-by-colour, informational, "Downloading model…" caption), *Status Dot*
+  (**retired** → pill colour), *Most-recent dictation* (now also holds a regular
+  dictation when focus drifted between record-start and paste).
+- **Decisions (settled — do not reopen; the ADRs are the spec):** (1) **Load-on-arm**
+  — start the Whisper load at record-start, overlapping speech (reuse `preload()`);
+  Esc lets it finish (a faster-whisper load can't be cancelled — ADR-0016);
+  idle-unload (30 min) stays the sole reaper; **not** preload-on-launch by default.
+  (2) **First-run fetch** — download the tier model **to disk only** on the daemon's
+  first run (which the installer triggers), best-effort, lazy-fallback if offline →
+  the first *dictation* works offline; lives in the daemon (only it knows the exact
+  tier); signalled via tray notification + Usage Guide + a "Downloading model…" pill
+  caption; real % is a follow-up on the existing `on_download_progress` seam.
+  (3) **#97 detect-and-hold** — anchor `target_id` at record-start for comparison
+  only; changed target → hold in the Most-recent buffer + quiet flash, **no sound,
+  never refocus** (sidesteps the Mac `activateWithOptions_` app-granular/soft-
+  deprecated fragility; *less* pushy than today's per-paste `restore()`). (4) **#96
+  overlay** — remove the dot, pill colour carries phase, purely informational (a
+  clickable control would break click-through + reintroduce focus-stealing — the
+  ADR-0026 interlock); drop the Tap/Hold cue. **Cloud/BYO (#165) rejected as a
+  cold-start fix**, parked as its own future grill.
+- **Issues:** opened **#161** (load-on-arm) **#162** (first-run fetch) **#163** (pill
+  never steals activation) **#164** (docs refresh — supersedes #67's framing; #67
+  stays closed) — all `ready-for-agent`; **#165** (parked cloud/BYO, `needs-triage`).
+  Re-scoped + relabelled `ready-for-agent`: **#96** (overlay phase-by-colour) **#97**
+  (detect-and-hold). #101 (design parent) left **open** — close on the docs PR merge.
+- **PRs:** none yet (design docs on branch `docs/s7-cold-start-design`).
+- **QA owed:** none for S7 itself. **S8** carries a Windows **offline first-dictation**
+  check; **S9** carries overlay + focus-drift QA. Carried over: **#126** vocabulary
+  recognition-lift — `qa-handoffs/02-vocabulary-recognition-qa.md`.
+- **Follow-ups / notes:** the latency implementation became its own session — the old
+  "Overlay & focus UX" S8 split into **S8 (latency)** + **S9 (overlay/focus)**; macOS
+  → **S10**, signing → **S11**. Real download-% via `on_download_progress` (stubbed
+  today) is an optional follow-up inside #162. #163 (pill never steals activation) is
+  a likely root-cause for the "caret deactivates while talking" drift — fix at source;
+  it **complements**, not replaces, #97's detect-and-hold.
 
 ### S6 — Windows mouse hook — 2026-06-22
 - **Shipped:** the **#120 `WH_MOUSE_LL` adapter** (one PR, **#159**), feeding the
