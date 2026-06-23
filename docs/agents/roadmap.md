@@ -24,38 +24,50 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**S9 is DONE — merged to `main` + QA-passed on Windows (2026-06-23). Next up: Session 10 — macOS QA & polish (#121 #95 #94 #93) — or S11 — signing grill (#91).**
+**Next up: Session 10 — macOS QA & polish (#94 #93 #121 #95). READ FIRST:
+[`handoffs/session-10-macos-qa-polish.md`](handoffs/session-10-macos-qa-polish.md)
+(your role) + [`qa-handoffs/08-s10-macos-qa.md`](qa-handoffs/08-s10-macos-qa.md)
+(the relay-ready checklist).**
 
-**S9 (Overlay & focus UX) shipped AND landed** (AFK impl 2026-06-22; merged + QA'd
-2026-06-23) — **ADR-0026** plus **#171**: **PR #173** (#96 Status Dot → pill **colour**;
-#163 pill **never steals activation**), **PR #174** (#97 focus-drift **detect-and-hold**),
-**PR #175** (#171 **Win+Alt** neutralizing Ctrl tap) all merged to `main`. A full Windows
-manual-QA **PASSED** all four sections and **#96/#163/#97/#171 are closed** (evidence on each
-+ S9 ledger; `qa-handoffs/07-…` now STATUS: PASS). Post-QA on `main`: recording hue reverted
-**blue→white** per user preference (commit **06765e0**); a low-priority Win+Alt **delayed
-second-release** edge filed as **#177** (`needs-triage`, hypothesis — may not be worth fixing
-unless it recurs). Suite **1112 green**. S1–S9 done.
+**⚠️ Your role is REMOTE, PROXY macOS QA — not a normal session.** You run on the
+user's **Windows** box; a **separate person on a real Mac** does the device QA. The
+loop: **you write exact, copy-pasteable command blocks → the user relays them → the
+Mac tester runs them and reports what they SAW + pastes logs → the user pastes back
+→ you interpret.** You **cannot** run/build/observe the macOS app or its PyObjC
+adapters on Windows — your machine-checkable surface is pure modules + unit tests +
+`ruff`/`pyright` + **CI's `macos-latest` legs**. **Logs are not enough** (#93: a
+clean `Paste: sent` whose text never landed) — **never mark a macOS item PASS
+without the tester confirming the observable behaviour.** Full protocol + macOS
+launch quirks (launchd-only kickstart; TCC label `python3.12`; grants need a
+relaunch) are in the session handoff.
 
-**Then the next NEW session** is **S10 — macOS QA & polish** (#121 macOS mouse hook, #95
-first-run onboarding, #94 QA runbook, #93 paste-not-landing) — but it **needs a real Mac**
-(export a QA handoff if none) — **or S11 — signing decision grill** (#91), which **needs the
-user's spend call** ($99/yr Apple Developer). Both are gated on external things, so confirm
-availability with the user before picking.
+**Recommended order for a Mac-session-tonight:** **#94 runbook FIRST** (no new code,
+uses released v0.6.0 — re-proves the platform via Checklist D–G + single-instance);
+**#93 watch in parallel** (several browser dictations right after a `kickstart -k`,
+capture logs); then the **code-first** issues **#121** (pure `mac_mouse_keymap.py`
++ tests on Windows, extend `mac_hook.py`'s CGEventTap to tap
+`otherMouseDown`/`Up` → reuse the #118 classifier) and **#95** (simplify
+`qt_dialog.py`/`mapper.py` copy + add throttled **re-prompt-on-use**; keep the gate
+pure + tested). Four issues + one remote Mac is a lot — it is **fine** to land #94
+(+ #93 characterization) tonight and carry #121/#95's Mac-verification tail; keep
+the QA file honest about what's still owed.
 
-**Settled — do not reopen (ADR-0026 is the spec; S9 implemented it):** phase-by-colour
-(no dot, no Tap/Hold cue; the warm-LLM "computing" signal is now a **colour**, refining
-ADR-0016); detect-and-hold **never refocuses** (anchor `target_id` at record-start, hold in
-the Most-recent buffer + a **silent** flash on drift — Dictatem has no sound surface); the
-pill **never activates**. **#171:** the neutralizing keystroke is a **generic Ctrl tap**
-(maps to `Key.OTHER`, inert), emitted when a key-up **breaks** a held combo while a
-side-effect modifier is still down — covers `win+alt` and ctrl-combos; a *single*
-side-effect-modifier combo (e.g. `["alt"]`) is the documented uncovered edge.
+**Labels:** #121 is `ready-for-agent`; #94/#95/#93 are `needs-triage` but specced
+enough to action — don't block on the label; treat **#94 as the QA spine.**
 
-Skills: `verify`/`run`, `code-review`, `tdd`, `diagnose`. Your role for S10/S11:
-**manual-QA on a Mac / decisions-needed** (confirm availability with the user first).
-**QA owed:** none — **S9 QA is DONE** (PASS 2026-06-23) and **#126 vocabulary recognition-lift
-PASSED** (2026-06-23 — real-model A/B on Windows GPU; 3/3 terms corrected, `via hotwords`; see
-S2 ledger). #126 PASS comment posted; PR #178 merged. No carried-over QA remains.
+**Settled — do not reopen:** S1–S9 done, all QA passed (S9 ADR-0026; #126 vocab QA
+PASS 2026-06-23). Open follow-ups, low priority: **#177** (Win+Alt delayed
+second-release, hypothesis) and the #171 single-side-effect-modifier edge.
+Suite **1112 green** on `main`.
+
+**Alternatively S11 — signing decision grill (#91)** — needs the user's spend call
+($99/yr Apple Developer); a decisions grill, no Mac required. Both S10 and S11 are
+gated on external things — confirm availability with the user before picking.
+
+Skills: `verify`/`run`, `tdd`, `diagnose`, `code-review`. Your role this session:
+**remote proxy manual-QA on a Mac + AFK code for #121/#95.**
+**QA owed:** none carried in — S9 + #126 both PASS. S10's own QA is the work; record
+it in `qa-handoffs/08-s10-macos-qa.md`.
 
 ---
 
