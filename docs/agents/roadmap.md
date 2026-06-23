@@ -53,8 +53,9 @@ side-effect-modifier combo (e.g. `["alt"]`) is the documented uncovered edge.
 
 Skills: `verify`/`run`, `code-review`, `tdd`, `diagnose`. Your role for S10/S11:
 **manual-QA on a Mac / decisions-needed** (confirm availability with the user first).
-**QA owed:** **S9 QA is DONE** (PASS 2026-06-23). Remaining: carried-over **#126** vocabulary
-recognition-lift — `qa-handoffs/02-vocabulary-recognition-qa.md` (real-model run on Windows).
+**QA owed:** **S9 QA is DONE** (PASS 2026-06-23) and **#126 vocabulary recognition-lift PASSED**
+(2026-06-23 — real-model A/B on Windows GPU; 3/3 terms corrected, `via hotwords`; see S2 ledger).
+**Owed:** close **#126** + post the before/after comment via `gh` (not installed on the QA box).
 
 ---
 
@@ -606,7 +607,18 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 - **Issues:** PR **#133** closes #118 (mouse buttons in `HotkeyClassifier` — `Key.MOUSE_4/5/MIDDLE`, curated allow-list `{…, mouse4, mouse5, middle}`, conditional down/up-paired suppression; pure, unblocks #120/#121). PR **#134** closes #125 + #126 (ADR-0024 — pure `transcribe/replacements.py` + `transcribe/vocabulary.py`; replacements apply to **regular dictation only**, after trigger detection; vocabulary → `hotwords`/`initial_prompt`; both `~/.dictatem/*.md` bootstrapped opt-in).
 - **PRs:** #133 (`feat/mouse-trigger-classifier`), #134 (`feat/vocabulary-replacements`). Both reviewed (diff + checks); #134's own `/code-review` caught + fixed a whole-word boundary bug.
 - **Tests:** full suite **924 passed, 4 skipped** (baseline 863; +26 from #118, +61 from #125/126). `pyright` 0 new errors, `ruff` clean.
-- **QA owed:** #126 vocabulary recognition-lift — exported as [`qa-handoffs/02-vocabulary-recognition-qa.md`](qa-handoffs/02-vocabulary-recognition-qa.md) (real model on Windows; run from the dev clone). **Pending user run.**
+- **QA owed:** none — **#126 vocabulary recognition-lift PASSED on real hardware 2026-06-23**
+  (Windows 11 + NVIDIA GPU, `large-v3-turbo`, dev clone on `main` run with `--extra runtime-gpu`).
+  Part A: log shows `Vocabulary: 3 term(s) fed to faster-whisper via hotwords` (preferred path,
+  faster-whisper 1.2.1); empty-vocab baseline correctly logs no `Vocabulary:` line. Part B A/B
+  (same script, same delivery) — **3/3 terms corrected, no regression** on surrounding words:
+  `Dictatem` (baseline `Dictatum`) plus two private project terms (redacted), each mis-heard at
+  baseline and corrected with vocab on. Checklist:
+  [`qa-handoffs/02-vocabulary-recognition-qa.md`](qa-handoffs/02-vocabulary-recognition-qa.md)
+  now STATUS: PASS.
+  **Gotcha for the handoff:** on a CUDA box use **`--extra runtime-gpu`** (pulls `nvidia-cublas-cu12`
+  + `nvidia-cudnn-cu12`), not `--extra runtime` — a plain `runtime` venv loads the model but fails
+  the first GPU op with `cublas64_12.dll is not found`.
 - **Follow-ups / notes:** #133 & #134 touch disjoint files → merge in any order, no rebase. Flagged decisions (both non-blocking, accepted): #118 uses a `set` for down/up pairing (fine for real single-down hooks) + unconfigured buttons pass through; #126 joins multi-word vocab terms with spaces (boundary ambiguity acceptable for the focused opt-in list). Next: **S3 — docs & discoverability** (#67/#127/#122/#123).
 
 ### S1 — Triage & close-out — 2026-06-11

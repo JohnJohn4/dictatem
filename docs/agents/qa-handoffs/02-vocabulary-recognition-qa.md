@@ -1,5 +1,25 @@
 # QA Handoff — Session 2: Vocabulary recognition lift (#126)
 
+**STATUS: PASS — 2026-06-23** (Windows 11 + NVIDIA GPU, `large-v3-turbo`, dev clone on `main`
+run with `uv run --extra runtime-gpu python -m dictatem`). Part A: model load logged
+`Vocabulary: 3 term(s) fed to faster-whisper via hotwords` (preferred path, faster-whisper
+1.2.1); the empty-vocab baseline correctly logged no `Vocabulary:` line. Part B A/B (identical
+2-clause script, same delivery, vocab OFF→ON) corrected **3/3** terms with no regression on
+surrounding words:
+
+| term | baseline (vocab OFF) | with vocab (ON) |
+|---|---|---|
+| Dictatem | Dictatum | Dictatem ✅ |
+| _private term 1 (redacted)_ | mis-heard | corrected ✅ |
+| _private term 2 (redacted)_ | mis-heard (split into two words) | corrected ✅ |
+
+**Owed:** close #126 + post this table via `gh` (not installed on the QA box). **Gotcha:** on a
+CUDA box launch with **`--extra runtime-gpu`** (pulls `nvidia-cublas-cu12` + `nvidia-cudnn-cu12`),
+not `--extra runtime` — a plain `runtime` venv loads the model but fails the first GPU op with
+`cublas64_12.dll is not found`.
+
+---
+
 **Device required:** Windows, with a real Whisper model and your usual microphone.
 **Build under test:** `main` @ commit `4588f5d` or later (PR #134 merged). Run from
 the **dev clone**, not the installed `dictatem` — the installed tool is pinned to
@@ -10,10 +30,10 @@ accuracy. The wiring (pure parser, hint selection, pipeline) is already
 machine-tested; this confirms the *behaviour*.
 
 ## Prerequisites
-- Run the merged code from the clone:
+- Run the merged code from the clone (use **`runtime-gpu`** on a CUDA box — see Gotcha above):
   ```
   cd C:\Code\dictatem
-  uv run python -m dictatem
+  uv run --extra runtime-gpu python -m dictatem   # or --extra runtime on a CPU-only box
   ```
 - Vocabulary file: **`C:\Users\johnc\.dictatem\vocabulary.md`** — bootstrapped with
   a commented example on first run after the merge.
