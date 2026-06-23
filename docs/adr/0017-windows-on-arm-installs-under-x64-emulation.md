@@ -149,7 +149,7 @@ only real ARM hardware exposes (which is how this surfaced).
   couples ARM to 3.11 (EOL ~2027-10). When ARM must leave 3.11 the durable fix is
   to alias the bundled `libportaudio64bit.dll` → `libportaudioarm64.dll` in the ARM
   branch (version-proof), or to move ARM to native via the swappable backend
-  ([0013](0013-macos-transcription-engine.md)). Tracked in #181.
-- Shipped as **v0.6.1**. Real-ARM re-verification is owed once the reporter
-  reinstalls from the v0.6.1 one-liner (the body's "re-run the Snapdragon smoke
-  test" is now this).
+  ([0013](0013-macos-transcription-engine.md)). Tracked in #182.
+- Shipped as **v0.6.1**, and **re-verified on real ARM hardware (2026-06-24)**: the
+  reporter reinstalled from the v0.6.1 one-liner and dictation works. This closes
+  the body's long-owed "re-run the Snapdragon smoke test on real hardware".
