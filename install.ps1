@@ -91,17 +91,33 @@ $dictatemPython = if ($env:DICTATEM_PYTHON) { $env:DICTATEM_PYTHON } else { '3.1
 # by default, but the transcription engine `ctranslate2` (pulled by
 # faster-whisper) ships NO win_arm64 wheel and is wheel-only (no sdist), so a
 # native-ARM64 environment cannot provide a working engine. Every dependency
-# does, however, run under Windows' built-in x64 emulation (Prism): pinned to the
+# does, however, run under Windows' built-in x64 emulation (Prism): pinned to an
 # x64 build of the managed CPython, `ctranslate2`, `faster-whisper`, `sounddevice`
-# (which then loads the x64 PortAudio binary — its own arch check reports AMD64)
 # and PySide6 all resolve and run (ADR-0017). The hardware-tier logic is left
 # untouched (a Snapdragon has no NVIDIA GPU, so it resolves to a CPU tier on its
 # own). `--force` overwrites any stale launcher a prior failed native-ARM64
 # attempt may have left behind.
+#
+# The ARM pin is 3.11, NOT the project-wide 3.12 (#181). Under x64 emulation,
+# Python 3.12+ `platform.machine()` returns 'ARM64': 3.12 rewrote
+# `platform._get_machine_win32()` to query WMI `Win32_Processor.Architecture`
+# ("WOW64 processes mask the native architecture"), which reports the native
+# silicon even inside an emulated x64 process. On 'ARM64', `sounddevice` (0.5.x)
+# selects `libportaudioarm64.dll`, which the x64 (win_amd64) wheel does NOT
+# bundle, so audio capture dies on the first dictation with `error 0x7e`. Python
+# 3.11 has no such query and reports 'AMD64' under emulation, so `sounddevice`
+# loads its bundled `libportaudio64bit.dll` and audio works — the exact config
+# ADR-0017 originally QA'd. No ARM64 CI runner exists to catch this; 3.11 is in
+# the matrix, so tests/test_install_python_pin.py stays green.
 if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64' -or $env:PROCESSOR_ARCHITEW6432 -eq 'ARM64') {
     Write-Host 'Windows on ARM detected — installing under x64 CPython (runs via Prism emulation).'
     Write-Host 'Native ARM64 is not yet supported: the transcription engine (ctranslate2) ships no win_arm64 wheel.'
-    $x64Python = "cpython-$dictatemPython-windows-x86_64"
+    # DICTATEM_PYTHON still overrides (QA); otherwise pin 3.11, not 3.12 — see above.
+    if ($env:DICTATEM_PYTHON) {
+        $x64Python = "cpython-$($env:DICTATEM_PYTHON)-windows-x86_64"
+    } else {
+        $x64Python = 'cpython-3.11-windows-x86_64'
+    }
     uv python install $x64Python
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to provision an x64 Python ($x64Python) for emulation (exit code $LASTEXITCODE)."
@@ -343,9 +359,9 @@ $requirement = "dictatem[$extras] @ $source"
 if (Test-DictatemEnvBroken) { Repair-DictatemToolEnv }
 
 Write-Host "Installing dictatem[$extras] from $source ..."
-# @forceArgs / @pythonArgs pin the interpreter (step 2.5, #90 / ADR-0017): on x64
-# they expand to `--managed-python --python 3.12`; on ARM64 to `--force --python
-# cpython-3.12-windows-x86_64`.
+# @forceArgs / @pythonArgs pin the interpreter (step 2.5, #90 / ADR-0017 / #181):
+# on x64 they expand to `--managed-python --python 3.12`; on ARM64 to `--force
+# --python cpython-3.11-windows-x86_64` (ARM pins 3.11, not 3.12 — see step 2.5).
 uv tool install @forceArgs @pythonArgs $requirement
 # $ErrorActionPreference='Stop' does NOT halt on a native exe's non-zero exit,
 # so guard explicitly — otherwise a failed install falls through to the launch

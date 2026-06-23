@@ -108,3 +108,48 @@ follow-up; until then the x64-under-emulation pin simply tracks the shared
 version. The ARM bump 3.11 → 3.12 is reasoned-safe and CI-tested but **not yet
 re-verified on real ARM hardware** (no device on hand) — re-run the Snapdragon
 smoke test when one is available.
+
+## Amendment (2026-06-23): the ARM pin is 3.11, not 3.12 — Python 3.12 breaks sounddevice (#181)
+
+The #90 bump above (3.11 → 3.12, for project-wide interpreter consistency) **was
+the regression it flagged**. On real Windows-on-ARM hardware a clean v0.6.0 install
+crashes on the **first dictation** with `OSError … libportaudioarm64.dll: error
+0x7e`, even though the installer provisions a genuine x64 interpreter. The ARM
+branch is therefore pinned back to **3.11** (`cpython-3.11-windows-x86_64`),
+decoupled from the project-wide 3.12 pin.
+
+**Why 3.12 breaks it.** `sounddevice` (0.5.x) selects its bundled PortAudio DLL at
+runtime from `platform.machine()`: `arm64`/`aarch64` → `libportaudioarm64.dll`,
+otherwise → `libportaudio64bit.dll`. The x64 (`win_amd64`) wheel bundles **only**
+the `64bit` DLL. Python **3.12** rewrote `platform._get_machine_win32()` to first
+query WMI `Win32_Processor.Architecture` — the code literally comments *"WOW64
+processes mask the native architecture"* — which returns the **native silicon**
+(`ARM64`) even inside an emulated x64 process. So on 3.12+ `platform.machine()` is
+`ARM64`, `sounddevice` looks for `libportaudioarm64.dll`, the x64 wheel doesn't
+ship it, and the `dlopen` fails with `error 0x7e` (`ERROR_MOD_NOT_FOUND`),
+surfaced as an unhandled hotkey-handler error (the failure is at `import
+sounddevice`, before the adapter's `except sd.PortAudioError`). Python **3.11** has
+no such query: under x64 emulation `PROCESSOR_ARCHITEW6432` is unset (only
+x86/WOW64 emulation sets it), so it falls through to `PROCESSOR_ARCHITECTURE=AMD64`
+and `sounddevice` loads the bundled `64bit` DLL. That x64-on-3.11 interpreter is
+exactly what the body of this ADR QA'd as working.
+
+**Why CI didn't catch it.** The matrix runs `windows-latest` (x64) and
+`macos-latest`; neither is ARM64 silicon, so the WMI native-arch behaviour never
+appears. `tests/test_install_python_pin.py` proves only that the pinned version is
+*tested for import*, not that it picks the right native DLL under emulation — a gap
+only real ARM hardware exposes (which is how this surfaced).
+
+**Consequences.**
+- `install.ps1`'s ARM branch pins a literal `cpython-3.11-windows-x86_64`, still
+  honouring `DICTATEM_PYTHON` for QA overrides. The x64/GPU path keeps the
+  project-wide 3.12 pin. 3.11 is already in the CI matrix, so the pin guard stays
+  green and now also enforces the 3.11 ARM pin.
+- This re-diverges the ARM interpreter from the unified pin #90 introduced and
+  couples ARM to 3.11 (EOL ~2027-10). When ARM must leave 3.11 the durable fix is
+  to alias the bundled `libportaudio64bit.dll` → `libportaudioarm64.dll` in the ARM
+  branch (version-proof), or to move ARM to native via the swappable backend
+  ([0013](0013-macos-transcription-engine.md)). Tracked in #181.
+- Shipped as **v0.6.1**. Real-ARM re-verification is owed once the reporter
+  reinstalls from the v0.6.1 one-liner (the body's "re-run the Snapdragon smoke
+  test" is now this).
