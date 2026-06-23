@@ -53,9 +53,9 @@ side-effect-modifier combo (e.g. `["alt"]`) is the documented uncovered edge.
 
 Skills: `verify`/`run`, `code-review`, `tdd`, `diagnose`. Your role for S10/S11:
 **manual-QA on a Mac / decisions-needed** (confirm availability with the user first).
-**QA owed:** **S9 QA is DONE** (PASS 2026-06-23) and **#126 vocabulary recognition-lift PASSED**
-(2026-06-23 — real-model A/B on Windows GPU; 3/3 terms corrected, `via hotwords`; see S2 ledger).
-**Owed:** close **#126** + post the before/after comment via `gh` (not installed on the QA box).
+**QA owed:** none — **S9 QA is DONE** (PASS 2026-06-23) and **#126 vocabulary recognition-lift
+PASSED** (2026-06-23 — real-model A/B on Windows GPU; 3/3 terms corrected, `via hotwords`; see
+S2 ledger). #126 PASS comment posted; PR #178 merged. No carried-over QA remains.
 
 ---
 
