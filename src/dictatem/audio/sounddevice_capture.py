@@ -9,12 +9,12 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from dictatem.audio.buffer import AudioBuffer
 from dictatem.exceptions import AudioCaptureError
 
 if TYPE_CHECKING:
     import numpy as np
 
+    from dictatem.audio.buffer import AudioBuffer
     from dictatem.config import Config
 
 logger = logging.getLogger(__name__)
@@ -42,10 +42,15 @@ def _resolve_device(device_spec: str | None) -> int | None:
 
 
 class SoundDeviceCapture:
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, buffer: AudioBuffer) -> None:
         self._sample_rate = config.audio.sample_rate
         self._device_spec = config.audio.device
-        self._buffer = AudioBuffer(sample_rate=self._sample_rate)
+        # The buffer is the shared seam between capture and the daemon: the
+        # callback appends to it, the daemon reads level/idle off it. Injected
+        # (required, not defaulted) so both sides provably share ONE buffer — a
+        # backend that quietly made its own would leave the daemon's level pill,
+        # silence-timeout and max-duration reads dead against an empty buffer.
+        self._buffer = buffer
         self._stream: object | None = None
 
     def start(self) -> None:

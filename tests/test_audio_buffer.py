@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 import pytest
 
@@ -67,6 +69,13 @@ class TestCurrentLevel:
         buf = AudioBuffer(sample_rate=SAMPLE_RATE)
         assert buf.current_level() == 0.0
 
+    def test_zero_width_window_is_zero_not_whole_buffer(self) -> None:
+        # A 0-sample level window must give 0.0, not RMS over the ENTIRE buffer:
+        # _tail guards n_samples<=0 so it never does combined[-0:] (== [0:]).
+        buf = AudioBuffer(sample_rate=SAMPLE_RATE, level_window_ms=0)
+        buf.append(np.ones(1600, dtype=np.float32))
+        assert buf.current_level() == 0.0
+
     def test_level_uses_recent_window(self) -> None:
         """Level should reflect recent audio, not the entire history."""
         buf = AudioBuffer(sample_rate=SAMPLE_RATE, level_window_ms=100)
@@ -123,3 +132,53 @@ class TestIsIdleForSeconds:
     def test_idle_empty_buffer(self) -> None:
         buf = AudioBuffer(sample_rate=SAMPLE_RATE, silence_floor=0.01)
         assert buf.is_idle_for_seconds(1.0) is False
+
+
+class TestThreadSafety:
+    """The capture callback appends on one thread while the Qt tick reads
+    level/duration/idle on another. The lock must keep a read from ever
+    concatenating the chunk list mid-append (RESOLUTION.md §3 residual):
+    without it, ``np.concatenate(self._chunks)`` can race a concurrent
+    ``list.append`` and raise or read torn data.
+    """
+
+    def test_concurrent_appends_and_reads_stay_consistent(self) -> None:
+        buf = AudioBuffer(sample_rate=SAMPLE_RATE)
+        chunk = np.ones(160, dtype=np.float32)
+        writers = 4
+        appends_per_writer = 250
+        errors: list[BaseException] = []
+        stop = threading.Event()
+
+        def write() -> None:
+            try:
+                for _ in range(appends_per_writer):
+                    buf.append(chunk)
+            except BaseException as exc:  # noqa: BLE001 — surfaced via assert below
+                errors.append(exc)
+
+        def read() -> None:
+            # Hammer the concat-based read paths while writers mutate the chunk
+            # list; unserialised, this is where the race would surface.
+            try:
+                while not stop.is_set():
+                    buf.current_level()
+                    _ = buf.duration_seconds
+                    buf.is_idle_for_seconds(0.5)
+            except BaseException as exc:  # noqa: BLE001 — surfaced via assert below
+                errors.append(exc)
+
+        reader = threading.Thread(target=read)
+        reader.start()
+        write_threads = [threading.Thread(target=write) for _ in range(writers)]
+        for t in write_threads:
+            t.start()
+        for t in write_threads:
+            t.join()
+        stop.set()
+        reader.join()
+
+        assert errors == []
+        # Every appended sample survived exactly once — no loss, no double-count.
+        result = buf.flush()
+        assert result.shape == (writers * appends_per_writer * len(chunk),)

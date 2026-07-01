@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from dictatem.audio.buffer import AudioBuffer
+    from dictatem.config import Config
     from dictatem.hotkey.classifier import (
         HookDecision,
         HotkeyClassifier,
@@ -1506,9 +1507,17 @@ class _PlatformAdapters:
     """The OS-specific seam for the daemon wiring (#54 / ADR-0018).
 
     Everything else in :func:`_run_daemon` is platform-neutral (Qt tray and
-    overlay, sounddevice capture, faster-whisper, Ollama). Each
-    ``_start_*_daemon`` builds this set with lazy imports so the daemon module
-    stays importable on any OS (``test_import_safety``).
+    overlay, faster-whisper, Ollama). Each ``_start_*_daemon`` builds this set
+    with lazy imports so the daemon module stays importable on any OS
+    (``test_import_safety``).
+
+    ``make_audio_capture`` builds the platform's microphone-capture backend
+    from the loaded ``Config`` and the shared pure ``AudioBuffer`` the daemon
+    reads level/duration/idle off. Windows (and macOS today) use the
+    sounddevice/PortAudio backend; the factory is the seam a native macOS
+    CoreAudio backend swaps into — behind the ``AudioCapture`` protocol — to
+    retire the PortAudio HAL stop deadlock (RESOLUTION.md §4D / #161). Always
+    present, never ``None``: a daemon with no mic capture cannot dictate.
 
     A ``None`` field means the platform has no such adapter — absent, not
     faked: DaemonCore's existing None-tolerant paths handle it honestly (the
@@ -1537,6 +1546,7 @@ class _PlatformAdapters:
     """
 
     probe: HardwareProbe
+    make_audio_capture: Callable[[Config, AudioBuffer], AudioCapture]
     autostart_registrar: AutostartRegistrar | None
     clipboard: ClipboardIO | None
     keystroke: KeystrokeSender | None
@@ -1548,6 +1558,22 @@ class _PlatformAdapters:
         Callable[[Callable[[Key, KeyAction, int], HookDecision]], object] | None
     )
     check_permissions: Callable[[], tuple[PermissionGuidance, ...]] | None
+
+
+def _make_sounddevice_capture(config: Config, buffer: AudioBuffer) -> AudioCapture:
+    """Build the sounddevice (PortAudio) capture backend for the platform seam.
+
+    Both Windows and macOS wire this today. It lazy-imports sounddevice so
+    ``dictatem.daemon`` stays importable with no audio stack present
+    (``test_import_safety``); the ``_start_*_daemon`` bodies pass it by
+    reference, so no import fires until the daemon actually runs. A native
+    macOS CoreAudio backend (AVAudioEngine) would be swapped in here for
+    ``_start_macos_daemon`` — same ``AudioCapture`` contract, no PortAudio HAL
+    stop deadlock (RESOLUTION.md §4D / #161).
+    """
+    from dictatem.audio.sounddevice_capture import SoundDeviceCapture
+
+    return SoundDeviceCapture(config, buffer)
 
 
 def _acquire_single_instance_lock(lock_path: Path) -> object | None:
@@ -1629,7 +1655,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     from PySide6.QtCore import QTimer  # type: ignore[import-not-found]
     from PySide6.QtWidgets import QApplication  # type: ignore[import-not-found]
 
-    from dictatem.audio.sounddevice_capture import SoundDeviceCapture
+    from dictatem.audio.buffer import AudioBuffer
     from dictatem.autostart.reconcile import apply_autostart
     from dictatem.config import default_config_path, load_config, write_config
     from dictatem.hotkey.classifier import HotkeyClassifier
@@ -1774,7 +1800,14 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 
         set_accessory_activation_policy()
 
-    audio_capture = SoundDeviceCapture(config)
+    # The pure AudioBuffer is the seam between the platform capture backend and
+    # the daemon: the backend's callback appends mic samples; the daemon reads
+    # level/duration/idle and flushes on stop. Constructed here and injected
+    # into both so nothing reaches into the backend's private buffer — and so
+    # the backend can differ per platform (the native macOS CoreAudio path,
+    # #161) without the daemon knowing which one it got.
+    audio_buffer = AudioBuffer(sample_rate=config.audio.sample_rate)
+    audio_capture = adapters.make_audio_capture(config, audio_buffer)
 
     # Vocabulary + Replacements live in their own line-based files under
     # ~/.dictatem (ADR-0024), bootstrapped on first run with opt-in/commented
@@ -1861,7 +1894,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     daemon = DaemonCore(
         state_machine=sm,
         audio_capture=audio_capture,
-        audio_buffer=audio_capture._buffer,
+        audio_buffer=audio_buffer,
         lifecycle=lifecycle,
         overlay=overlay,
         tray=tray,
@@ -2010,7 +2043,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         now = int(time.monotonic() * 1000)
         if bridge is not None:
             bridge.tick(now)
-        overlay.update_level(audio_capture._buffer.current_level())
+        overlay.update_level(audio_buffer.current_level())
         daemon.check_loading_overlay(now_ms=now)
         daemon.check_model_download()
         daemon.check_transcription_result(now_ms=now)
@@ -2133,6 +2166,7 @@ def _start_windows_daemon() -> None:
     _run_daemon(
         _PlatformAdapters(
             probe=NvidiaHardwareProbe(),
+            make_audio_capture=_make_sounddevice_capture,
             autostart_registrar=_platform_autostart_registrar(),
             clipboard=Win32ClipboardIO(),
             keystroke=keystroke,
@@ -2212,6 +2246,10 @@ def _start_macos_daemon() -> None:
     _run_daemon(
         _PlatformAdapters(
             probe=MacHardwareProbe(),
+            # Native CoreAudio capture (AVAudioEngine) would swap in here to
+            # retire the PortAudio HAL stop deadlock (RESOLUTION.md §4D / #161);
+            # sounddevice for now, behind the same AudioCapture protocol.
+            make_audio_capture=_make_sounddevice_capture,
             autostart_registrar=autostart_registrar,
             clipboard=MacClipboardIO(),
             keystroke=MacKeystrokeSender(),
