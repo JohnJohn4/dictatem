@@ -264,11 +264,11 @@ class TestStarterAdapterSets:
         daemon._start_macos_daemon()
         (adapters,) = captured
         assert isinstance(adapters.probe, MacHardwareProbe)
-        # The mic-capture factory is the platform seam a native CoreAudio
-        # backend swaps into (#161); today both platforms build the sounddevice
-        # backend, so assert the EXACT factory is wired — make_audio_capture is
-        # a required field, so a plain `is not None` would be vacuously true.
-        assert adapters.make_audio_capture is daemon._make_sounddevice_capture
+        # macOS wires the native AVAudioEngine backend (ADR-0027 / #161) to
+        # retire the PortAudio HAL stop deadlock; Windows stays on sounddevice.
+        # Assert the EXACT factory — make_audio_capture is a required field, so a
+        # plain `is not None` would be vacuously true.
+        assert adapters.make_audio_capture is daemon._make_macaudio_capture
         assert adapters.clipboard is not None
         assert adapters.keystroke is not None
         assert adapters.foreground is not None

@@ -1576,6 +1576,22 @@ def _make_sounddevice_capture(config: Config, buffer: AudioBuffer) -> AudioCaptu
     return SoundDeviceCapture(config, buffer)
 
 
+def _make_macaudio_capture(config: Config, buffer: AudioBuffer) -> AudioCapture:
+    """Build the native macOS AVAudioEngine capture backend (RESOLUTION.md §4D / #161).
+
+    Wired only by ``_start_macos_daemon``. Replaces PortAudio on macOS with
+    AVAudioEngine so the microphone stop can no longer hit the CoreAudio HAL
+    deadlock that froze the first dictation under concurrent model load — the
+    deadlock class is deleted, not merely avoided (see ADR-0027). Same
+    ``AudioCapture`` contract as the sounddevice backend, same injected
+    ``AudioBuffer``. Lazy-imports the PyObjC adapter so ``dictatem.daemon`` stays
+    importable on any OS (the module binds AVFoundation and raises off-macOS).
+    """
+    from dictatem.audio.mac_audio_capture import MacAudioCapture
+
+    return MacAudioCapture(config, buffer)
+
+
 def _acquire_single_instance_lock(lock_path: Path) -> object | None:
     """Acquire the cross-platform single-instance lock (#92).
 
@@ -2132,7 +2148,18 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         )
 
     logger.info("Dictatem daemon started")
-    app.exec()
+    try:
+        app.exec()
+    finally:
+        # Final mic release when the event loop exits. Deferred from the #183
+        # de-leak — an unguarded PortAudio stop-on-shutdown re-introduced the
+        # #161 HAL deadlock — and safe to re-wire now: macOS runs AVAudioEngine
+        # (deadlock-free) and Windows runs MME (never deadlocked). Guarded so a
+        # teardown hiccup can't mask the real exit.
+        try:
+            audio_capture.close()
+        except Exception:
+            logger.exception("Error closing audio capture on shutdown")
 
 
 def _start_windows_daemon() -> None:
@@ -2181,9 +2208,10 @@ def _start_windows_daemon() -> None:
 def _start_macos_daemon() -> None:
     """Build the macOS adapter set (lazy imports) and run the daemon (#54).
 
-    Reuses every platform-neutral layer — Qt tray/overlay, sounddevice
-    (CoreAudio) capture, the CPU faster-whisper backend (ADR-0013), the Ollama
-    Transform. The native adapters: CGEventTap global hotkey (#56),
+    Reuses every platform-neutral layer — Qt tray/overlay, the CPU
+    faster-whisper backend (ADR-0013), the Ollama Transform. The native
+    adapters: AVAudioEngine microphone capture (ADR-0027 / #161), CGEventTap
+    global hotkey (#56),
     NSPasteboard/CGEvent/NSWorkspace paste (#59), the CGPreflight permission
     check (#57), and the LaunchAgent autostart registrar (#61) — manual-QA
     only, like their win32 counterparts. MacHardwareProbe reports no CUDA, so
@@ -2246,10 +2274,10 @@ def _start_macos_daemon() -> None:
     _run_daemon(
         _PlatformAdapters(
             probe=MacHardwareProbe(),
-            # Native CoreAudio capture (AVAudioEngine) would swap in here to
-            # retire the PortAudio HAL stop deadlock (RESOLUTION.md §4D / #161);
-            # sounddevice for now, behind the same AudioCapture protocol.
-            make_audio_capture=_make_sounddevice_capture,
+            # Native CoreAudio capture (AVAudioEngine) — retires the PortAudio
+            # HAL stop deadlock that froze the first dictation under load
+            # (RESOLUTION.md §4D / ADR-0027 / #161). Windows stays on sounddevice.
+            make_audio_capture=_make_macaudio_capture,
             autostart_registrar=autostart_registrar,
             clipboard=MacClipboardIO(),
             keystroke=MacKeystrokeSender(),

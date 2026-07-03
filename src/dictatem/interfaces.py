@@ -150,6 +150,19 @@ class AudioCapture(Protocol):
         """Stop capturing and return the accumulated audio as a single chunk."""
         ...
 
+    def close(self) -> None:
+        """Release capture resources for good (daemon shutdown). Idempotent.
+
+        Distinct from ``stop()``: ``stop()`` ends one dictation and returns its
+        audio, leaving the backend able to re-arm on a later ``start()``;
+        ``close()`` is the final teardown when the daemon's event loop exits.
+        Deferred from the #183 seam de-leak until macOS moved off PortAudio,
+        because wiring an unguarded ``Pa_StopStream`` into shutdown re-introduced
+        the very macOS HAL deadlock #161 exists to kill. Safe now on both
+        backends: AVAudioEngine cannot deadlock and Windows MME never did.
+        """
+        ...
+
 
 @runtime_checkable
 class HardwareProbe(Protocol):

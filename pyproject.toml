@@ -21,10 +21,12 @@ runtime = [
     "nvidia-ml-py>=12",
     "pywin32>=306; sys_platform == 'win32'",
     # macOS native adapters (#56/#59/#61): Cocoa for NSPasteboard/NSWorkspace,
-    # Quartz for CGEventTap/CGEvent. Darwin-gated so the macOS CI leg proves
-    # the arm64 wheel set resolves (ADR-0018) before the adapters land.
+    # Quartz for CGEventTap/CGEvent, AVFoundation for AVAudioEngine mic capture
+    # (ADR-0027 / #161). Darwin-gated so the macOS CI leg proves the arm64 wheel
+    # set resolves (ADR-0018) before the adapters land.
     "pyobjc-framework-Cocoa>=10.3; sys_platform == 'darwin'",
     "pyobjc-framework-Quartz>=10.3; sys_platform == 'darwin'",
+    "pyobjc-framework-AVFoundation>=10.3; sys_platform == 'darwin'",
 ]
 runtime-gpu = [
     "dictatem[runtime]",
@@ -66,6 +68,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "TC"]
 # their OS-binding imports legitimately sit after that runtime check (E402).
 "src/dictatem/hotkey/wh_keyboard_ll.py" = ["E402"]
 "src/dictatem/hotkey/wh_mouse_ll.py" = ["E402"]
+"src/dictatem/audio/mac_audio_capture.py" = ["E402"]
 "src/dictatem/hotkey/mac_hook.py" = ["E402"]
 "src/dictatem/paste/mac_clipboard.py" = ["E402"]
 "src/dictatem/paste/mac_keystroke.py" = ["E402"]
@@ -81,6 +84,8 @@ venv = ".venv"
 include = ["src"]
 exclude = [
     "src/dictatem/audio/sounddevice_capture.py",
+    # AVFoundation binding resolves only on macOS (like the other mac_* adapters).
+    "src/dictatem/audio/mac_audio_capture.py",
     "src/dictatem/overlay/qt_widget.py",
     "src/dictatem/tray/qt_tray.py",
     "src/dictatem/hardware/nvidia_probe.py",

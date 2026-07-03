@@ -70,6 +70,20 @@ class SoundDeviceCapture:
             raise AudioCaptureError(str(exc)) from exc
 
     def stop(self) -> np.ndarray:
+        self._close_stream()
+        return self._buffer.flush()
+
+    def close(self) -> None:
+        """Final teardown at daemon shutdown (idempotent).
+
+        Re-added with the macOS AVAudioEngine backend (#161): on Windows MME
+        the stream stop never deadlocked, so closing it on shutdown is safe.
+        A no-op if the stream is already closed (the common case, since ``stop``
+        closes it after every dictation).
+        """
+        self._close_stream()
+
+    def _close_stream(self) -> None:
         if self._stream is not None:
             try:
                 self._stream.stop()  # type: ignore[union-attr]
@@ -78,7 +92,6 @@ class SoundDeviceCapture:
                 logger.exception("Error stopping audio stream")
             finally:
                 self._stream = None
-        return self._buffer.flush()
 
     def _audio_callback(
         self,

@@ -47,6 +47,9 @@ DICTATEM_MODULES = [
     "dictatem.hotkey.mac_keymap",
     "dictatem.audio",
     "dictatem.audio.buffer",
+    # The resampler is shared with the Windows WASAPI switch (#184); it must stay
+    # pure numpy and never pull in an audio stack.
+    "dictatem.audio.resampler",
     "dictatem.transcribe",
     "dictatem.transcribe.lifecycle",
     "dictatem.overlay.state",

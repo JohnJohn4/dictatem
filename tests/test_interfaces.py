@@ -57,6 +57,9 @@ class TestProtocolSignatures:
     def test_audio_capture_methods(self) -> None:
         assert callable(getattr(interfaces.AudioCapture, "start", None))
         assert callable(getattr(interfaces.AudioCapture, "stop", None))
+        # close() is the final shutdown teardown, distinct from per-dictation
+        # stop(); re-added with the macOS AVAudioEngine backend (#161).
+        assert callable(getattr(interfaces.AudioCapture, "close", None))
 
     def test_transcriber_backend_methods(self) -> None:
         assert callable(getattr(interfaces.TranscriberBackend, "load_model", None))

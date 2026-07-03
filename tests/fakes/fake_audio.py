@@ -12,7 +12,9 @@ class FakeAudioCapture:
         self._duration_s = duration_s
         self.started: bool = False
         self.stopped: bool = False
+        self.closed: bool = False
         self.start_count: int = 0
+        self.close_count: int = 0
         self._start_errors: list[Exception] = []
 
     def start(self) -> None:
@@ -26,6 +28,10 @@ class FakeAudioCapture:
         self.stopped = True
         num_samples = int(SAMPLE_RATE * self._duration_s)
         return np.zeros(num_samples, dtype=np.float32)
+
+    def close(self) -> None:
+        self.closed = True
+        self.close_count += 1
 
     def queue_start_error(self, error: Exception) -> None:
         self._start_errors.append(error)
