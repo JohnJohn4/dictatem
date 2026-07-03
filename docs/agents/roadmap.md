@@ -31,8 +31,8 @@ The macOS #161 first-dictation freeze (a **PortAudio↔CoreAudio stop deadlock**
 macOS-only) is fixed by **option D — native AVAudioEngine capture**, now **built**:
 `MacAudioCapture` behind the `AudioCapture` protocol (Windows still sounddevice),
 a pure unit-tested polyphase resampler, `close()` re-added + wired into shutdown,
-`ADR-0027`, on branch **`fix/macos-native-audio-capture-161`** (PR to `main`;
-suite 1139 green, ruff/pyright clean). See the latest ledger entry + ADR-0027.
+`ADR-0027`, on **PR #185** (`fix/macos-native-audio-capture-161` → `main`; suite
+1141 green, ruff/pyright clean). See the latest ledger entry + ADR-0027.
 
 **Your job is the QA + release loop, remote-proxy (you on Windows, a human on a
 real Mac):** (1) ensure the branch is pushed; (2) hand the tester the agent
@@ -384,7 +384,8 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
   resampled **per tap block** so the daemon's live level/idle/duration reads work.
 - **Issues:** **#161 stays OPEN** until the real-Mac QA lands. #184 (Windows
   WASAPI) already filed and shares the resampler.
-- **PRs:** the D build → `fix/macos-native-audio-capture-161` (PR to `main`).
+- **PRs:** **PR #185** (`fix/macos-native-audio-capture-161` → `main`) — open,
+  awaiting the real-Mac QA before merge.
 - **QA owed:** the **final real-Mac QA of `MacAudioCapture`** — agent runbook
   written at [`qa-handoffs/09-macos-native-audio-capture-161-qa.md`](qa-handoffs/09-macos-native-audio-capture-161-qa.md).
   It installs the D **branch** as the real launchd daemon (`DICTATEM_REF`), so it
