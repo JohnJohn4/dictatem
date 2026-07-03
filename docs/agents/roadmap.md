@@ -24,50 +24,41 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Session 10 — macOS QA & polish (#94 #93 #121 #95). READ FIRST:
-[`handoffs/session-10-macos-qa-polish.md`](handoffs/session-10-macos-qa-polish.md)
-(your role) + [`qa-handoffs/08-s10-macos-qa.md`](qa-handoffs/08-s10-macos-qa.md)
-(the relay-ready checklist).**
+**Next up: Fix the macOS #161 freeze for good — build native AVAudioEngine capture
+(option D). READ FIRST:
+[`handoffs/macos-native-audio-capture-161.md`](handoffs/macos-native-audio-capture-161.md).**
 
-**⚠️ Your role is REMOTE, PROXY macOS QA — not a normal session.** You run on the
-user's **Windows** box; a **separate person on a real Mac** does the device QA. The
-loop: **you write exact, copy-pasteable command blocks → the user relays them → the
-Mac tester runs them and reports what they SAW + pastes logs → the user pastes back
-→ you interpret.** You **cannot** run/build/observe the macOS app or its PyObjC
-adapters on Windows — your machine-checkable surface is pure modules + unit tests +
-`ruff`/`pyright` + **CI's `macos-latest` legs**. **Logs are not enough** (#93: a
-clean `Paste: sent` whose text never landed) — **never mark a macOS item PASS
-without the tester confirming the observable behaviour.** Full protocol + macOS
-launch quirks (launchd-only kickstart; TCC label `python3.12`; grants need a
-relaunch) are in the session handoff.
+**Decided + spike-proven — do NOT re-litigate B vs D.** The #161 first-dictation
+freeze is a **PortAudio↔CoreAudio stop deadlock** (macOS-only, under concurrent
+load). The capture seam was de-leaked and merged (**PR #183**: a
+`_PlatformAdapters.make_audio_capture` factory + an injected, thread-safe
+`AudioBuffer`), so swapping macOS to a native backend is a **one-line factory
+change**. A throwaway AVAudioEngine spike on the **affected hardware** (Apple M3 /
+macOS 26.5 / pyobjc 12.2.1) passed all four unknowns: **0/11 deadlocks under real
+model load** (PortAudio was 2/100 *unbounded* hangs), mic-off between dictations,
+TCC prompt fires, transcript word-for-word. Build the production **`MacAudioCapture`
++ a pure resampler**, **re-add `close()`** (deferred from #183, now safe), write the
+**ADR**, clean up, and drive a **final real-Mac QA**. Full scope, embedded spike
+evidence, file/line refs, and the one design call (bounded ~1.45 s `stop()` on the
+Qt main thread) are in the brief.
 
-**Recommended order for a Mac-session-tonight:** **#94 runbook FIRST** (no new code,
-uses released v0.6.0 — re-proves the platform via Checklist D–G + single-instance);
-**#93 watch in parallel** (several browser dictations right after a `kickstart -k`,
-capture logs); then the **code-first** issues **#121** (pure `mac_mouse_keymap.py`
-+ tests on Windows, extend `mac_hook.py`'s CGEventTap to tap
-`otherMouseDown`/`Up` → reuse the #118 classifier) and **#95** (simplify
-`qt_dialog.py`/`mapper.py` copy + add throttled **re-prompt-on-use**; keep the gate
-pure + tested). Four issues + one remote Mac is a lot — it is **fine** to land #94
-(+ #93 characterization) tonight and carry #121/#95's Mac-verification tail; keep
-the QA file honest about what's still owed.
+**⚠️ Role: AFK build on Windows + a final REMOTE-PROXY Mac QA.** Author the backend +
+pure resampler + ADR on Windows (machine-checkable: unit tests + `ruff`/`pyright` +
+CI's `macos-latest` legs). The native backend's *runtime* correctness needs a **real
+Mac** — reuse the runbook/remote-proxy loop (brief §6). **Never mark macOS PASS
+without the human confirming observable behaviour** (#93's lesson).
 
-**Labels:** #121 is `ready-for-agent`; #94/#95/#93 are `needs-triage` but specced
-enough to action — don't block on the label; treat **#94 as the QA spine.**
+**Also outstanding on the macOS track (after / alongside #161):** Session 10 — macOS
+QA & polish (#94 #93 #121 #95); S11 — signing grill (#91). A first-dictation freeze
+(#161) takes priority over S10 polish. #121 is `ready-for-agent`.
 
 **Settled — do not reopen:** S1–S9 done, all QA passed (S9 ADR-0026; #126 vocab QA
-PASS 2026-06-23). Open follow-ups, low priority: **#177** (Win+Alt delayed
-second-release, hypothesis) and the #171 single-side-effect-modifier edge.
-Suite **1112 green** on `main`.
+PASS). **PR #183 merged** (de-leak seam; the `close()`/shutdown-release was
+deliberately deferred to the #161-D work). Suite **1114 green** on `main`.
 
-**Alternatively S11 — signing decision grill (#91)** — needs the user's spend call
-($99/yr Apple Developer); a decisions grill, no Mac required. Both S10 and S11 are
-gated on external things — confirm availability with the user before picking.
-
-Skills: `verify`/`run`, `tdd`, `diagnose`, `code-review`. Your role this session:
-**remote proxy manual-QA on a Mac + AFK code for #121/#95.**
-**QA owed:** none carried in — S9 + #126 both PASS. S10's own QA is the work; record
-it in `qa-handoffs/08-s10-macos-qa.md`.
+Skills: `tdd`, `run`/`verify`, `diagnose`, `code-review`; an optional
+`grill-with-docs` pass on the §4e stop()-threading call. Your role: **AFK build +
+remote-proxy Mac QA.**
 
 ---
 
@@ -356,6 +347,40 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### macOS #161 freeze — de-leak seam + option-D decision + build handoff — 2026-07-03
+- **Shipped:** **PR #183** (merged to `main`, squash `75303ae`) — de-leaked the
+  `AudioCapture` seam so the macOS native-capture backend (option D) swaps in behind
+  the protocol: a `_PlatformAdapters.make_audio_capture` factory, the shared
+  `AudioBuffer` injected into both the backend and DaemonCore (killed the private
+  `capture._buffer` reach-through), and a thread-safe `AudioBuffer`
+  (snapshot-under-lock). Windows unchanged (provably the only `SoundDeviceCapture`
+  caller). `/code-review` (high, workflow-backed) applied — lock priority-inversion,
+  a `-0` tail bug, required-buffer, identity assert. `close()`/shutdown-release was
+  **deferred to the D build** (an unguarded PortAudio stop-on-shutdown re-introduced
+  the deadlock).
+- **Decisions (settled — do NOT reopen):** root cause is a **PortAudio↔CoreAudio stop
+  deadlock**, macOS-only (RESOLUTION.md §1). Chosen fix is **option D — native
+  AVAudioEngine capture** (deletes the deadlock class, restores per-dictation
+  mic-off, keeps Windows on sounddevice). **B** (keep-open+idle-close) is the reserve.
+  **Spike-proven viable** on the affected HW (Apple M3 / macOS 26.5 / pyobjc 12.2.1):
+  **0/11 deadlocks under real model load** (PortAudio was 2/100 unbounded), mic-off,
+  TCC prompt, word-for-word transcript; `floatChannelData` PRIMARY read works; native
+  rate varies (44.1/48k → read at `start()`); `stop()` bounded ≤~1.45 s under load.
+- **Issues:** filed **#184** (Windows MME→WASAPI, `enhancement`/`needs-triage` —
+  shares the D resampler). **#161 stays open** until the D build + real-Mac QA land.
+- **PRs:** **#183** merged. **Next PR** builds `MacAudioCapture` + a pure resampler +
+  `close()` + the ADR — see **[`handoffs/macos-native-audio-capture-161.md`](handoffs/macos-native-audio-capture-161.md)** (the full build brief).
+- **QA owed:** the **final real-Mac QA of `MacAudioCapture`** (brief §6) —
+  no-freeze-on-cold-first-dictation-under-load, records/transcribes/pastes, mic-off,
+  **TCC under the `.app`/launchd identity** (the one item the spike didn't cover).
+  #183's Windows capture smoke PASSED live (injected buffer + concurrent lock).
+- **Follow-ups / notes:** superseded `v0.6.2-rc1`/`v0.6.2` warm-up + stall-watchdog
+  (failed QA, misdiagnosed the ctranslate2 layer) live on branch
+  `fix/macos-coldstart-deadlock-161` — **NOT on `main`**; reconcile/delete in the D
+  cleanup. The #161 fix-package (RESOLUTION, `audio-repro/`, the B patch,
+  `spike-macaudiocapture/` + the AGENT-RUNBOOK) is **untracked** — preserve in `main`
+  during the D cleanup (**SANITIZE first: public repo, tester home paths in raw logs**).
 
 ### S9 — Overlay & focus UX — 2026-06-22
 - **Shipped:** three PRs, one per slice, each `/code-review`'d (high, 8 angles) before
