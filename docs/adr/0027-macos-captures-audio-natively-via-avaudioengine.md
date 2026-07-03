@@ -120,6 +120,14 @@ without the always-on-mic cost of the keep-open reserve.
 - **`AudioCapture.close()` is re-added and wired into daemon shutdown.** Deferred
   from #183, now safe on both backends (AVAudioEngine cannot deadlock; Windows
   MME never did). It is idempotent and distinct from `stop()`.
+- **Known limitation — `config.audio.device` is not honored on macOS yet.** The
+  sounddevice backend selects a specific input by name/index; the native backend
+  records from the system **default** input node. Selecting a device on
+  AVAudioEngine means resolving a CoreAudio `AudioDeviceID` and setting it on the
+  input node's audio unit — untestable off-device — so it is deferred to a
+  follow-up. `MacAudioCapture` **warns** (rather than silently ignoring) when a
+  non-default `audio.device` is configured; the default-mic case (the common one)
+  is unaffected.
 - **Open item — TCC under the packaged identity.** The spike confirmed the
   Microphone (TCC) prompt fires, but under a terminal/uv identity. Grants attach
   to the running binary ([ADR-0014](0014-macos-permissions-and-app-identity-shell.md)),

@@ -57,7 +57,7 @@ class TestOutputContract:
 class TestLength:
     @pytest.mark.parametrize(
         ("src_rate", "seconds"),
-        [(48000, 1.0), (44100, 1.0), (48000, 0.5), (44100, 2.3), (32000, 1.0)],
+        [(48000, 1.0), (44100, 1.0), (48000, 0.5), (44100, 2.3), (32000, 1.0), (8000, 1.0)],
     )
     def test_length_matches_rate_ratio(self, src_rate: int, seconds: float) -> None:
         src = _tone(440, src_rate, seconds)
@@ -130,7 +130,10 @@ class TestDCGain:
 
 
 class TestStreamingEqualsBatch:
-    @pytest.mark.parametrize("src_rate", [44100, 48000, 16000, 32000])
+    # 8000 is an upsample (8k -> 16k): this backend never upsamples, but the
+    # shared resampler (#184) must still keep streaming == batch there, which
+    # proves the (q-1) history retention is general, not downsample-only.
+    @pytest.mark.parametrize("src_rate", [44100, 48000, 16000, 32000, 8000])
     def test_arbitrary_block_split_matches_single_call(self, src_rate: int) -> None:
         rng = np.random.default_rng(1234)
         src = rng.standard_normal(src_rate).astype(np.float32) * 0.3

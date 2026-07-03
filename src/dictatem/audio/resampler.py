@@ -135,9 +135,11 @@ class PolyphaseResampler:
 
         self._next_j = int(js[-1]) + 1 if js.size else self._next_j
         self._in_count = new_in_count
-        # Retain the last (q - 1) inputs as history for the next block. This is
-        # sufficient because we only ever downsample (M >= L), so i(next_j) never
-        # reaches back further than (q - 1) samples before in_count.
+        # Retain the last (q - 1) inputs as history for the next block. Always
+        # enough: by the maximality of j_max the next output's newest input index
+        # i(next_j) is >= in_count, so its oldest tap (i - q + 1) never predates
+        # in_count - (q - 1) — the window we keep. (Holds for up- and
+        # down-sampling; in practice this backend only ever downsamples to 16k.)
         keep = q - 1
         self._hist = x_ext[-keep:].copy() if keep else np.zeros(0, dtype=np.float32)
         # asarray keeps the declared float32 return type: np.sum(axis=1) widens

@@ -561,15 +561,21 @@ class DaemonCore:
         try:
             self._audio_capture.start()
         except AudioCaptureError:
-            logger.warning(
-                "Microphone unavailable — check Windows mic permissions "
-                "(Settings → Privacy & security → Microphone)"
-            )
-            self._tray.show_notification(
-                "Microphone Unavailable",
-                "Microphone unavailable — check Windows mic permissions "
-                "(Settings → Privacy & security → Microphone)",
-            )
+            # Point the user at the RIGHT OS panel: macOS mic capture
+            # (MacAudioCapture) now raises this too, so Windows-only wording would
+            # send a Mac user to a Settings path that doesn't exist (#161).
+            if sys.platform == "darwin":
+                guidance = (
+                    "Microphone unavailable — grant Microphone access in System "
+                    "Settings → Privacy & Security → Microphone"
+                )
+            else:
+                guidance = (
+                    "Microphone unavailable — check Windows mic permissions "
+                    "(Settings → Privacy & security → Microphone)"
+                )
+            logger.warning(guidance)
+            self._tray.show_notification("Microphone Unavailable", guidance)
             self._recover_to_idle()
             raise _AbortCommandChain from None
         # Anchor the foreground for focus-drift detection (ADR-0026 / #97): this
