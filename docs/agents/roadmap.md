@@ -24,51 +24,47 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: drive the REAL-MAC QA of the #161 native-capture fix, then cut the
-release. The option-D build is DONE and on a PR — do NOT rebuild it.**
+**Next up: CUT THE RELEASE (v0.6.2) — the #161 macOS fix passed real-Mac QA. Then
+the remaining macOS track. Do NOT rebuild the fix or re-run the QA.**
 
-The macOS #161 first-dictation freeze (a **PortAudio↔CoreAudio stop deadlock**,
-macOS-only) is fixed by **option D — native AVAudioEngine capture**, now **built**:
-`MacAudioCapture` behind the `AudioCapture` protocol (Windows still sounddevice),
-a pure unit-tested polyphase resampler, `close()` re-added + wired into shutdown,
-`ADR-0027`, on **PR #185** (`fix/macos-native-audio-capture-161` → `main`; suite
-1141 green, ruff/pyright clean). See the latest ledger entry + ADR-0027.
+The macOS #161 first-dictation freeze (a **PortAudio↔CoreAudio stop deadlock**) is
+fixed by **option D — native AVAudioEngine capture** (`MacAudioCapture` behind the
+`AudioCapture` protocol; Windows still sounddevice; pure resampler; `close()`
+re-wired; ADR-0027) on **PR #185**. **Real-Mac QA PASSED 2026-07-05** on the exact
+repro device (Apple M3 / macOS 26.5 / 25F71): 5/5 cold-first-dictation-under-load
+with **no freeze**, records/transcribes/pastes, mic-off between dictations, TCC
+capture works under the packaged `.app`/launchd identity, 41 s dictation OK. The
+deadlock signature (silence after "Model loaded") is gone. Evidence:
+`docs/diagnostics/dictatem-161-qa/` + [`qa-handoffs/09-*`](qa-handoffs/09-macos-native-audio-capture-161-qa.md) (STATUS: PASS).
 
-**Your job is the QA + release loop, remote-proxy (you on Windows, a human on a
-real Mac):** (1) ensure the branch is pushed; (2) hand the tester the agent
-runbook **[`qa-handoffs/09-macos-native-audio-capture-161-qa.md`](qa-handoffs/09-macos-native-audio-capture-161-qa.md)**
-— it installs the branch as the real launchd daemon (`DICTATEM_REF`) and drives
-the observable checks (no-freeze-cold-first-dictation-under-load ×5,
-records/transcribes/pastes, mic-off between dictations, **TCC under the packaged
-`.app`/launchd identity** — the one item the spike couldn't cover, back-to-back +
-long); (3) **on PASS**, merge the PR, close **#161** on the evidence, and cut the
-release (bump `DICTATEM_TAG` in `install.sh` **and** `install.ps1` + the README
-one-liner together — `tests/test_install_python_pin.py` guards them — tag, cut the
-`gh release`), framed as the macOS-audio fix that deletes the PortAudio dependency
-on macOS, superseding the misdiagnosed `v0.6.2-rc1`. **Never mark macOS PASS
-without the human confirming observable behaviour** (#93's lesson).
+**The release runbook is [`handoffs/release-v0.6.2-macos-audio-fix.md`](handoffs/release-v0.6.2-macos-audio-fix.md)** — exact steps: merge PR #185 → `chore(release): v0.6.2` on `main`
+bumping the tag in `install.sh`/`install.ps1`/`README.md` + `pyproject.toml`/`uv.lock`
+together (`tests/test_install_python_pin.py` guards the *Python* pin, not the tag) →
+tag `v0.6.2` → `gh release` → comment the QA evidence on **#161** and close it.
+Frame it as the macOS-audio fix that deletes the PortAudio dependency on macOS,
+superseding the misdiagnosed `v0.6.2-rc1`. QA ran on ctranslate2 4.8.1 and passed,
+so the old `<4.8` pin is confirmed unneeded.
 
-**Settled — do NOT reopen or rebuild:** option D is decided, built, and
-spike-proven (0/11 deadlocks under real load vs PortAudio's 2/100 unbounded).
-`stop()` ships on the Qt main thread as-is (bounded ~1.5 s hitch, option i);
-off-thread teardown (ii/iii) is a follow-up *only if* QA feels the first-dictation
-hitch. Resampler is pure numpy (shared with #184). load-on-arm (ADR-0025) stands.
+**Settled — do NOT reopen or rebuild:** option D is decided, built, spike-proven,
+and now real-Mac-QA'd. `stop()` ships on the Qt main thread as-is (option i);
+off-thread teardown (ii/iii) is a follow-up only if the first-dictation hitch
+annoys (QA felt only a one-time 11.5 s cold-disk load hitch — expected, not a
+freeze). Resampler is pure numpy (shared with #184). load-on-arm (ADR-0025) stands.
 
-**Two user actions recommended (outward-facing — left for you/the maintainer):**
-delete the stale remote branch `fix/macos-coldstart-deadlock-161` + the
-misdiagnosed `v0.6.2-rc1` tag (ADR-0027 annotates them superseded); and the large
-untracked local diagnostics under `docs/diagnostics/` (home-path-bearing) were
-left **local, not committed** — delete or keep, your call.
+**Two user actions recommended (outward-facing):** delete the stale remote branch
+`fix/macos-coldstart-deadlock-161` + the misdiagnosed `v0.6.2-rc1` tag (ADR-0027
+annotates them superseded); and the untracked local diagnostics under
+`docs/diagnostics/` (home-path-bearing, incl. the QA evidence) were left **local,
+not committed** — delete or keep, your call.
 
-**Also outstanding on the macOS track (after #161 ships):** S10 — macOS QA & polish
-(#94 #93 #121 #95); S11 — signing grill (#91). #121 is `ready-for-agent`.
+**Also outstanding on the macOS track (after v0.6.2 ships):** S10 — macOS QA &
+polish (#94 #93 #121 #95); S11 — signing grill (#91). #121 is `ready-for-agent`.
 
 **Settled — do not reopen:** S1–S9 done, all QA passed. **PR #183 merged**
-(de-leak seam). The #161-D build (this session) is on its PR awaiting the Mac QA.
+(de-leak seam). The #161-D build passed real-Mac QA and is ready to release (PR #185).
 
-Skills: `tdd`, `run`/`verify`, `diagnose`, `code-review`; an optional
-`grill-with-docs` pass on the §4e stop()-threading call. Your role: **AFK build +
-remote-proxy Mac QA.**
+Skills: `run`/`verify`, `code-review`. Your role: **cut the release (outward-facing
+GitHub steps), then pick up the remaining macOS track.**
 
 ---
 
@@ -386,14 +382,19 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
   WASAPI) already filed and shares the resampler.
 - **PRs:** **PR #185** (`fix/macos-native-audio-capture-161` → `main`) — open,
   awaiting the real-Mac QA before merge.
-- **QA owed:** the **final real-Mac QA of `MacAudioCapture`** — agent runbook
-  written at [`qa-handoffs/09-macos-native-audio-capture-161-qa.md`](qa-handoffs/09-macos-native-audio-capture-161-qa.md).
-  It installs the D **branch** as the real launchd daemon (`DICTATEM_REF`), so it
-  closes the one item the spike couldn't: **TCC Microphone under the packaged
-  `.app`/launchd identity**. Gates: no-freeze-cold-first-dictation-under-load ×5,
-  records/transcribes/pastes, mic-off between dictations, back-to-back + long.
-  **Do not close #161 or cut the release without a human confirming the observable
-  checks.**
+- **QA — PASS ✅ 2026-07-05** on the exact repro device (Apple M3 / macOS 26.5 /
+  25F71), option-D build installed as the real launchd daemon + `Dictatem.app` via
+  `DICTATEM_REF`. All 5 checks passed: **5/5 cold-first-dictation-under-load with no
+  freeze** (daemon log shows `Model loaded → Processing audio → Transcription
+  complete → Paste: sent` every round — the post-"Model loaded" silence signature is
+  gone), records/transcribes/pastes exact, mic-off between dictations, TCC capture
+  works under the packaged `.app`/launchd identity, 41 s dictation → 329 chars no
+  hang. Honest caveats (non-blocking): Round 1 one-time 11.5 s cold-disk load hitch
+  (recovered/typed — not a freeze); TCC prompt not freshly re-observed (pre-granted).
+  Ran on ctranslate2 4.8.1 → the `<4.8` pin is confirmed unneeded. Runbook
+  [`qa-handoffs/09-*`](qa-handoffs/09-macos-native-audio-capture-161-qa.md) STATUS:
+  PASS; evidence in `docs/diagnostics/dictatem-161-qa/` (kept local — tester home
+  paths). **Release next** — see [`handoffs/release-v0.6.2-macos-audio-fix.md`](handoffs/release-v0.6.2-macos-audio-fix.md).
 - **Follow-ups / notes:** (1) **Superseded work — user action recommended (not done
   here, it's an outward-facing/destructive git op):** delete the stale remote
   branch `fix/macos-coldstart-deadlock-161` and the misdiagnosed `v0.6.2-rc1` tag

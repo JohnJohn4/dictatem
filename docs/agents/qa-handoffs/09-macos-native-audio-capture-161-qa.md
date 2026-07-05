@@ -1,5 +1,19 @@
 # QA Handoff — macOS native AVAudioEngine capture (#161) · AGENT RUNBOOK
 
+**STATUS: ✅ PASS — 2026-07-05.** Run on the exact repro device (Apple M3 / macOS
+26.5, build 25F71, arm64) against the option-D build
+(`fix/macos-native-audio-capture-161`) installed as the real launchd daemon +
+generated `Dictatem.app`. All 5 checks passed; the daemon log shows `Model loaded
+→ Processing audio → Transcription complete → Paste: sent` every round with **no
+post-"Model loaded" silence** — the PortAudio↔CoreAudio deadlock signature is gone.
+Crux (Check 1): 5/5 cold-first-dictation-under-load, no freeze. Check 5: a 41 s
+dictation → 329 chars, no hang. Honest caveats (both non-blocking): Round 1 had a
+one-time 11.5 s cold-disk model-load hitch (recovered, typed cleanly — not a
+freeze); the TCC Microphone prompt was **not freshly re-observed** (pre-granted
+from the Jul-3 install), though capture works under the packaged identity and
+System Settings shows `python3.12` = ON. Evidence: `docs/diagnostics/dictatem-161-qa/`
+(FINDINGS.md, env.txt, check1/check5 daemon logs) — kept local (tester home paths).
+
 > **You are a Claude Code agent running on a real macOS device.** This is a
 > self-contained runbook. Follow it top to bottom: install the fix build, grant
 > permissions, drive a human at the keyboard through a handful of **observable**
