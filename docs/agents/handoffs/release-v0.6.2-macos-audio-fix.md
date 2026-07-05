@@ -1,6 +1,13 @@
 # Release handoff — v0.6.2 (macOS audio fix, #161)
 
-**Status:** the #161 fix (option-D native AVAudioEngine capture) is **built,
+**STATUS: ✅ EXECUTED 2026-07-05.** PR #185 squash-merged (`ddcdfcb`), released as
+[v0.6.2](https://github.com/JohnJohn4/dictatem/releases/tag/v0.6.2) (`chore(release)`
+`4cf3e2e`), tag + GitHub release live, install one-liners re-pinned (HTTP 200
+verified), QA evidence commented on #161. **Still open (outward-facing/destructive):**
+the branch/tag cleanup in the last section. The steps below are retained as the
+record of what was run.
+
+**Original status:** the #161 fix (option-D native AVAudioEngine capture) is **built,
 `/code-review`'d, CI-green on PR #185, and real-Mac-QA PASSED (2026-07-05)**. All
 that remains is the outward-facing release. This doc is the exact, copy-paste
 runbook — plus drafted release notes and the #161 close comment.

@@ -24,47 +24,45 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: CUT THE RELEASE (v0.6.2) — the #161 macOS fix passed real-Mac QA. Then
-the remaining macOS track. Do NOT rebuild the fix or re-run the QA.**
+**Next up: the remaining macOS track — S10 (macOS QA & polish: #94 #93 #121 #95)
+and S11 (signing grill: #91). The macOS #161 freeze is FIXED and SHIPPED in
+v0.6.2 — do NOT reopen it.**
 
-The macOS #161 first-dictation freeze (a **PortAudio↔CoreAudio stop deadlock**) is
-fixed by **option D — native AVAudioEngine capture** (`MacAudioCapture` behind the
-`AudioCapture` protocol; Windows still sounddevice; pure resampler; `close()`
-re-wired; ADR-0027) on **PR #185**. **Real-Mac QA PASSED 2026-07-05** on the exact
-repro device (Apple M3 / macOS 26.5 / 25F71): 5/5 cold-first-dictation-under-load
-with **no freeze**, records/transcribes/pastes, mic-off between dictations, TCC
-capture works under the packaged `.app`/launchd identity, 41 s dictation OK. The
-deadlock signature (silence after "Model loaded") is gone. Evidence:
-`docs/diagnostics/dictatem-161-qa/` + [`qa-handoffs/09-*`](qa-handoffs/09-macos-native-audio-capture-161-qa.md) (STATUS: PASS).
+**✅ v0.6.2 SHIPPED (2026-07-05)** — the macOS first-dictation freeze
+(PortAudio↔CoreAudio stop deadlock) is fixed by **option D — native AVAudioEngine
+capture** (ADR-0027), which deletes the PortAudio dependency on macOS. Built on
+PR #185 (merged, squash `ddcdfcb`), released as **[v0.6.2](https://github.com/JohnJohn4/dictatem/releases/tag/v0.6.2)** (`chore(release)` `4cf3e2e`, tag pushed, GitHub release
+live, install one-liners re-pinned). **Real-Mac QA PASSED** on the exact repro
+device (Apple M3 / macOS 26.5 / 25F71): 5/5 cold-first-dictation-under-load with no
+freeze, records/transcribes/pastes, mic-off between dictations, TCC capture under
+the packaged `.app`/launchd identity, 41 s dictation OK. Superseded the misdiagnosed
+`v0.6.2-rc1` (ctranslate2 theory). Full detail in the latest ledger entry + ADR-0027.
 
-**The release runbook is [`handoffs/release-v0.6.2-macos-audio-fix.md`](handoffs/release-v0.6.2-macos-audio-fix.md)** — exact steps: merge PR #185 → `chore(release): v0.6.2` on `main`
-bumping the tag in `install.sh`/`install.ps1`/`README.md` + `pyproject.toml`/`uv.lock`
-together (`tests/test_install_python_pin.py` guards the *Python* pin, not the tag) →
-tag `v0.6.2` → `gh release` → comment the QA evidence on **#161** and close it.
-Frame it as the macOS-audio fix that deletes the PortAudio dependency on macOS,
-superseding the misdiagnosed `v0.6.2-rc1`. QA ran on ctranslate2 4.8.1 and passed,
-so the old `<4.8` pin is confirmed unneeded.
+**Tracking note:** the freeze had no dedicated open issue — it was informally called
+"#161", but issue **#161 is actually *load-on-arm*** (closed in S8, the change that
+*exposed* the latent PortAudio bug). The v0.6.2 fix + QA evidence are documented as a
+comment on #161 and in ADR-0027; no issue was left orphaned.
 
-**Settled — do NOT reopen or rebuild:** option D is decided, built, spike-proven,
-and now real-Mac-QA'd. `stop()` ships on the Qt main thread as-is (option i);
-off-thread teardown (ii/iii) is a follow-up only if the first-dictation hitch
-annoys (QA felt only a one-time 11.5 s cold-disk load hitch — expected, not a
-freeze). Resampler is pure numpy (shared with #184). load-on-arm (ADR-0025) stands.
-
-**Two user actions recommended (outward-facing):** delete the stale remote branch
-`fix/macos-coldstart-deadlock-161` + the misdiagnosed `v0.6.2-rc1` tag (ADR-0027
-annotates them superseded); and the untracked local diagnostics under
+**Recommended cleanup still OPEN (outward-facing/destructive — not done):** delete
+the stale remote branch `fix/macos-coldstart-deadlock-161` + the `v0.6.2-rc1` tag
+(both superseded, annotated in ADR-0027). Untracked local diagnostics under
 `docs/diagnostics/` (home-path-bearing, incl. the QA evidence) were left **local,
 not committed** — delete or keep, your call.
 
-**Also outstanding on the macOS track (after v0.6.2 ships):** S10 — macOS QA &
-polish (#94 #93 #121 #95); S11 — signing grill (#91). #121 is `ready-for-agent`.
+**Settled — do NOT reopen:** S1–S9 done + QA passed; **#161 fix shipped in v0.6.2**.
+Follow-ups tracked: **#184** (Windows WASAPI, reuses the v0.6.2 resampler),
+`config.audio.device` selection on macOS (native backend warns + uses default),
+off-main-thread `stop()` teardown (only if the first-dictation hitch annoys).
+load-on-arm (ADR-0025) stands — per-dictation stop is safe again.
 
-**Settled — do not reopen:** S1–S9 done, all QA passed. **PR #183 merged**
-(de-leak seam). The #161-D build passed real-Mac QA and is ready to release (PR #185).
+**The macOS track (S10/S11) needs a Mac (real-Mac QA) or a user spend call
+(signing).** S10: #121 macOS mouse hook (`ready-for-agent`, reuses the S6 pure
+classifier), #95 first-run onboarding, #94 QA runbook, #93 paste-not-landing. S11:
+#91 signing decision (Developer-ID $99/yr — user's call). Confirm device/spend
+availability with the user before picking.
 
-Skills: `run`/`verify`, `code-review`. Your role: **cut the release (outward-facing
-GitHub steps), then pick up the remaining macOS track.**
+Skills: `run`/`verify`, `tdd`, `diagnose`, `code-review`. Your role: **macOS polish
+(remote-proxy Mac QA) or the signing grill.**
 
 ---
 
@@ -380,8 +378,13 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
   resampled **per tap block** so the daemon's live level/idle/duration reads work.
 - **Issues:** **#161 stays OPEN** until the real-Mac QA lands. #184 (Windows
   WASAPI) already filed and shares the resampler.
-- **PRs:** **PR #185** (`fix/macos-native-audio-capture-161` → `main`) — open,
-  awaiting the real-Mac QA before merge.
+- **PRs / release:** **PR #185** squash-**merged** to `main` (`ddcdfcb`) after CI
+  green + real-Mac QA PASS; **released as [v0.6.2](https://github.com/JohnJohn4/dictatem/releases/tag/v0.6.2)**
+  (`chore(release)` `4cf3e2e`: bumped the pinned tag in `install.sh`/`install.ps1`/
+  `README` + `pyproject`/`uv.lock` — the latter also picked up the previously-unlocked
+  `pyobjc-framework-AVFoundation`; tag pushed; GitHub release live; install one-liners
+  re-pinned + verified HTTP 200). Superseded `v0.6.2-rc1`. QA evidence commented on
+  **#161** (which is *load-on-arm*, already closed — the freeze had no dedicated issue).
 - **QA — PASS ✅ 2026-07-05** on the exact repro device (Apple M3 / macOS 26.5 /
   25F71), option-D build installed as the real launchd daemon + `Dictatem.app` via
   `DICTATEM_REF`. All 5 checks passed: **5/5 cold-first-dictation-under-load with no
