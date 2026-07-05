@@ -16,6 +16,17 @@ dictatem = "dictatem.daemon:main"
 [project.optional-dependencies]
 runtime = [
     "faster-whisper>=1.1",
+    # faster-whisper only requires av>=11, so uv would pick the newest av — but
+    # av 15+ raised its Apple-Silicon wheel floor to macOS 14, so on macOS 12/13
+    # there is NO matching wheel and uv falls back to COMPILING av from source
+    # (needs Xcode CLT + pkg-config + ffmpeg), which breaks the wheel-only install
+    # on a clean Mac (ADR-0011) — it froze a macOS 13.5 install with a 15 GB Xcode
+    # prompt. Pin macOS to av 14.2.0, the newest release with a `macosx_12` arm64
+    # wheel (installs on macOS 12+). av is only faster-whisper's file-decode dep
+    # and is unused on dictatem's numpy-array transcribe path, so this is
+    # install-only (validated: faster-whisper 1.2.1 + av 14.2.0 transcribes fine).
+    # Windows/Linux keep the latest av. Revisit if av republishes low-floor wheels.
+    "av==14.2.0; sys_platform == 'darwin'",
     "sounddevice>=0.5",
     "PySide6>=6.7",
     "nvidia-ml-py>=12",
