@@ -352,6 +352,31 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 
 <!-- entries below -->
 
+### v0.6.3 — macOS 12/13 clean-install fix (av wheel floor) — 2026-07-06
+- **Shipped:** **v0.6.3** ([release](https://github.com/JohnJohn4/dictatem/releases/tag/v0.6.3),
+  `chore(release)` `f473e0c`) fixing a clean-Mac install failure surfaced testing
+  v0.6.2 on a fresh **macOS 13.5** machine: the install tried to **compile `av`
+  (PyAV) from source** (`pkg-config is required`), triggering a ~15 GB Xcode-tools
+  prompt. Root cause: `faster-whisper` requires only `av>=11`, so uv picked `av` 18,
+  whose Apple-Silicon wheel floor is **macOS 14** — on macOS 12/13 no wheel matched
+  → source build → broke the wheel-only posture (ADR-0011). **Fix (PR #186, squash
+  `1e9f63f`):** pin **`av==14.2.0` on macOS** (`sys_platform == 'darwin'`) — newest
+  `av` with a `macosx_12` arm64 wheel (installs on macOS 12+); Windows/Linux keep
+  latest. `av` is only faster-whisper's file-decode dep, **unused on dictatem's
+  numpy-array path** (validated: faster-whisper 1.2.1 + av 14.2.0 imports +
+  transcribes). Not caused by the audio fix — a pre-existing dep issue the v0.6.2 QA
+  (on macOS 26.5) couldn't see.
+- **QA — PASS:** confirmed on the **real macOS 13.5** machine — install now pulls the
+  `av` wheel (no compiler / no Xcode prompt) and dictation works. CI green (6/6).
+- **Issues:** filed + closed **#187** (the install bug) on the v0.6.3 evidence.
+- **Follow-up (new, worth an issue):** **macOS has no in-app updater.** The tray
+  "Check for Updates…" item is Windows-only (`daemon.py` `set_upgrade_available(
+  sys.platform == "win32")`; in-app upgrade re-runs `install.ps1`). macOS users must
+  re-run the `install.sh` one-liner to update — worth either a macOS updater
+  (re-run `install.sh` from the tray) or at least a README "updating on macOS" note.
+- **Note:** the QA machine's low free disk (~3 GB) was a secondary blocker, not the
+  root cause; the source-build attempt was.
+
 ### macOS #161 freeze — option-D native AVAudioEngine capture (build) — 2026-07-03
 - **Shipped:** the production **`MacAudioCapture`** (native macOS mic capture via
   AVAudioEngine/PyObjC, `src/dictatem/audio/mac_audio_capture.py`) behind the
