@@ -24,41 +24,47 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Fix the macOS #161 freeze for good — build native AVAudioEngine capture
-(option D). READ FIRST:
-[`handoffs/macos-native-audio-capture-161.md`](handoffs/macos-native-audio-capture-161.md).**
+**Next up: CUT THE RELEASE (v0.6.2) — the #161 macOS fix passed real-Mac QA. Then
+the remaining macOS track. Do NOT rebuild the fix or re-run the QA.**
 
-**Decided + spike-proven — do NOT re-litigate B vs D.** The #161 first-dictation
-freeze is a **PortAudio↔CoreAudio stop deadlock** (macOS-only, under concurrent
-load). The capture seam was de-leaked and merged (**PR #183**: a
-`_PlatformAdapters.make_audio_capture` factory + an injected, thread-safe
-`AudioBuffer`), so swapping macOS to a native backend is a **one-line factory
-change**. A throwaway AVAudioEngine spike on the **affected hardware** (Apple M3 /
-macOS 26.5 / pyobjc 12.2.1) passed all four unknowns: **0/11 deadlocks under real
-model load** (PortAudio was 2/100 *unbounded* hangs), mic-off between dictations,
-TCC prompt fires, transcript word-for-word. Build the production **`MacAudioCapture`
-+ a pure resampler**, **re-add `close()`** (deferred from #183, now safe), write the
-**ADR**, clean up, and drive a **final real-Mac QA**. Full scope, embedded spike
-evidence, file/line refs, and the one design call (bounded ~1.45 s `stop()` on the
-Qt main thread) are in the brief.
+The macOS #161 first-dictation freeze (a **PortAudio↔CoreAudio stop deadlock**) is
+fixed by **option D — native AVAudioEngine capture** (`MacAudioCapture` behind the
+`AudioCapture` protocol; Windows still sounddevice; pure resampler; `close()`
+re-wired; ADR-0027) on **PR #185**. **Real-Mac QA PASSED 2026-07-05** on the exact
+repro device (Apple M3 / macOS 26.5 / 25F71): 5/5 cold-first-dictation-under-load
+with **no freeze**, records/transcribes/pastes, mic-off between dictations, TCC
+capture works under the packaged `.app`/launchd identity, 41 s dictation OK. The
+deadlock signature (silence after "Model loaded") is gone. Evidence:
+`docs/diagnostics/dictatem-161-qa/` + [`qa-handoffs/09-*`](qa-handoffs/09-macos-native-audio-capture-161-qa.md) (STATUS: PASS).
 
-**⚠️ Role: AFK build on Windows + a final REMOTE-PROXY Mac QA.** Author the backend +
-pure resampler + ADR on Windows (machine-checkable: unit tests + `ruff`/`pyright` +
-CI's `macos-latest` legs). The native backend's *runtime* correctness needs a **real
-Mac** — reuse the runbook/remote-proxy loop (brief §6). **Never mark macOS PASS
-without the human confirming observable behaviour** (#93's lesson).
+**The release runbook is [`handoffs/release-v0.6.2-macos-audio-fix.md`](handoffs/release-v0.6.2-macos-audio-fix.md)** — exact steps: merge PR #185 → `chore(release): v0.6.2` on `main`
+bumping the tag in `install.sh`/`install.ps1`/`README.md` + `pyproject.toml`/`uv.lock`
+together (`tests/test_install_python_pin.py` guards the *Python* pin, not the tag) →
+tag `v0.6.2` → `gh release` → comment the QA evidence on **#161** and close it.
+Frame it as the macOS-audio fix that deletes the PortAudio dependency on macOS,
+superseding the misdiagnosed `v0.6.2-rc1`. QA ran on ctranslate2 4.8.1 and passed,
+so the old `<4.8` pin is confirmed unneeded.
 
-**Also outstanding on the macOS track (after / alongside #161):** Session 10 — macOS
-QA & polish (#94 #93 #121 #95); S11 — signing grill (#91). A first-dictation freeze
-(#161) takes priority over S10 polish. #121 is `ready-for-agent`.
+**Settled — do NOT reopen or rebuild:** option D is decided, built, spike-proven,
+and now real-Mac-QA'd. `stop()` ships on the Qt main thread as-is (option i);
+off-thread teardown (ii/iii) is a follow-up only if the first-dictation hitch
+annoys (QA felt only a one-time 11.5 s cold-disk load hitch — expected, not a
+freeze). Resampler is pure numpy (shared with #184). load-on-arm (ADR-0025) stands.
 
-**Settled — do not reopen:** S1–S9 done, all QA passed (S9 ADR-0026; #126 vocab QA
-PASS). **PR #183 merged** (de-leak seam; the `close()`/shutdown-release was
-deliberately deferred to the #161-D work). Suite **1114 green** on `main`.
+**Two user actions recommended (outward-facing):** delete the stale remote branch
+`fix/macos-coldstart-deadlock-161` + the misdiagnosed `v0.6.2-rc1` tag (ADR-0027
+annotates them superseded); and the untracked local diagnostics under
+`docs/diagnostics/` (home-path-bearing, incl. the QA evidence) were left **local,
+not committed** — delete or keep, your call.
 
-Skills: `tdd`, `run`/`verify`, `diagnose`, `code-review`; an optional
-`grill-with-docs` pass on the §4e stop()-threading call. Your role: **AFK build +
-remote-proxy Mac QA.**
+**Also outstanding on the macOS track (after v0.6.2 ships):** S10 — macOS QA &
+polish (#94 #93 #121 #95); S11 — signing grill (#91). #121 is `ready-for-agent`.
+
+**Settled — do not reopen:** S1–S9 done, all QA passed. **PR #183 merged**
+(de-leak seam). The #161-D build passed real-Mac QA and is ready to release (PR #185).
+
+Skills: `run`/`verify`, `code-review`. Your role: **cut the release (outward-facing
+GitHub steps), then pick up the remaining macOS track.**
 
 ---
 
@@ -347,6 +353,62 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### macOS #161 freeze — option-D native AVAudioEngine capture (build) — 2026-07-03
+- **Shipped:** the production **`MacAudioCapture`** (native macOS mic capture via
+  AVAudioEngine/PyObjC, `src/dictatem/audio/mac_audio_capture.py`) behind the
+  `AudioCapture` protocol, wired into `_start_macos_daemon` via a new
+  `_make_macaudio_capture` factory (**Windows unchanged — still sounddevice**).
+  Plus a **pure, unit-tested polyphase resampler** (`audio/resampler.py`,
+  24 tests: rate pairs, length, tone fidelity, **anti-alias rejection >20 dB**,
+  DC gain, and a bit-identical **streaming==batch** invariant) — shared with the
+  Windows WASAPI switch (#184). **`close()` re-added** to the `AudioCapture`
+  protocol + both backends (+ `SoundDeviceCapture._close_stream`) + the fake, and
+  **wired into daemon shutdown** (`try/finally: audio_capture.close()` around
+  `app.exec()`) — the deferral from #183 is closed (safe now: AVAudioEngine can't
+  deadlock, Windows MME never did). New Darwin dep `pyobjc-framework-AVFoundation`
+  (+ ruff E402 / pyright / import-safety wiring). **ADR-0027** written. Suite
+  **1139 passed, 4 skipped** on Windows; `ruff` clean; `pyright` 0 errors.
+- **Decisions (settled — do NOT reopen):** **D is built and shipped** behind the
+  protocol; deletes the `Pa_StopStream` deadlock class rather than avoiding it
+  (ADR-0027). The one design call (brief §4e): **stop() runs on the Qt main
+  thread as-is (option i)** — AVAudioEngine stop is bounded (≤~1.5 s under load,
+  usually ~10–40 ms), a UI hitch not a freeze; moving it off-thread (ii/iii) is a
+  noted follow-up only if the first-dictation hitch is felt in QA. Resampling is a
+  **pure numpy polyphase FIR** (not on-device AVAudioConverter) so it's
+  CI-testable + shareable. Native rate is **read at start()** (varies run-to-run),
+  resampled **per tap block** so the daemon's live level/idle/duration reads work.
+- **Issues:** **#161 stays OPEN** until the real-Mac QA lands. #184 (Windows
+  WASAPI) already filed and shares the resampler.
+- **PRs:** **PR #185** (`fix/macos-native-audio-capture-161` → `main`) — open,
+  awaiting the real-Mac QA before merge.
+- **QA — PASS ✅ 2026-07-05** on the exact repro device (Apple M3 / macOS 26.5 /
+  25F71), option-D build installed as the real launchd daemon + `Dictatem.app` via
+  `DICTATEM_REF`. All 5 checks passed: **5/5 cold-first-dictation-under-load with no
+  freeze** (daemon log shows `Model loaded → Processing audio → Transcription
+  complete → Paste: sent` every round — the post-"Model loaded" silence signature is
+  gone), records/transcribes/pastes exact, mic-off between dictations, TCC capture
+  works under the packaged `.app`/launchd identity, 41 s dictation → 329 chars no
+  hang. Honest caveats (non-blocking): Round 1 one-time 11.5 s cold-disk load hitch
+  (recovered/typed — not a freeze); TCC prompt not freshly re-observed (pre-granted).
+  Ran on ctranslate2 4.8.1 → the `<4.8` pin is confirmed unneeded. Runbook
+  [`qa-handoffs/09-*`](qa-handoffs/09-macos-native-audio-capture-161-qa.md) STATUS:
+  PASS; evidence in `docs/diagnostics/dictatem-161-qa/` (kept local — tester home
+  paths). **Release next** — see [`handoffs/release-v0.6.2-macos-audio-fix.md`](handoffs/release-v0.6.2-macos-audio-fix.md).
+- **Follow-ups / notes:** (1) **Superseded work — user action recommended (not done
+  here, it's an outward-facing/destructive git op):** delete the stale remote
+  branch `fix/macos-coldstart-deadlock-161` and the misdiagnosed `v0.6.2-rc1` tag
+  (only rc1 was ever tagged — no final `v0.6.2`). ADR-0027 annotates them as
+  superseded (ctranslate2 cross-thread theory — wrong layer). (2) **Public-repo
+  hygiene:** large untracked local diagnostics under `docs/diagnostics/`
+  (`20260630-193659/` incl. a full source-tree copy + daemon logs + `config.toml`
+  + plist, `dictatem-161-spike-20260702-2206/`, and the untracked `audio-repro/` /
+  `fix/` / `round4-*.txt` / `*.zip` under the FIX-PACKAGE) carry home paths — left
+  **local, not committed** (RESOLUTION.md + the spike are already committed);
+  delete or keep local, your call. (3) The unrelated `ctranslate2>=4.7,<4.8` pin
+  from the superseded work was **not** re-applied (optional hygiene, unrelated to
+  the PortAudio cause). (4) load-on-arm (ADR-0025) **stands** — per-dictation stop
+  is safe again, so its latency win is kept.
 
 ### macOS #161 freeze — de-leak seam + option-D decision + build handoff — 2026-07-03
 - **Shipped:** **PR #183** (merged to `main`, squash `75303ae`) — de-leaked the

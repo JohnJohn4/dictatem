@@ -116,6 +116,14 @@ class TestFakeAudioCapture:
         assert chunk.dtype == np.float32
         assert len(chunk) == 8000  # 0.5s * 16000
 
+    def test_close_is_tracked_and_idempotent(self) -> None:
+        ac = FakeAudioCapture()
+        assert ac.closed is False
+        ac.close()
+        ac.close()
+        assert ac.closed is True
+        assert ac.close_count == 2
+
 
 class TestFakeTranscriberBackend:
     def test_satisfies_protocol(self) -> None:
