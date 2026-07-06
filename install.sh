@@ -240,4 +240,4 @@ echo "macOS will ask for Microphone access on your first dictation, and Dictatem
 echo "will guide you through granting Accessibility and Input Monitoring in"
 echo "System Settings (each needs a one-time relaunch to apply)."
 echo "Optional Trigger Words (local-LLM rewrites) need Ollama set up yourself — see"
-echo "the README: https://github.com/JohnJohn4/dictatem#ollama--transform-setup"
+echo "the README: https://github.com/JohnJohn4/dictatem#trigger-words-setup-ollama"

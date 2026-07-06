@@ -1,373 +1,334 @@
 # dictatem
 
-Local, offline voice dictation for **Windows** and **macOS**. Press a global hotkey, speak, and your words are transcribed and pasted into whatever window has focus — instantly, with no cloud dependency. Transcription is GPU-accelerated on Windows (NVIDIA) and runs on the CPU on macOS.
+**Local, offline voice dictation for Windows & macOS.** Press a hotkey, speak,
+and your words are transcribed on-device and pasted into whatever window has
+focus. No cloud, no accounts, nothing leaves your machine.
 
-## Features
+```mermaid
+flowchart LR
+    K["Hold or tap<br/>the hotkey"] --> S["Speak"]
+    S --> T["Transcribed<br/>on-device"]
+    T --> P["Pasted into the<br/>focused window"]
+```
 
-- **Global hotkey** — Win+Alt activates recording from any window
-- **Two recording modes** — Push-to-talk (hold) or toggle (tap to start/stop, auto-stops after silence)
-- **GPU-accelerated transcription** — Faster-Whisper + CUDA for sub-realtime performance
-- **Smart paste** — Saves and restores clipboard content and window focus around each paste
-- **System tray** — Static brand icon, rendered theme-adaptive monochrome so it stays visible on light or dark taskbars; recording state lives on the overlay's status dot, not the tray. Menu items to preload or unload the model on demand
-- **Overlay UI** — Pill that appears in the corner of the active monitor while recording, with an animated waveform proportional to mic level
-- **Offline after setup** — All inference runs locally; the only network use is a one-time model download on the first run (which the installer triggers), so even your first dictation works offline
-- **Trigger Words** — Say `"summarize"` (or your own custom prompt) right after a dictation paste, and dictatem rewrites the just-pasted text in place via a local Ollama model
-- **TOML config** — Tune model, hotkey, audio, overlay, paste, and startup behaviour
+Transcription is GPU-accelerated on Windows (NVIDIA) and runs on the CPU on macOS.
 
-## Requirements
+**Jump to install → [Windows](#windows) · [macOS](#macos)**
 
-- Windows 11
-- Python 3.11+
-- x64 CPU, ~8 GB RAM (minimum — CPU-only works using the `base` Whisper model)
-- **Windows on ARM** (ARM64 / Snapdragon) is supported — the installer transparently runs Dictatem under x64 emulation (usable, though slower than native; see [ADR-0017](docs/adr/0017-windows-on-arm-installs-under-x64-emulation.md))
-- **macOS 12+** (Apple silicon or Intel) — transcription runs on CPU (see [ADR-0013](docs/adr/0013-macos-transcription-engine.md)); see [Install on macOS](#install-on-macos)
-- NVIDIA GPU with CUDA support — optional, recommended for larger models and sub-realtime speed
-- [`uv`](https://docs.astral.sh/uv/) (fast Python package manager)
-- [Ollama](https://ollama.com) — optional, only for [Trigger Words](#trigger-words); see [Ollama / Transform setup](#ollama--transform-setup)
+---
 
-## Installation
+## Install
 
-### Install on Windows (recommended)
+One command per platform. Both install [`uv`](https://docs.astral.sh/uv/) if
+needed, install Dictatem pinned to the **v0.6.3** release, and launch it — the
+tray / menu-bar icon appears a few seconds later. Everything runs as your own
+user (no admin / `sudo`).
 
-Run this in PowerShell. It installs [`uv`](https://docs.astral.sh/uv/) if needed, auto-detects whether you have an NVIDIA GPU (picking the CUDA or CPU-lean dependency set accordingly; on Windows on ARM it installs under x64 emulation), installs Dictatem **pinned to the v0.6.3 release**, and launches it (the tray icon appears a few seconds later):
+### Windows
+
+Requires **Windows 11**, an x64 CPU, and ~8 GB RAM. An NVIDIA GPU is optional but
+recommended (larger models, sub-realtime speed) — the installer auto-detects it
+and picks the CUDA or CPU-lean dependency set for you. [Windows on ARM](docs/adr/0017-windows-on-arm-installs-under-x64-emulation.md)
+is supported via x64 emulation.
+
+Run in **PowerShell**:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.3/install.ps1 | iex
 ```
 
-Piping a script from the internet into `iex` runs it immediately. If you'd rather read it first, open [that URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.3/install.ps1) in your browser and run it once you're satisfied.
+The leading `Set-ExecutionPolicy` clears a restrictive execution policy **for
+this window only** (no admin, reverts when you close the terminal). The installer
+also adds `dictatem` to your user `PATH`. Prefer to read the script first? Open
+[the URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.3/install.ps1)
+and run it once you're satisfied.
 
-**On a managed / work machine.** The leading `Set-ExecutionPolicy -Scope Process Bypass -Force` clears a restrictive PowerShell execution policy **for this window only** — it needs no admin and reverts when you close the terminal, so you don't have to flip the policy by hand. The installer also persists `dictatem` to your **user** `PATH`, so it's found in a brand-new terminal with no manual PATH edit. Everything runs as your own user (no `sudo` / elevation), which is what you want where admin rights are locked down. The tray icon can take a few seconds to appear on first launch while Windows/your AV scans the freshly installed files — that's expected, not a failure.
+### macOS
 
-**Forcing CPU or GPU.** The script auto-detects an NVIDIA GPU; to override, set `DICTATEM_GPU` before running — `$env:DICTATEM_GPU='cpu'` (CPU-lean) or `$env:DICTATEM_GPU='gpu'` (CUDA). This only chooses the *dependency set*, not the runtime device. On a machine that has an NVIDIA GPU, Dictatem still transcribes on the GPU by default — so forcing `cpu` there installs the lean set but the daemon will still try CUDA and fail to load the model (the CUDA libraries aren't installed). Force `cpu` only on a genuinely GPU-less machine, or also set `device = "cpu"` in your config.
+Requires **macOS 12+** (Apple Silicon or Intel). Transcription runs on the CPU
+([ADR-0013](docs/adr/0013-macos-transcription-engine.md)).
 
-**Updating.** Easiest is the tray menu: right-click the tray icon → **Check for Updates…**. Dictatem compares the running version against the latest GitHub release and, if a newer one exists, re-runs the installer for you (stopping the old daemon, re-detecting the GPU/CPU dependency set the same way a fresh install does, and relaunching). You can also update manually by re-running the one-liner with a newer version tag in the URL (e.g. `.../v0.6.3/install.ps1`); see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest) for the current tag. Either way it's safe while Dictatem is running — the installer stops the old daemon first (so the upgrade isn't blocked by a file lock) and relaunches the new version for you. If you originally forced the set with `DICTATEM_GPU`, set it again before a manual re-run (the tray upgrade re-detects rather than remembering the override).
-
-The script never installs or starts Ollama, and never downloads a Whisper model itself. Instead the daemon fetches the model **once, on its first run** (which the installer triggers), so your first *dictation* already works offline; from then on the model load starts the moment you **arm** a dictation, overlapping the time you spend talking, so the wait is largely hidden (see [Model loading & VRAM](#model-loading--vram)). [Trigger Words](#trigger-words) stay off until you set Ollama up yourself ([Ollama / Transform setup](#ollama--transform-setup)).
-
-### Install on macOS
-
-> **macOS support is new (initial release).** The core flow — the one-line install, the global hotkey, transcription, paste, the menu-bar icon, and start-at-login under launchd — is validated on Apple Silicon (macOS 26). A few secondary flows are still being confirmed on-device and are tracked in [#94](https://github.com/JohnJohn4/dictatem/issues/94) (tap/Esc hotkey semantics, app-to-app paste, login persistence, uninstall, Trigger Words); one known rough edge is [#93](https://github.com/JohnJohn4/dictatem/issues/93) (an occasional missed paste right after a restart). Please file anything you hit.
-
-Run this in Terminal. It installs [`uv`](https://docs.astral.sh/uv/) if needed, installs Dictatem **pinned to the v0.6.3 release** (the CPU dependency set — Macs have no CUDA), generates the `~/Applications/Dictatem.app` launcher, and starts it in the menu bar:
+Run in **Terminal**:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.3/install.sh | sh
 ```
 
-Piping a script from the internet into `sh` runs it immediately. If you'd rather read it first, open [that URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.3/install.sh) in your browser and run it once you're satisfied.
+This generates `~/Applications/Dictatem.app` and starts Dictatem in the menu bar
+via a per-user LaunchAgent (which also auto-starts it at login). On first launch
+Dictatem walks you through the two macOS permission grants it needs —
+**Accessibility** (to paste text) and **Input Monitoring** (to hear the hotkey);
+**Microphone** is prompted on your first dictation. See
+[Troubleshooting](#troubleshooting) below for the macOS details that trip people up.
 
-**How Dictatem launches (and the permission identity).** The installer registers a per-user **LaunchAgent** and starts the daemon through **launchd**, which also auto-starts it at login — you normally never launch it by hand. If you need to restart it, run `launchctl kickstart -k gui/$(id -u)/com.dictatem.daemon`. **Do not** start it from Spotlight or by opening `~/Applications/Dictatem.app` (macOS then suppresses the menu-bar icon), and **do not** run `dictatem` from a bare terminal (macOS attributes the Accessibility / Input Monitoring grants to your *terminal app*, so the hotkey and paste silently fail). One heads-up on the grant identity: because the daemon runs as the uv-managed CPython interpreter, the System Settings privacy panes list the entry as **"python3.12"**, not "Dictatem" — grant `python3.12` there. A signed, "Dictatem"-labelled bundle that fixes the label (and the Dock/identity) is planned ([#91](https://github.com/JohnJohn4/dictatem/issues/91), [ADR-0014](docs/adr/0014-macos-permissions-and-app-identity-shell.md)).
+> **macOS support is new.** The core flow is validated on Apple Silicon, but a
+> few secondary flows are still being confirmed on-device
+> ([#94](https://github.com/JohnJohn4/dictatem/issues/94),
+> [#93](https://github.com/JohnJohn4/dictatem/issues/93)). Please file anything you hit.
 
-**Permissions.** On first launch Dictatem walks you through the two grants macOS makes you flip by hand — **Accessibility** (typing/pasting the dictated text) and **Input Monitoring** (hearing the global hotkey) — with dialogs that deep-link into the exact System Settings panes; each grant takes effect after a one-time relaunch. **Microphone** is the standard macOS prompt on your first dictation. Until the grants are in, the daemon still runs — record from the tray menu.
+Hacking on Dictatem instead of just running it? See [`docs/development.md`](docs/development.md).
 
-**Hotkey.** The default combo is **Option+Command (⌥⌘)** — the same `modifiers = ["win", "alt"]` [config](#configuration) maps to each platform's keys. Hold for push-to-talk, tap to toggle.
+---
 
-**Updating.** Re-run the one-liner with a newer version tag in the URL; it refreshes the tool, the `.app`, and the start-at-login entry together.
+## Using dictatem
 
-### Developer install (from a clone)
+The daemon lives in your system tray (Windows) / menu bar (macOS). Recording is
+driven entirely by a global hotkey — **Win+Alt** on Windows, **Option+Command
+(⌥⌘)** on macOS (both are the same configurable combo).
 
-For hacking on Dictatem, install from a checkout instead of the pinned release:
-
-```powershell
-git clone https://github.com/JohnJohn4/dictatem
-cd dictatem
-```
-
-**CPU-only (no NVIDIA GPU)** — installs the CPU-lean set of dependencies (~200 MB, no CUDA download):
-
-```powershell
-uv sync --extra runtime
-```
-
-**NVIDIA GPU users** — adds the ~2 GB CUDA libraries (`nvidia-cublas-cu12`, `nvidia-cudnn-cu12`) for GPU-accelerated transcription:
-
-```powershell
-uv sync --extra runtime-gpu
-```
-
-If you have an NVIDIA GPU and want the fastest transcription, use `runtime-gpu`. If you are on a CPU-only machine or want a lighter install, use `runtime`.
-
-### Uninstalling
-
-Dictatem owns its start-at-login entry, so removing it cleanly is a two-step process — a bare `uv tool uninstall` would orphan that entry. Run:
-
-```powershell
-dictatem --uninstall        # step 1: removes the autostart entry AND stops the running daemon (a dialog confirms and shows step 2)
-uv tool uninstall dictatem  # step 2: removes the tool (dismiss the step 1 dialog first)
-```
-
-You don't need to quit Dictatem first: step 1 removes the autostart entry and then stops the running daemon, so step 2 isn't blocked by the `…\Scripts` file lock that would otherwise fail with `Access is denied`. `dictatem --uninstall` runs windowless, so it confirms step 1 in a pop-up dialog rather than the terminal. Your config under `~/.dictatem` is left untouched.
-
-On macOS the same two steps apply, in Terminal — step 1 also removes the daemon-owned `~/Applications/Dictatem.app` and its start-at-login LaunchAgent (they must go first: after step 2 the `.app`'s launch target no longer exists), and prints its confirmation to the terminal:
-
-```sh
-dictatem --uninstall        # step 1: removes the LaunchAgent and Dictatem.app
-uv tool uninstall dictatem  # step 2: removes the tool
-```
-
-## Verify the setup
-
-Before running, confirm all dependencies are wired up correctly:
-
-```powershell
-uv run python -c "
-import numpy; print('numpy:', numpy.__version__)
-
-import faster_whisper; print('faster-whisper:', faster_whisper.__version__)
-
-import sounddevice as sd
-devices = sd.query_devices()
-print('sounddevice:', len(devices), 'audio devices found')
-
-from PySide6.QtWidgets import QApplication; print('PySide6: ok')
-
-import win32clipboard; print('pywin32: ok')
-
-import ctranslate2
-print('CUDA devices:', ctranslate2.get_cuda_device_count())
-"
-```
-
-All lines should print without errors. For the CUDA device count:
-
-- **CPU-only install** (`runtime`): `CUDA devices: 0` is expected and fine — transcription runs on CPU.
-- **GPU install** (`runtime-gpu`): `CUDA devices: 1` (or more) means GPU acceleration is active.
-
-### End-to-end test (GPU + mic + transcription)
-
-This records 5 seconds of audio and transcribes it:
-
-```powershell
-uv run python scripts/bootstrap.py
-```
-
-Speak clearly while it records. Expected output:
-
-```
-Loading large-v3-turbo on GPU...
-Model loaded.
-Recording 5s of audio — speak now...
-Recording complete.
-Transcribing...
-Transcription: <your words here>
-```
-
-If you see `(No speech detected)`, check your default microphone in Windows sound settings.
-
-## Running
-
-If you installed with `uv tool install` (see [Installation](#installation)), launch the daemon with the `dictatem` command — it runs windowless, with no console pop:
-
-```powershell
-dictatem
-```
-
-From a development checkout (`uv sync`), the module form also works:
-
-```powershell
-uv run python -m dictatem
-```
-
-The daemon starts in the system tray — look for the dictatem icon in the bottom-right of the taskbar. If the icon appears, it's running.
-
-| Action | Hotkey |
+| Action | Gesture |
 |---|---|
-| Push-to-talk | Hold Win+Alt (default; see `[hotkey].modifiers`) |
-| Toggle record | Tap Win+Alt (default; see `[hotkey].modifiers`) |
-| Stop toggle recording | Tap Win+Alt again |
-| Cancel recording | Press Esc |
+| **Push-to-talk** | **Hold** the hotkey, speak, release |
+| **Toggle record** | **Tap** the hotkey to start; tap again (or pause) to stop |
+| **Cancel** | Press **Esc** |
 
-Transcribed text is pasted automatically into the focused window.
+A tap starts hands-free recording that auto-stops after a stretch of silence; a
+hold records only while held. Transcribed text is pasted into the focused window
+automatically. While recording, a small **pill** appears in the corner of the
+active screen with a live waveform.
 
-### Tray menu
+**Dictation is never lost.** If text lands nowhere (no window focused, or focus
+drifted mid-dictation), Dictatem holds it — focus where it should go and say
+**"paste"**, or use **Copy last dictation** in the tray menu.
 
-Right-click the tray icon for: Start/Stop Recording, **Preload Model** (load Whisper into GPU memory ahead of time so the first dictation is fast), **Unload Model** (free the ~3 GB of GPU memory), Show Log, Restart, Quit. The model also auto-unloads after the configured idle period.
+### Trigger Words
 
-### Model loading & VRAM
+*Optional — rewrite the last paste by voice.* Right after a dictation is pasted,
+say a single **trigger word** to rewrite that text in place with a local LLM — no
+typing, no cloud.
 
-**The model loads when you arm a dictation.** Dictatem doesn't hold the model in memory at startup — instead the load starts the instant you **arm** a dictation (press your hotkey / mouse button), so it overlaps the seconds you spend talking rather than landing in the pause after you stop. A short utterance hides the load entirely. If you stop before it finishes, the overlay pill shows a **"Loading Dict. Model…"** caption (cycling dots, not the recording waveform) for the remainder, then transcribes and pastes the audio you already spoke automatically once the model is resident — you don't press the hotkey again. Subsequent dictations are immediate. Pressing Esc while it loads cancels that dictation but lets the load finish (a Whisper load can't be interrupted mid-flight), so your next attempt is warm.
+```mermaid
+flowchart LR
+    D["Dictate normally"] --> P["Text pasted"]
+    P --> W["Say a trigger word<br/>(“polish”, “summarize”)"]
+    W --> R["Local LLM rewrites<br/>the paste in place"]
+```
 
-**Downloaded once, then offline.** The model weights download a **single time, on the daemon's first run** (which the installer triggers as its last step) — straight to disk, not into memory. A tray notification marks this one-time download, and if you dictate while it's still running the pill shows a **"Downloading model…"** caption. After it finishes your machine is offline-ready: every dictation, *including the first*, works with no network. If you happen to be offline at that first run the download is skipped and the model downloads on your first dictation instead (the older behaviour) — so only the install and that first run ever need a connection.
+Two triggers ship by default — **`polish`** (clean up filler and false starts)
+and **`summarize`** (condense to notes). This feature is **off until you set up
+[Ollama](#trigger-words-setup-ollama)** yourself. Add your own triggers by
+dropping a markdown prompt file into `~/.dictatem/prompts/`.
 
-**Idle-unload.** After `[model].idle_unload_minutes` of inactivity (default 30) the model **unloads** to free its memory — about 3 GB of VRAM on the GPU — for other GPU/AI work; the next time you arm a dictation it reloads (again overlapping your speech). This idle-unload is intentional — Dictatem stays a good GPU citizen when you're not dictating — and it remains the *only* thing that unloads the model. The [Trigger Words](#trigger-words) LLM (Ollama) is kept warm for the same window, so back-to-back triggers don't re-pay its slower cold load.
+### Tray / menu-bar menu
 
-**Want the model resident from launch instead?** Trade some held memory for an instant first response in `~/.dictatem/config.toml`:
+Right-click the icon for: **Start/Stop Recording**, **Copy last dictation**,
+**Preload / Unload Model**, **Open config file…**, **How to use Dictatem…** (a
+live in-app guide), **Check for Updates…** (Windows), **Show Log**, **Restart**,
+**Quit**.
 
-- `preload_model = true` under `[startup]` — load the model when the daemon starts, so even the first dictation needs no load at all (holds the VRAM from launch).
-- raise `idle_unload_minutes` under `[model]` — keep the model resident longer between dictations (e.g. a whole workday) so it rarely has to reload.
+---
 
-You can also warm the model on demand any time from the tray menu's **Preload Model** item, and release it again with **Unload Model**.
+## Features
 
-**On a managed / work machine,** the *first* launch — and the first dictation right after it — can lag noticeably while antivirus/EDR scans the freshly installed `dictatem` executable and, on a GPU install, the CUDA DLLs it loads. That's the security software doing its one-time pass, not a Dictatem fault; it settles after the first run. (The tray icon itself can take the same few seconds to appear on first launch for the same reason.)
+- **Global hotkey** — activate from any window; push-to-talk or hands-free toggle.
+- **On-device transcription** — Faster-Whisper, GPU-accelerated on NVIDIA, CPU on macOS.
+- **Offline after setup** — the model downloads once on first run; every dictation after that needs no network.
+- **Smart paste** — saves and restores your clipboard and window focus around each paste, and never clutters clipboard history.
+- **Trigger Words** — rewrite the last paste in place via a local Ollama model.
+- **Custom vocabulary & replacements** — bias recognition toward your jargon, and rewrite words deterministically (see [Customising](#customising)).
+- **Overlay pill** — corner indicator with a live waveform; encodes recording phase by colour.
+- **Theme-adaptive tray icon** — stays visible on light or dark taskbars.
+- **Discoverable config** — one hand-edited TOML file, no settings UI.
+
+---
 
 ## Configuration
 
-On first launch, a default config is written to `~/.dictatem/config.toml`. Edit it to customise behaviour:
+On first launch a commented default config is written to
+`~/.dictatem/config.toml` — open it any time with **Open config file…** in the
+tray menu. There is no settings UI ([by design](docs/adr/0022-no-settings-ui-config-is-a-discoverable-file.md));
+the file is self-documented. The knobs you're most likely to touch:
 
 ```toml
 [hotkey]
-modifiers = ["win", "alt"]      # Modifier set for the combo; supported: win, alt, ctrl, shift
-tap_threshold_ms = 200          # Below this = toggle tap; above = push-to-talk hold
+modifiers = ["win", "alt"]      # the combo; supported: win/meta, alt, ctrl, shift,
+                                #   and mouse4 / mouse5 / middle
+tap_threshold_ms = 200          # below this = toggle tap; above = push-to-talk hold
 
 [model]
-name = "large-v3-turbo"
-compute_type = "float16"
-device = "cuda"                 # cuda or cpu; auto-resolved on first run by Hardware Tier
-vad_filter = true
-idle_unload_minutes = 30        # Free GPU VRAM when idle for this long
-min_transcription_chars = 3     # Below this, treat the result as empty
-
-[paste]
-trailing_space = true
-strip_newlines = true
-clipboard_retry_attempts = 5
-clipboard_retry_delay_ms = 10
-
-[audio]
-sample_rate = 16000
+name = "large-v3-turbo"         # auto-picked from your hardware on first run
+device = "cuda"                 # cuda or cpu
+idle_unload_minutes = 30        # free the model's memory after this much idle time
 
 [behaviour]
-silence_timeout_s = 60          # Auto-stop toggle recording after this much silence
-max_recording_seconds = 300     # Hard cap on recording length regardless of audio activity
-model_timeout_s = 120           # Shared model-readiness timeout: the Ollama request limit AND
-                                #   the threshold for the "Model Loading" pill (covers cold loads)
-
-[overlay]
-position = "bottom-right"
-fade_in_ms = 100
-fade_out_ms = 400
+silence_timeout_s = 60          # auto-stop a toggle recording after this much silence
 
 [startup]
 autostart = true
-preload_model = false           # Load at daemon startup, vs when you first arm a dictation
-
-[logging]
-level = "info"
+preload_model = false           # load at startup vs. when you first arm a dictation
 
 [transform]
-enabled = true                  # Master switch for Trigger Words (local-LLM rewrites)
+enabled = true                  # master switch for Trigger Words
 model_name = "gemma4:e2b"       # Ollama model tag; must match `ollama list`
-base_url = "http://localhost:11434"
-last_paste_ttl_s = 300          # How long a Last Paste stays eligible for a Trigger Fire
-                                # (the Ollama request timeout is [behaviour].model_timeout_s)
 ```
 
-## Ollama / Transform setup
+### Model loading & memory
 
-[Trigger Words](#trigger-words) run a local [Ollama](https://ollama.com) model. **This feature is off until you set Ollama up yourself** — dictatem talks to a running Ollama but never installs it, starts it, or pulls models on your behalf (see [ADR-0008](docs/adr/0008-dictatem-does-not-manage-ollama-lifecycle.md)). The manual steps:
+Dictatem doesn't hold the model in memory at startup. The load **starts the
+instant you arm a dictation**, so it overlaps the seconds you spend talking — a
+short utterance hides it entirely. If you stop before it finishes, the pill shows
+a **"Loading…"** caption and transcribes automatically once ready (no need to
+press the hotkey again). After `[model].idle_unload_minutes` of inactivity the
+model **unloads** to free its memory (~3 GB of VRAM on a GPU) and reloads on your
+next dictation.
 
-1. **Install Ollama** — download it from [ollama.com](https://ollama.com) and run the installer.
-2. **Start the Ollama server** — `ollama serve` (the desktop app starts it for you). It listens on `http://localhost:11434` by default, matching `[transform].base_url`.
-3. **Pull the configured model** — `ollama pull gemma4:e2b` (or whatever you set in `[transform].model_name`). Confirm it's present with `ollama list`.
+Want an instant first response instead? Set `preload_model = true` under
+`[startup]`, raise `idle_unload_minutes`, or use **Preload Model** in the tray menu.
 
-Trigger Words are enabled by default in config (`[transform].enabled = true`), but they only fire once all three steps are done. Until then, firing a trigger leaves your document untouched and surfaces a message telling you what's wrong:
+### Customising
 
-| What's wrong | Message |
+Alongside `config.toml`, Dictatem reads a few optional files in `~/.dictatem/`:
+
+| File | What it does |
 |---|---|
-| Ollama unreachable at `base_url` (not running, not installed, or wrong URL) | Names `base_url`; says to make sure Ollama is running and points to this setup section |
-| Server running but model not pulled | Run `ollama pull <model>` |
-| HTTP 500 — `llama-server` crashed (common on multi-GPU PCs) | Names the HTTP 500 server error and points to [Multi-GPU HTTP 500](#multi-gpu-http-500-llama-server-crash) below |
+| `vocabulary.md` | Terms (names, jargon, acronyms) that bias transcription toward your spellings — one per line. |
+| `replacements.md` | Deterministic `source => target` rewrites applied to every dictation. An empty target deletes the word (drop `um`/`uh`). Opt-in — ships with only commented examples. |
+| `prompts/*.md` | One [Trigger Word](#trigger-words) per file: YAML frontmatter declares its aliases, the body is the prompt sent to the LLM. |
 
-dictatem diagnoses this from the network response, not from a local `ollama` binary — so a server running in WSL, a container, or on another host (reachable via `[transform].base_url`) is handled correctly.
+---
 
-### Multi-GPU HTTP 500 (`llama-server` crash)
+<a id="ollama--transform-setup"></a>
 
-On a PC with **both an NVIDIA and an AMD GPU**, Ollama can try (and fail) to initialise the AMD compute path, crashing `llama-server` mid-request. A Trigger Fire then fails with `HTTP 500` and the Ollama log shows the crash — `llama-server process has terminated … The system detected an overrun of a stack-based buffer … GGML_ASSERT`. The fix is to force Ollama onto CUDA and disable the AMD/Vulkan path:
+## Trigger Words setup (Ollama)
+
+Trigger Words run a local [Ollama](https://ollama.com) model. Dictatem talks to a
+running Ollama but never installs, starts, or pulls models for you
+([ADR-0008](docs/adr/0008-dictatem-does-not-manage-ollama-lifecycle.md)). Three
+one-time steps:
+
+1. **Install Ollama** — from [ollama.com](https://ollama.com).
+2. **Start the server** — `ollama serve` (the desktop app does this for you). It
+   listens on `http://localhost:11434`, matching `[transform].base_url`.
+3. **Pull the model** — `ollama pull gemma4:e2b` (or whatever you set in
+   `[transform].model_name`). Confirm with `ollama list`.
+
+Until all three are done, firing a trigger leaves your document untouched and the
+overlay flashes a message telling you which step is missing.
+
+---
+
+## Updating
+
+- **Windows** — right-click the tray icon → **Check for Updates…**. Dictatem
+  compares against the latest GitHub release and, if newer, re-runs the installer
+  for you (safe while running — it stops the old daemon first).
+- **macOS** — re-run the [install one-liner](#macos); it refreshes the tool, the
+  `.app`, and the start-at-login entry together. *(An in-app updater is not yet
+  available on macOS.)*
+
+You can also update either platform by re-running the one-liner with a newer
+version tag in the URL — see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest).
+
+## Uninstalling
+
+Dictatem owns its start-at-login entry, so removing it cleanly is two steps (a
+bare `uv tool uninstall` would orphan that entry and hit a file lock):
+
+```powershell
+dictatem --uninstall        # removes the autostart entry and stops the daemon
+uv tool uninstall dictatem  # removes the tool
+```
+
+The same two steps apply on macOS (in Terminal) — step 1 also removes
+`~/Applications/Dictatem.app` and its LaunchAgent. Your config under
+`~/.dictatem` is left untouched.
+
+---
+
+## Troubleshooting
+
+<details>
+<summary><strong>The tray icon takes a few seconds to appear (or the first dictation lags)</strong></summary>
+
+Expected on first launch, especially on managed / work machines: Windows or your
+antivirus/EDR scans the freshly installed executable (and, on a GPU install, the
+CUDA DLLs) once. It settles after the first run — it's the security software, not
+a Dictatem fault.
+</details>
+
+<details>
+<summary><strong>Forcing CPU or GPU on Windows</strong></summary>
+
+The installer auto-detects an NVIDIA GPU. To override the **dependency set**, set
+`DICTATEM_GPU` before running: `$env:DICTATEM_GPU='cpu'` (lean) or
+`$env:DICTATEM_GPU='gpu'` (CUDA). This only chooses which libraries install, not
+the runtime device — on a machine with an NVIDIA GPU the daemon still transcribes
+on the GPU by default. Only force `cpu` on a genuinely GPU-less machine, or also
+set `device = "cpu"` in your config. If you forced the set, set `DICTATEM_GPU`
+again before a manual re-install (the tray update re-detects instead).
+</details>
+
+<details>
+<summary><strong>macOS notes: permissions &amp; launch</strong></summary>
+
+- **Let launchd run it.** Don't start Dictatem from Spotlight or by opening
+  `Dictatem.app` (macOS then suppresses the menu-bar icon), and don't run
+  `dictatem` from a bare terminal (macOS would attribute the permission grants to
+  your *terminal app*, and the hotkey/paste would silently fail). To restart it:
+  `launchctl kickstart -k gui/$(id -u)/com.dictatem.daemon`.
+- **Grant `python3.12`, not "Dictatem".** Because the daemon runs as the
+  uv-managed CPython, the System Settings privacy panes list the entry as
+  **`python3.12`** — grant that. A signed, "Dictatem"-labelled bundle is planned
+  ([#91](https://github.com/JohnJohn4/dictatem/issues/91)).
+- **Before the grants are in,** the daemon still runs — record from the menu.
+</details>
+
+<details>
+<summary><strong>Trigger Words don't fire</strong></summary>
+
+Dictatem diagnoses this from Ollama's network response and flashes the cause:
+
+| What's wrong | Fix |
+|---|---|
+| Ollama unreachable at `base_url` | Make sure it's running (`ollama serve`) and the URL matches `[transform].base_url`. |
+| Server running but model not pulled | `ollama pull <model>` (confirm with `ollama list`). |
+| HTTP 500 — `llama-server` crashed | See *Multi-GPU HTTP 500* below. |
+
+A Trigger Fire also only runs if the focused window is still the one you pasted
+into and the paste is younger than `[transform].last_paste_ttl_s` (default 5 min).
+Switching windows or waiting too long discards the trigger silently.
+</details>
+
+<details>
+<summary><strong>Multi-GPU HTTP 500 (<code>llama-server</code> crash)</strong></summary>
+
+On a PC with **both an NVIDIA and an AMD GPU**, Ollama can crash `llama-server`
+trying to initialise the AMD compute path. Force it onto CUDA:
 
 ```powershell
 setx OLLAMA_LLM_LIBRARY "cuda"
 setx OLLAMA_IGPU_ENABLE "0"
 setx CUDA_VISIBLE_DEVICES "0"
 setx OLLAMA_VULKAN "false"
-# Only if your models live outside Ollama's default location:
-setx OLLAMA_MODELS "<your models dir>"
 ```
 
-Then **fully restart Ollama** — `setx` only affects newly started processes, so quit the Ollama tray app and confirm it's gone in Task Manager — and re-test with `ollama run <model> --verbose`. dictatem never sets these for you (it only talks to Ollama — [ADR-0008](docs/adr/0008-dictatem-does-not-manage-ollama-lifecycle.md)); they're yours to apply.
+Then **fully restart Ollama** (`setx` only affects newly started processes — quit
+the tray app, confirm it's gone in Task Manager) and re-test with
+`ollama run <model> --verbose`. Dictatem never sets these for you
+([ADR-0008](docs/adr/0008-dictatem-does-not-manage-ollama-lifecycle.md)).
+</details>
 
-### Performance on Windows: native Ollama vs WSL
+<details>
+<summary><strong>Ollama on Windows: native vs WSL</strong></summary>
 
-If you run Ollama inside **WSL**, switching to the **native Windows** build is worth it for Dictatem on a single-GPU machine where VRAM is tight:
+On a single-GPU machine where VRAM is tight, the **native Windows** Ollama build
+beats running it in WSL: WSL's GPU-paravirtualization layer adds ~2 GB of VRAM
+overhead (which can push the model to spill to CPU when Whisper is also loaded),
+and native reads the model straight off NVMe (~5–10 s cold load vs ~50 s through
+WSL's virtual disk). It serves on the same `http://localhost:11434`, so no
+Dictatem config change is needed — install the Windows build, stop the WSL one,
+and re-pull the model natively.
+</details>
 
-- **~2 GB less VRAM.** The WSL2 GPU-paravirtualization layer adds roughly 2 GB of overhead on top of the model itself — on a 16 GB card that can be the margin between the model staying fully GPU-resident and spilling layers to the CPU (much slower generation) when Whisper is loaded at the same time.
-- **~5–10× faster cold loads.** Native Windows reads the multi-GB model straight off NVMe (~5–10 s); WSL reads it through its virtual disk layer (~50 s measured for an ~8 GB model).
+<details>
+<summary><strong>Something else / verifying the install</strong></summary>
 
-Native Ollama serves on the same `http://localhost:11434`, so **no Dictatem config change** is needed — install the Windows Ollama build, stop the WSL one, and re-pull the model natively (`ollama pull <model>`).
+To confirm every dependency is wired up correctly (and check whether CUDA is
+active), see the dependency-probe and end-to-end test in
+[`docs/development.md`](docs/development.md#verify-the-setup).
+</details>
 
-## Trigger Words
-
-A Trigger Word is a single utterance that rewrites the previously-pasted dictation in place instead of being pasted as-is. After any normal dictation paste, say one trigger (e.g. `"polish"` to clean up filler and false starts, or `"summarize"` to condense) within the configured TTL — dictatem deletes the just-pasted text and replaces it with the output of a local [Ollama](https://ollama.com) model run with that trigger's prompt.
-
-Requires Ollama running locally with the configured model pulled — see [Ollama / Transform setup](#ollama--transform-setup) above (`ollama pull gemma4:e2b` by default). If Ollama is offline or the call fails, the document is left untouched and the overlay flashes a message telling you which step is missing.
-
-### Custom triggers
-
-Prompts live as markdown files in `~/.dictatem/prompts/`, created on first daemon start. Dictatem ships two by default — **`polish`** (clean up filler and false starts while keeping your meaning and voice) and **`summarize`** (condense to terse notes) — so a cleanup trigger works out of the box once Ollama is set up. Each file declares its aliases in YAML-style frontmatter; the body is the system prompt sent to Ollama:
-
-```markdown
 ---
-aliases: [expand, expound]
----
-You expand terse notes into full prose. Preserve every fact. Output only the expanded text.
-```
-
-Drop a new `.md` file into the folder and restart the daemon to register the new trigger. Edits to existing files survive upgrades — the bootstrap only copies in files that don't already exist. Aliases are matched case-insensitively with trailing punctuation stripped, so `"Expand."` fires the same trigger as `"expand"`.
-
-Safety rails: a Trigger Fire only runs if (a) the focused window is still the same one you pasted into and (b) the paste is younger than `last_paste_ttl_s`. Switching windows or waiting too long discards the trigger silently.
-
-## Development
-
-```powershell
-# Install dev dependencies
-uv sync --group dev
-
-# Run tests
-uv run pytest tests/
-
-# Lint and type-check
-uv run ruff check src/
-uv run pyright src/
-```
-
-## Architecture
-
-The codebase is structured around three principles:
-
-**Protocol-driven adapters** — Every OS-dependent operation (clipboard, keyboard, audio, transcription) is defined as a Protocol in `src/dictatem/interfaces.py`. The daemon accepts these adapters at construction time; tests inject fakes from `tests/fakes/`.
-
-**Pure-logic state machines** — Recording mode, overlay animation, and tray icon state are each modelled as explicit state machines with injected clocks. No sleeps in tests.
-
-**Lazy lifecycle management** — The Whisper model loads when a dictation is *armed* (so the load overlaps speech, ADR-0025), is fetched to disk once on first run, and auto-unloads after idle. GPU OOM is caught, cache is cleared, and the transcription is retried once before surfacing an error to the user.
-
-```
-src/dictatem/
-├── __main__.py          # Entry point
-├── daemon.py            # DaemonCore: event dispatcher
-├── state.py             # Recording state machine
-├── config.py            # TOML config loading
-├── interfaces.py        # Protocol definitions
-├── audio/               # Buffer, silence detection, sounddevice adapter
-├── hotkey/              # Windows keyboard hook, tap/hold classifier
-├── transcribe/          # Faster-Whisper adapter, model lifecycle
-├── transform/           # Trigger Words: detector, Ollama backend, prompt-file loader
-├── default_prompts/     # Bundled prompt files copied to ~/.dictatem/prompts/ on first run
-├── paste/               # Clipboard save/restore, keystroke simulation
-├── overlay/             # Qt animated pill widget
-├── tray/                # Qt system tray icon and menu
-└── assets/              # Brand art + generated application icon set (.ico/.icns/.png)
-```
-
-### Regenerating the application icon
-
-The full-colour waveform brand is the application/window icon. The master art
-lives at `src/dictatem/assets/icon.png` (opaque, white background baked in). To
-regenerate the committed cross-platform icon set (multi-resolution `.ico`,
-`.icns`, and the PNG sizes) with the white background keyed out to transparency:
-
-```powershell
-uv run python scripts/gen_icons.py
-```
 
 ## License
 

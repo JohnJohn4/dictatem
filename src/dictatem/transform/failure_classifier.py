@@ -80,8 +80,8 @@ def classify_transform_failure(
             FailureReason.SERVER_ERROR,
             "Ollama returned a server error (HTTP 500) — the local model "
             "server likely crashed. On a multi-GPU PC this is usually the "
-            "AMD/Vulkan path; see the README \"Ollama / Transform setup\" "
-            "troubleshooting for the fix.",
+            "AMD/Vulkan path; see the \"Multi-GPU HTTP 500\" item in the "
+            "README troubleshooting section for the fix.",
         )
 
     if failure.kind in (FailureKind.CONNECTION_REFUSED, FailureKind.URL_ERROR):
