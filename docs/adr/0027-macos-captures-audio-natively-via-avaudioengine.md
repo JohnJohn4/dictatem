@@ -7,9 +7,8 @@ blocks on the CoreAudio HAL device mutex and deadlocks against the audio IO
 thread (a classic AB/BA lock inversion inside PortAudio's CoreAudio host API).
 It is a **PortAudio-on-macOS library bug we cannot fix in-app, only avoid**, and
 it is **macOS-only** — Windows' MME/WASAPI host APIs have no such lock inversion.
-Full root cause, stacks, and the A/B/C/D option ladder are in
-[`RESOLUTION.md`](../diagnostics/dictatem-161-FIX-PACKAGE-20260630/RESOLUTION.md)
-(§1 cause, §4 options).
+The cause is summarised here and the full option ladder is under
+[Considered options](#considered-options) below.
 
 The bug is **latent**: it needs concurrent CPU load to race the IO thread. A
 standalone repro on the affected Mac (Apple M3, macOS 26.5) hangs **2 / 100**

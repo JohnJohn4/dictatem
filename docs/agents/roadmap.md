@@ -43,11 +43,14 @@ the packaged `.app`/launchd identity, 41 s dictation OK. Superseded the misdiagn
 *exposed* the latent PortAudio bug). The v0.6.2 fix + QA evidence are documented as a
 comment on #161 and in ADR-0027; no issue was left orphaned.
 
-**Recommended cleanup still OPEN (outward-facing/destructive — not done):** delete
-the stale remote branch `fix/macos-coldstart-deadlock-161` + the `v0.6.2-rc1` tag
-(both superseded, annotated in ADR-0027). Untracked local diagnostics under
-`docs/diagnostics/` (home-path-bearing, incl. the QA evidence) were left **local,
-not committed** — delete or keep, your call.
+**Cleanup DONE (2026-07-06):** the stale remote branch
+`fix/macos-coldstart-deadlock-161` and the `v0.6.2-rc1` tag are already gone from
+the remote; all of `docs/diagnostics/` was deleted (the #161 resolution lives in
+[ADR-0027](../adr/0027-macos-captures-audio-natively-via-avaudioengine.md) + the
+shipped `audio/mac_audio_capture.py`/`audio/resampler.py`), along with the three
+completed #161 macOS-audio process docs (the build + release handoffs and the PASS
+QA runbook). Older ledger entries below still *reference* those deleted files as
+historical narrative — that is expected, not a dangling task. No open cleanup remains.
 
 **Settled — do NOT reopen:** S1–S9 done + QA passed; **#161 fix shipped in v0.6.2**.
 Follow-ups tracked: **#184** (Windows WASAPI, reuses the v0.6.2 resampler),
