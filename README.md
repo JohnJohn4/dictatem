@@ -20,7 +20,7 @@ Transcription is GPU-accelerated on Windows (NVIDIA) and runs on the CPU on macO
 ## Install
 
 One command per platform. Both install [`uv`](https://docs.astral.sh/uv/) if
-needed, install Dictatem pinned to the **v0.6.3** release, and launch it — the
+needed, install Dictatem pinned to the **v0.6.4** release, and launch it — the
 tray / menu-bar icon appears a few seconds later. Everything runs as your own
 user (no admin / `sudo`).
 
@@ -34,13 +34,13 @@ is supported via x64 emulation.
 Run in **PowerShell**:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.3/install.ps1 | iex
+Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.4/install.ps1 | iex
 ```
 
 The leading `Set-ExecutionPolicy` clears a restrictive execution policy **for
 this window only** (no admin, reverts when you close the terminal). The installer
 also adds `dictatem` to your user `PATH`. Prefer to read the script first? Open
-[the URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.3/install.ps1)
+[the URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.4/install.ps1)
 and run it once you're satisfied.
 
 ### macOS
@@ -51,7 +51,7 @@ Requires **macOS 12+** (Apple Silicon or Intel). Transcription runs on the CPU
 Run in **Terminal**:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.3/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.4/install.sh | sh
 ```
 
 This generates `~/Applications/Dictatem.app` and starts Dictatem in the menu bar

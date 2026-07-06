@@ -352,6 +352,24 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 
 <!-- entries below -->
 
+### v0.6.4 — README rewrite + install/error-string consistency — 2026-07-06
+- **Shipped:** **v0.6.4** (release + `chore(release)`). Rewrote `README.md` as a
+  user-facing guide: punchy intro + a core-flow Mermaid diagram, per-platform install
+  sections up top, a Trigger Words flow diagram, and all debugging folded into
+  `<details>` at the bottom. Moved developer install / dependency-verify / architecture
+  out to the new **`docs/development.md`**. Renamed the Ollama section to **"Trigger
+  Words setup (Ollama)"** and updated the matching pointers in `install.ps1`/`install.sh`
+  (post-install echo) and the HTTP-500 message in `transform/failure_classifier.py` to
+  the new section name/anchor; kept a hidden `#ollama--transform-setup` anchor so the
+  already-shipped v0.6.3 installers' printed link still resolves.
+- **Nature:** docs + minor user-facing strings — **no change to dictation/transcription
+  behaviour**. Cut as a release so the updated install scripts + error string actually
+  reach users (the one-liners fetch scripts from the pinned tag). Built on the README
+  commit `174eb81`.
+- **QA owed:** none (docs/string-only; `test_transform_failure_classifier` green, `ruff` clean).
+- **Follow-ups:** the **macOS in-app-updater gap** (see the v0.6.3 entry) still stands;
+  the macOS track (S10/S11) is unchanged by this release.
+
 ### v0.6.3 — macOS 12/13 clean-install fix (av wheel floor) — 2026-07-06
 - **Shipped:** **v0.6.3** ([release](https://github.com/JohnJohn4/dictatem/releases/tag/v0.6.3),
   `chore(release)` `f473e0c`) fixing a clean-Mac install failure surfaced testing
