@@ -24,48 +24,41 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: the remaining macOS track — S10 (macOS QA & polish: #94 #93 #121 #95)
-and S11 (signing grill: #91). The macOS #161 freeze is FIXED and SHIPPED in
-v0.6.2 — do NOT reopen it.**
+**Next up: Pre-launch fixes — issues #188–#192 (handoff:
+[`handoffs/prelaunch-fixes-188-192.md`](handoffs/prelaunch-fixes-188-192.md)).
+Then the macOS launch gates (S10/S11 + #193).**
 
-**✅ v0.6.2 SHIPPED (2026-07-05)** — the macOS first-dictation freeze
-(PortAudio↔CoreAudio stop deadlock) is fixed by **option D — native AVAudioEngine
-capture** (ADR-0027), which deletes the PortAudio dependency on macOS. Built on
-PR #185 (merged, squash `ddcdfcb`), released as **[v0.6.2](https://github.com/JohnJohn4/dictatem/releases/tag/v0.6.2)** (`chore(release)` `4cf3e2e`, tag pushed, GitHub release
-live, install one-liners re-pinned). **Real-Mac QA PASSED** on the exact repro
-device (Apple M3 / macOS 26.5 / 25F71): 5/5 cold-first-dictation-under-load with no
-freeze, records/transcribes/pastes, mic-off between dictations, TCC capture under
-the packaged `.app`/launchd identity, 41 s dictation OK. Superseded the misdiagnosed
-`v0.6.2-rc1` (ctranslate2 theory). Full detail in the latest ledger entry + ADR-0027.
+A full **pre-launch deep review** (2026-07-08) lives at
+[`docs/reviews/2026-07-08-prelaunch-review.md`](../reviews/2026-07-08-prelaunch-review.md)
+— the user intends to launch publicly (LinkedIn, Windows + macOS users), and
+**#188–#192** are the review's must-fix items 1–5: #188 stop logging dictated
+text (privacy, do first), #189 Trigger-Fire paste-time same-target rail, #190
+recovery buffer populated before the paste attempt, #191 silence timeout
+stops-and-transcribes, #192 README truth pass + Privacy section. **Each issue
+carries its full step-by-step spec and acceptance criteria — the decisions are
+made, do not redesign.** Suggested order **#188 → #190 → #189 → #191 → #192**
+(#189/#190 share `_do_paste`; #192's wording depends on #191 — see the handoff).
 
-**Tracking note:** the freeze had no dedicated open issue — it was informally called
-"#161", but issue **#161 is actually *load-on-arm*** (closed in S8, the change that
-*exposed* the latent PortAudio bug). The v0.6.2 fix + QA evidence are documented as a
-comment on #161 and in ADR-0027; no issue was left orphaned.
+After those, the **launch gates are the macOS track**: #95 (launch-blocking
+first-run onboarding), #94 (refresh the stale v0.4.0 runbook + run it on a real
+Mac), #93 (paste-not-landing), **#193** (macOS update path — newly filed from
+the twice-ledgered follow-up), and the S11 signing grill (#91 — user spend
+call; the review recommends paying the $99). Review §§3–5 documents the
+remaining non-gating findings (F-4…F-15, S-1/S-3/S-4) — deliberately *not*
+filed as issues yet; file each as it gets picked up. The **trigger-word
+overhaul (review §6)** is the recommended first post-launch release.
 
-**Cleanup DONE (2026-07-06):** the stale remote branch
-`fix/macos-coldstart-deadlock-161` and the `v0.6.2-rc1` tag are already gone from
-the remote; all of `docs/diagnostics/` was deleted (the #161 resolution lives in
-[ADR-0027](../adr/0027-macos-captures-audio-natively-via-avaudioengine.md) + the
-shipped `audio/mac_audio_capture.py`/`audio/resampler.py`), along with the three
-completed #161 macOS-audio process docs (the build + release handoffs and the PASS
-QA runbook). Older ledger entries below still *reference* those deleted files as
-historical narrative — that is expected, not a dangling task. No open cleanup remains.
+**Settled — do NOT reopen:** S1–S9 done + QA passed; the macOS #161 freeze is
+FIXED and SHIPPED in **v0.6.2** (ADR-0027 native AVAudioEngine; QA PASS on the
+repro device; the "#161" naming confusion is defused in the v0.6.2 ledger
+entry); v0.6.3 (macOS `av` wheel pin) and v0.6.4 (README rewrite) shipped;
+post-#161 cleanup is DONE. Follow-ups tracked: #184 (Windows WASAPI),
+`config.audio.device` on macOS, off-main-thread `stop()` teardown.
+load-on-arm (ADR-0025) stands.
 
-**Settled — do NOT reopen:** S1–S9 done + QA passed; **#161 fix shipped in v0.6.2**.
-Follow-ups tracked: **#184** (Windows WASAPI, reuses the v0.6.2 resampler),
-`config.audio.device` selection on macOS (native backend warns + uses default),
-off-main-thread `stop()` teardown (only if the first-dictation hitch annoys).
-load-on-arm (ADR-0025) stands — per-dictation stop is safe again.
-
-**The macOS track (S10/S11) needs a Mac (real-Mac QA) or a user spend call
-(signing).** S10: #121 macOS mouse hook (`ready-for-agent`, reuses the S6 pure
-classifier), #95 first-run onboarding, #94 QA runbook, #93 paste-not-landing. S11:
-#91 signing decision (Developer-ID $99/yr — user's call). Confirm device/spend
-availability with the user before picking.
-
-Skills: `run`/`verify`, `tdd`, `diagnose`, `code-review`. Your role: **macOS polish
-(remote-proxy Mac QA) or the signing grill.**
+Skills: `tdd`, `code-review`, `verify`/`run`. Your role: **autonomous AFK fixes
+(#188–#192)**; the macOS track after that needs a real Mac or the user's
+signing spend call — confirm availability before picking it.
 
 ---
 
@@ -354,6 +347,43 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### Pre-launch deep review + issue filing — 2026-07-08
+- **Shipped:** no code. A four-track pre-launch deep review (architecture/decisions
+  over all 27 ADRs + src; security & privacy audit incl. a complete
+  outbound-network-call inventory; full tracker sweep — 105 issues, 82 PRs; market +
+  local-STT + trigger-word research) written to
+  [`docs/reviews/2026-07-08-prelaunch-review.md`](../reviews/2026-07-08-prelaunch-review.md).
+  Verdict: Windows launch-ready; macOS functional but not public-polish; the privacy
+  claim is substantially true (no telemetry, nothing transmitted, audio never on
+  disk) **except** dictated text logged to `daemon.log` (→ #188); the trigger-word
+  mishearing ("paste"→"haste", "summarise"→"some of us") is diagnosed (no LM context
+  for lone words + clipped onset + VAD trim; exact-match detector can't recover)
+  with a ranked, field-evidenced fix plan (review §6) — recommended as the first
+  post-launch release.
+- **Issues:** opened **#188** (stop logging dictated text, S-2) · **#189**
+  (Trigger-Fire paste-time rail, F-1) · **#190** (recovery buffer before paste,
+  F-2) · **#191** (silence timeout transcribes, F-3) · **#192** (README truth pass +
+  Privacy section) · **#193** (macOS update path — the v0.6.3/v0.6.4 ledger
+  follow-up, now filed). All `ready-for-agent`; #193 also `needs-real-mac-qa`.
+- **PRs:** none (review + tracker only).
+- **QA owed:** none for the review itself. #188–#192 need no hardware QA to merge
+  (one optional Windows eyeball noted in the handoff); #193 and the macOS track
+  carry real-Mac QA.
+- **Follow-ups / notes:** implementation handoff:
+  [`handoffs/prelaunch-fixes-188-192.md`](handoffs/prelaunch-fixes-188-192.md).
+  Review findings deliberately **not** filed as issues (documented in review
+  §3–§5; file each as it gets picked up): F-4 non-text clipboard preservation,
+  F-5 grapheme backspace count, F-6 queue generation counter, F-7 idle-unload
+  race, F-9 tick-perf, F-10 dead OOM path, F-11/F-12 config validation, F-13
+  drift-hold caption, F-14 hotkey-dead-while-transcribing cue, F-15 hook-install
+  failure detection; S-1 updater confirm + release checksums, S-3 `base_url`
+  non-loopback warn (doc side lands in #192), S-4 control-char strip in
+  `normalize_pasted_text`, version-at-startup log line. macOS launch gates
+  unchanged: #95 (blocking), #91/S11 signing (review recommends paying), #94
+  runbook refresh, #93. Market/model directions (review §7–§8): Parakeet TDT v3
+  backend via onnx-asr, distil-large-v3.5 interim swap, the #130 speech-coaching
+  loop as the flagship differentiator.
 
 ### v0.6.4 — README rewrite + install/error-string consistency — 2026-07-06
 - **Shipped:** **v0.6.4** (release + `chore(release)`). Rewrote `README.md` as a
