@@ -162,7 +162,10 @@ identity (`target_id`) still matches the one captured when the
 (default 5 min, configurable via `[transform].last_paste_ttl_s`). The match is
 window-granular on Windows and app-granular on macOS (see
 [Last Paste](#last-paste)). Otherwise the trigger is discarded with an error
-flash on the overlay.
+flash on the overlay. The same-target rail is checked **twice** — before the
+Transform runs and again at paste time, because the Transform can take up to
+`[transform].model_timeout_s` and focus may drift during it; a mismatch at
+either point discards the fire so backspaces never land in the wrong window.
 
 Replacement is done by sending backspaces equal to the character length of
 the Last Paste (post-normalisation) and pasting the Transform output. The

@@ -439,6 +439,93 @@ class TestRailsAbort:
         assert any(c[0] == "show_error" for c in overlay.calls)
 
 
+# ── Paste-time same-target rail (#189 / review F-1) ──────────────────
+
+
+class TestTriggerFirePasteTimeRail:
+    """The pre-LLM rail and the paste-time rail bracket *different* intervals.
+    Focus can drift *during* the (up to ~120 s) LLM generation — after the
+    pre-LLM rail passed — so _do_paste must re-check the target before sending
+    any backspaces, or N backspaces would delete text in the newly-focused
+    window and the transform output would be typed there.
+    """
+
+    def _prime_then_start_summarize(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+    ) -> None:
+        # Regular dictation → arms the Last Paste (foreground still 42).
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+        # Begin the "summarize" cycle and run transcription so the pre-LLM rail
+        # is evaluated (and passes) and the transform worker is launched — but do
+        # NOT drain the transform yet, so the test can drift focus mid-generation.
+        backend._result = "summarize"
+        transform_backend.queue_result("CONDENSED")
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=2_000)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=2_200)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=3_000)
+        if core._transcription_thread is not None:
+            core._transcription_thread.join(timeout=5.0)
+        core.check_transcription_result(now_ms=3_000)
+
+    def test_focus_drift_during_generation_discards_the_fire(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+        overlay: FakeOverlayRenderer,
+    ) -> None:
+        self._prime_then_start_summarize(core, backend, transform_backend)
+        # Pre-LLM rail passed (transform ran); the LLM WAS called.
+        assert transform_backend.calls == [("the verbose text ", SUMMARIZE_PROMPT)]
+
+        # User alt-tabs to a different window WHILE the LLM generates.
+        foreground.set_target(999)
+
+        if core._transform_thread is not None:
+            core._transform_thread.join(timeout=5.0)
+        core.check_transform_result(now_ms=3_200)
+
+        # No destructive input into the new window: no backspaces, nothing typed.
+        assert keystroke.total_backspaces == 0
+        assert keystroke.typed_texts == []
+        assert keystroke.paste_count == 1  # only the original dictation pasted
+        # Discarded with the error flash.
+        assert any(c[0] == "show_error" for c in overlay.calls)
+        # Last Paste is left UNCHANGED (still the original dictation @ target 42).
+        assert core._last_paste is not None
+        assert core._last_paste.text == "the verbose text "
+        assert core._last_paste.target_id == 42
+
+    def test_unchanged_focus_fires_as_today_regression(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+    ) -> None:
+        # Same manual drive, but focus does NOT drift — the fire proceeds exactly
+        # as today: backspaces over the Last Paste + types the transform output.
+        self._prime_then_start_summarize(core, backend, transform_backend)
+
+        if core._transform_thread is not None:
+            core._transform_thread.join(timeout=5.0)
+        core.check_transform_result(now_ms=3_200)
+
+        assert keystroke.total_backspaces == 17  # len("the verbose text ")
+        assert keystroke.typed_texts == ["CONDENSED "]
+        # Last Paste advances to the transform output that actually landed.
+        assert core._last_paste is not None
+        assert core._last_paste.text == "CONDENSED "
+        assert core._last_paste.target_id == 42
+
+
 # ── Transform failure ────────────────────────────────────────────────
 
 

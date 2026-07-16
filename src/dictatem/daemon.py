@@ -1002,8 +1002,9 @@ class DaemonCore:
             # record-start, do NOT mispaste into the wrong window — hold the text
             # in the Most-recent buffer with a quiet flash (no sound, no refocus)
             # so "paste"/tray recovery lands it in the right place. A Trigger Fire
-            # (replace > 0) is exempt: its own same-target rail already gated it
-            # in _handle_trigger_fire, so re-checking here would double-guard it.
+            # (replace > 0) anchors on the Last Paste target instead of
+            # record-start, so it takes the separate paste-time rail just below
+            # (#189) rather than this record-start comparison.
             if replace == 0 and focus_drifted(
                 self._record_start_target_id, current_target_id
             ):
@@ -1018,6 +1019,32 @@ class DaemonCore:
                 self._tray.set_has_last_dictation(True)
                 # The quiet "saved — say paste" flash: informational, not pushy —
                 # no sound (there is no sound surface) and no foreground.restore.
+                self._flash_error_and_settle()
+                return
+
+            # Trigger Fire paste-time same-target rail (#189 / review F-1). The
+            # pre-LLM rail in _handle_trigger_fire and this check bracket
+            # DIFFERENT intervals: the LLM call can take up to model_timeout_s
+            # (~120 s), and the user may alt-tab during it. Re-check that the
+            # foreground is still the window the Last Paste landed in BEFORE
+            # sending any backspaces — otherwise N backspaces would delete text
+            # in the newly focused window and the transform output would be typed
+            # there (the destructive-input class ADR-0026 exists to prevent). On
+            # mismatch the Trigger Fire is discarded with the error flash, exactly
+            # like a failed pre-LLM rail (CONTEXT.md#trigger-fire): no refocus, no
+            # retry, and the Last Paste is left unchanged. The regular-dictation
+            # (replace == 0) path keeps its own detect-and-hold rail above.
+            if (
+                replace > 0
+                and self._last_paste is not None
+                and focus_drifted(self._last_paste.target_id, current_target_id)
+            ):
+                logger.warning(
+                    "Trigger Fire target changed during generation - discarded "
+                    "(no backspaces sent)"
+                )
+                # Discarded exactly like a failed pre-LLM rail; the Last Paste is
+                # left unchanged (not nulled) so it stays armed for a retry.
                 self._flash_error_and_settle()
                 return
 
