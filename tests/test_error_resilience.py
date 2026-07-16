@@ -173,10 +173,13 @@ class TestGPUOOMDoubleFail:
 
 
 class TestSilenceTimeout:
-    """AC: is_idle_for_seconds(60) True while PTT_REC → IDLE + cancel, INFO log."""
+    """AC (#191): a silence timeout in an active recording stops-and-transcribes
+    (like MAX_DURATION); it never silently discards the recording. An all-silence
+    recording still ends in the error flash via the EMPTY_RESULT path."""
 
-    def test_silence_timeout_cancels_recording(
+    def _core_with_silence(
         self,
+        *,
         sm: StateMachine,
         audio: FakeAudioCapture,
         lifecycle: TranscribeLifecycle,
@@ -185,11 +188,9 @@ class TestSilenceTimeout:
         clipboard: FakeClipboardIO,
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
+    ) -> DaemonCore:
         buf = AudioBuffer(sample_rate=16_000, silence_floor=0.01)
         buf.append(np.zeros(16_000 * 61, dtype=np.float32))
-
         core = DaemonCore(
             state_machine=sm,
             audio_capture=audio,
@@ -201,20 +202,78 @@ class TestSilenceTimeout:
             keystroke=keystroke,
             foreground=foreground,
         )
-
         core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
         core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
         assert sm.state is State.PTT_REC
+        return core
+
+    def test_silence_timeout_transcribes_and_pastes(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        lifecycle: TranscribeLifecycle,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+        backend: FakeTranscriberBackend,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        backend._result = "the words spoken before the pause"
+        core = self._core_with_silence(
+            sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
+            clipboard=clipboard, keystroke=keystroke, foreground=foreground,
+        )
 
         with caplog.at_level(logging.INFO, logger="dictatem.daemon"):
             core.check_silence(now_ms=60_200)
 
-        assert sm.state is State.IDLE
-        assert any(r.levelno == logging.INFO for r in caplog.records)
+        # It stops-and-transcribes — does NOT cancel to idle.
+        assert sm.state is State.TRANSCRIBING
+        assert any("transcrib" in r.message.lower() for r in caplog.records)
+        # And it announces the involuntary cutoff, like the max-duration path.
         assert any(
-            "timeout" in r.message.lower() or "idle" in r.message.lower()
-            for r in caplog.records
+            "silence" in msg.lower() and "transcrib" in msg.lower()
+            for _, msg in tray.notifications
         )
+
+        core.drain_transcription_for_test(now_ms=60_300)
+
+        # The recording was transcribed and pasted — nothing discarded.
+        assert sm.state is State.IDLE
+        assert keystroke.paste_count == 1
+        set_texts = [c[1] for c in clipboard.calls if c[0] == "set_text"]
+        assert set_texts == ["the words spoken before the pause "]
+
+    def test_all_silence_recording_flashes_error_and_pastes_nothing(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        lifecycle: TranscribeLifecycle,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+        backend: FakeTranscriberBackend,
+    ) -> None:
+        # An accidental tap that captures only silence transcribes to empty →
+        # the existing EMPTY_RESULT → FLASH_ERROR path, never a paste of "".
+        backend._result = EmptyResult()
+        core = self._core_with_silence(
+            sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
+            clipboard=clipboard, keystroke=keystroke, foreground=foreground,
+        )
+
+        core.check_silence(now_ms=60_200)
+        assert sm.state is State.TRANSCRIBING
+        core.drain_transcription_for_test(now_ms=60_300)
+
+        assert sm.state is State.IDLE
+        assert keystroke.paste_count == 0
+        assert [c[1] for c in clipboard.calls if c[0] == "set_text"] == []
+        assert any(c[0] == "show_error" for c in overlay.calls)
 
 
 class TestMaxRecordingDuration:

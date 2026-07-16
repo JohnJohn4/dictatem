@@ -519,8 +519,16 @@ class DaemonCore:
                 return
             if self._audio_buffer.is_idle_for_seconds(self._silence_timeout_s):
                 logger.info(
-                    "Silence timeout: no audio for %.0f s, auto-aborting",
+                    "Silence timeout: no audio for %.0f s, transcribing",
                     self._silence_timeout_s,
+                )
+                # An involuntary cutoff like MAX_DURATION — announce it so the
+                # ensuing paste isn't a surprise to a user who paused mid-thought
+                # (#191). The pill also transitions, but the notification names
+                # the reason.
+                self._tray.show_notification(
+                    "Dictatem",
+                    "Silence detected — transcribing…",
                 )
                 commands = self._sm.handle(Event.SILENCE_TIMEOUT, now_ms=now_ms)
                 self._execute_commands(commands, now_ms=now_ms)

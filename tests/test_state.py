@@ -94,15 +94,17 @@ class TestToggleRecExits:
         assert Command.CANCEL in cmds
         assert Command.PASTE not in cmds
 
-    def test_silence_timeout_cancels_to_idle(self) -> None:
+    def test_silence_timeout_stops_and_transcribes(self) -> None:
         sm = StateMachine()
         sm.handle(Event.KEY_DOWN, now_ms=0)
         sm.handle(Event.KEY_UP, now_ms=50)
         assert sm.state is State.TOGGLE_REC
 
+        # Silence stops-and-transcribes like MAX_DURATION — never discards (#191).
         cmds = sm.handle(Event.SILENCE_TIMEOUT, now_ms=60_000)
-        assert sm.state is State.IDLE
-        assert Command.CANCEL in cmds
+        assert sm.state is State.TRANSCRIBING
+        assert Command.RECORD_STOP_AND_TRANSCRIBE in cmds
+        assert Command.CANCEL not in cmds
 
 
 class TestPTTRecExits:
@@ -127,15 +129,17 @@ class TestPTTRecExits:
         assert Command.CANCEL in cmds
         assert Command.PASTE not in cmds
 
-    def test_silence_timeout_cancels_to_idle(self) -> None:
+    def test_silence_timeout_stops_and_transcribes(self) -> None:
         sm = StateMachine()
         sm.handle(Event.KEY_DOWN, now_ms=0)
         sm.handle(Event.TIMER_EXPIRED, now_ms=200)
         assert sm.state is State.PTT_REC
 
+        # Silence stops-and-transcribes like MAX_DURATION — never discards (#191).
         cmds = sm.handle(Event.SILENCE_TIMEOUT, now_ms=60_200)
-        assert sm.state is State.IDLE
-        assert Command.CANCEL in cmds
+        assert sm.state is State.TRANSCRIBING
+        assert Command.RECORD_STOP_AND_TRANSCRIBE in cmds
+        assert Command.CANCEL not in cmds
 
 
 class TestTranscribing:
@@ -281,21 +285,26 @@ class TestEscFromAnyActiveState:
 
 
 class TestSilenceTimeoutFromActiveStates:
+    """Silence timeout mirrors MAX_DURATION: stop-and-transcribe, never discard
+    (#191). A user who dictates then pauses must not lose the recording."""
+
     def test_silence_from_toggle_rec(self) -> None:
         sm = StateMachine()
         sm.handle(Event.KEY_DOWN, now_ms=0)
         sm.handle(Event.KEY_UP, now_ms=50)
         cmds = sm.handle(Event.SILENCE_TIMEOUT, now_ms=60_050)
-        assert sm.state is State.IDLE
-        assert Command.CANCEL in cmds
+        assert sm.state is State.TRANSCRIBING
+        assert Command.RECORD_STOP_AND_TRANSCRIBE in cmds
+        assert Command.CANCEL not in cmds
 
     def test_silence_from_ptt_rec(self) -> None:
         sm = StateMachine()
         sm.handle(Event.KEY_DOWN, now_ms=0)
         sm.handle(Event.TIMER_EXPIRED, now_ms=200)
         cmds = sm.handle(Event.SILENCE_TIMEOUT, now_ms=60_200)
-        assert sm.state is State.IDLE
-        assert Command.CANCEL in cmds
+        assert sm.state is State.TRANSCRIBING
+        assert Command.RECORD_STOP_AND_TRANSCRIBE in cmds
+        assert Command.CANCEL not in cmds
 
 
 class TestMaxDurationFromActiveStates:

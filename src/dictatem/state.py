@@ -136,11 +136,15 @@ _HANDLERS: dict[tuple[State, Event], _Handler] = {
     (State.PRESSED, Event.ESC): StateMachine._pressed_esc,
     (State.TOGGLE_REC, Event.KEY_DOWN): StateMachine._toggle_key_down,
     (State.TOGGLE_REC, Event.ESC): StateMachine._cancel_to_idle,
-    (State.TOGGLE_REC, Event.SILENCE_TIMEOUT): StateMachine._cancel_to_idle,
+    # Silence timeout stops-and-transcribes (like MAX_DURATION), it does NOT
+    # discard: a user who dictates then pauses must not lose the recording
+    # (#191). An all-silence tap transcribes to empty and falls through the
+    # existing EMPTY_RESULT -> FLASH_ERROR path. Esc is still the only cancel.
+    (State.TOGGLE_REC, Event.SILENCE_TIMEOUT): StateMachine._toggle_key_down,
     (State.TOGGLE_REC, Event.MAX_DURATION): StateMachine._toggle_key_down,
     (State.PTT_REC, Event.KEY_UP): StateMachine._ptt_key_up,
     (State.PTT_REC, Event.ESC): StateMachine._cancel_to_idle,
-    (State.PTT_REC, Event.SILENCE_TIMEOUT): StateMachine._cancel_to_idle,
+    (State.PTT_REC, Event.SILENCE_TIMEOUT): StateMachine._ptt_key_up,
     (State.PTT_REC, Event.MAX_DURATION): StateMachine._ptt_key_up,
     (State.TRANSCRIBING, Event.TRANSCRIPTION_DONE): StateMachine._transcribing_done,
     (State.TRANSCRIBING, Event.ESC): StateMachine._cancel_to_idle,
