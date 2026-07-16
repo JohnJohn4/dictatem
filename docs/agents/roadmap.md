@@ -24,41 +24,37 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: Pre-launch fixes — issues #188–#192 (handoff:
-[`handoffs/prelaunch-fixes-188-192.md`](handoffs/prelaunch-fixes-188-192.md)).
-Then the macOS launch gates (S10/S11 + #193).**
+**Next up: the macOS launch gates — #95, #94, #93, #193, and S11/#91.**
 
-A full **pre-launch deep review** (2026-07-08) lives at
-[`docs/reviews/2026-07-08-prelaunch-review.md`](../reviews/2026-07-08-prelaunch-review.md)
-— the user intends to launch publicly (LinkedIn, Windows + macOS users), and
-**#188–#192** are the review's must-fix items 1–5: #188 stop logging dictated
-text (privacy, do first), #189 Trigger-Fire paste-time same-target rail, #190
-recovery buffer populated before the paste attempt, #191 silence timeout
-stops-and-transcribes, #192 README truth pass + Privacy section. **Each issue
-carries its full step-by-step spec and acceptance criteria — the decisions are
-made, do not redesign.** Suggested order **#188 → #190 → #189 → #191 → #192**
-(#189/#190 share `_do_paste`; #192's wording depends on #191 — see the handoff).
+The five pre-launch must-fixes (**#188–#192**) are **DONE and in review** as PRs
+**#194/#195/#196/#197/#198** (merge order **#188 → #190 → #189 → #191 → #192**;
+#196 is stacked on #195 — merge #195 first). See the 2026-07-16 ledger entry for
+what shipped and the decisions taken. Once those merge, the **Windows launch is
+clear**.
 
-After those, the **launch gates are the macOS track**: #95 (launch-blocking
-first-run onboarding), #94 (refresh the stale v0.4.0 runbook + run it on a real
-Mac), #93 (paste-not-landing), **#193** (macOS update path — newly filed from
-the twice-ledgered follow-up), and the S11 signing grill (#91 — user spend
-call; the review recommends paying the $99). Review §§3–5 documents the
-remaining non-gating findings (F-4…F-15, S-1/S-3/S-4) — deliberately *not*
-filed as issues yet; file each as it gets picked up. The **trigger-word
-overhaul (review §6)** is the recommended first post-launch release.
+The remaining launch gates are all **macOS**: **#95** (launch-blocking first-run
+onboarding + re-prompt-on-use), **#94** (refresh the stale v0.4.0 QA runbook +
+run it on a real Mac), **#93** (intermittent paste-not-landing), **#193** (macOS
+in-app update path), and the **S11/#91 signing decision** — the review
+recommends paying the $99 Developer-ID (a **user spend call**). Read the
+pre-launch review §5 (`docs/reviews/2026-07-08-prelaunch-review.md`) for the
+ordered macOS checklist and §§3–4 for the remaining non-gating findings
+(F-4…F-15, S-1/S-3/S-4) — deliberately *not* filed yet; file each as picked up.
+The **trigger-word overhaul (review §6)** is the recommended first post-launch
+release.
 
-**Settled — do NOT reopen:** S1–S9 done + QA passed; the macOS #161 freeze is
-FIXED and SHIPPED in **v0.6.2** (ADR-0027 native AVAudioEngine; QA PASS on the
-repro device; the "#161" naming confusion is defused in the v0.6.2 ledger
-entry); v0.6.3 (macOS `av` wheel pin) and v0.6.4 (README rewrite) shipped;
-post-#161 cleanup is DONE. Follow-ups tracked: #184 (Windows WASAPI),
-`config.audio.device` on macOS, off-main-thread `stop()` teardown.
-load-on-arm (ADR-0025) stands.
+**Settled — do NOT reopen:** the #188–#192 decisions are made (see the ledger
+entry + PR bodies for the deliberately-not-taken options — #189 TTL-at-paste-time,
+#191 stale-caret-same-window / whisper-hallucination-on-silence). S1–S9 done + QA
+passed; the macOS #161 freeze is FIXED and SHIPPED in **v0.6.2** (ADR-0027 native
+AVAudioEngine; QA PASS on the repro device); v0.6.3 (macOS `av` wheel pin) and
+v0.6.4 (README rewrite) shipped; post-#161 cleanup is DONE. Follow-ups tracked:
+#184 (Windows WASAPI), `config.audio.device` on macOS, off-main-thread `stop()`
+teardown. load-on-arm (ADR-0025) stands.
 
-Skills: `tdd`, `code-review`, `verify`/`run`. Your role: **autonomous AFK fixes
-(#188–#192)**; the macOS track after that needs a real Mac or the user's
-signing spend call — confirm availability before picking it.
+Skills: `verify`/`run`, `tdd`, `diagnose`, `grill-me` (for #91). Your role: the
+macOS track needs a **real Mac** (or the user's signing spend call) — confirm
+availability with the user before picking it up.
 
 ---
 
@@ -347,6 +343,58 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### Pre-launch fixes #188–#192 — 2026-07-16
+- **Shipped:** the five pre-launch must-fixes from the deep review, one branch +
+  PR each (all **open, awaiting user review/merge**):
+  - **#188** (PR **#194**) stop logging dictated text — the regular-dictation
+    completion line logs the **char count only** (was `%r` of the first 80 chars,
+    retained ~7 days). New `test_daemon_logging_privacy.py` drives a dictation +
+    Trigger Fire with a secret phrase and asserts it appears in no log record,
+    formatting each record incl. `exc_info` tracebacks.
+  - **#190** (PR **#195**) recovery buffer written **before** the paste attempt
+    (regular dictation only, #119 preserved). Clipboard failure
+    (`ClipboardContentionError`/`OSError` only — genuine bugs still propagate)
+    flashes + settles without re-raising; Last Paste still armed only on success.
+    Shared `_flash_error_and_settle()` tail.
+  - **#189** (PR **#196**, **stacked on #195**) Trigger-Fire paste-time
+    same-target rail — `_do_paste` re-checks the Last Paste target (via pure
+    `focus_drifted`) before backspaces; discards on drift, Last Paste unchanged.
+    `CONTEXT.md#trigger-fire` documents the twice-checked rail.
+  - **#191** (PR **#197**) silence timeout **stops-and-transcribes** (mirrors
+    `MAX_DURATION`) instead of discarding; all-silence → `EMPTY_RESULT →
+    FLASH_ERROR`; adds a tray notification for the involuntary cutoff.
+  - **#192** (PR **#198**, docs-only) README truth pass (config-not-commented,
+    clipboard-text-only, silence-transcribes) + new **Privacy** section
+    (outbound-call inventory, review §4.2) + macOS notes (clipboard-exclusion is
+    Windows-only, no in-app updater #193).
+- **Merge order:** **#188 → #190 → #189 → #191 → #192.** #196 stacked on #195
+  (merge #195 first; #196's diff self-reduces once #195 lands). #198's
+  Privacy/silence wording depends on #194/#197 landing. Squash-merge bottom-up.
+- **Issues:** each PR `Closes #…`; close #188–#192 on merge.
+- **PRs:** **#194 #195 #196 #197 #198** — all open, base `main`.
+- **Verification:** combined tree (all five merged into a scratch branch)
+  **1149 passed, 4 skipped**, `ruff` clean, `pyright` 0 errors. All five branches
+  merge into `main` with **no conflicts**. `/code-review` (high, workflow-backed)
+  run per PR; every CONFIRMED finding fixed. Decisions on the deliberately
+  **not-taken** options recorded in the PR bodies: #189 leaves the paste-time
+  rail **target-only** (no TTL re-check — the residual is same-window, hence
+  non-destructive); #191 does **not** re-add a silence-specific discard for the
+  stale-caret-same-window paste (inherent to the window-granular model, ADR-0026;
+  already true of max-duration/tap-stop) nor guard whisper-hallucination-on-silence
+  (pre-existing across all stop paths — a future hallucination-filter concern).
+- **QA owed:** **none gating** — all five are pure/daemon logic with fakes (+
+  docs), covered by tests. **Optional** Windows eyeball (defense-in-depth, **NOT
+  run here — no hardware**): after #189/#190, alt-tab away during a Trigger Word
+  generation → expect error flash + nothing typed in the new window.
+- **Follow-ups / notes:** **latent test-isolation bug (not fixed — out of scope):**
+  `tests/test_state.py::TestImportPurity.test_no_io_imports` does
+  `importlib.reload("dictatem.state")`, swapping that module's enum identities, so
+  any daemon test running **after** it in the same process fails `is`-comparisons.
+  Harmless under CI's alphabetical order (`test_state` runs last) but would break
+  under `pytest-randomly`/`-p no:randomly` reordering — worth a one-line
+  snapshot/restore of `sys.modules` around the reload. Verify per-file or full-suite,
+  never an ad-hoc order that puts `test_state` before the daemon tests.
 
 ### Pre-launch deep review + issue filing — 2026-07-08
 - **Shipped:** no code. A four-track pre-launch deep review (architecture/decisions
