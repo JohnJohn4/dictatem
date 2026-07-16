@@ -110,6 +110,10 @@ def _copies(clipboard: FakeClipboardIO) -> list[str]:
     return [c[1] for c in clipboard.calls if c[0] == "copy"]
 
 
+def _set_texts(clipboard: FakeClipboardIO) -> list[str]:
+    return [c[1] for c in clipboard.calls if c[0] == "set_text"]
+
+
 class TestBufferRetention:
     def test_regular_dictation_is_retained_normalised(
         self, core: DaemonCore, backend: FakeTranscriberBackend
@@ -186,6 +190,129 @@ class TestTriggerFireDoesNotOverwriteBuffer:
         transform_backend.queue_result("CONDENSED")
         _cycle(core, start_ms=2_000, end_ms=3_000)
         assert core._most_recent_dictation == "the verbose text "
+
+
+class TestBufferPopulatedBeforePaste:
+    """ADR-0023's guarantee 'a dictation is never lost' must hold even when the
+    paste itself fails. The buffer is written BEFORE the paste attempt (#190), so
+    a dictation whose paste raises (clipboard contention) is still recoverable.
+    """
+
+    def _core_with_clipboard(
+        self,
+        *,
+        backend: FakeTranscriberBackend,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        tray: FakeTrayRenderer,
+        overlay: FakeOverlayRenderer,
+        transform_backend: FakeTransformBackend,
+    ) -> DaemonCore:
+        return DaemonCore(
+            state_machine=StateMachine(tap_threshold_ms=200),
+            audio_capture=FakeAudioCapture(duration_s=1.0),
+            lifecycle=TranscribeLifecycle(backend=backend, clock=lambda: 0.0),
+            overlay=overlay,
+            tray=tray,
+            clipboard=clipboard,
+            keystroke=keystroke,
+            foreground=FakeForegroundTracker(target_id=42),
+            transform_lifecycle=TransformLifecycle(backend=transform_backend),
+            trigger_detector=TriggerDetector(ALIASES),
+            transform_enabled=True,
+            last_paste_ttl_s=300.0,
+        )
+
+    def test_failed_paste_still_fills_buffer_and_is_recoverable(
+        self,
+        backend: FakeTranscriberBackend,
+        keystroke: FakeKeystrokeSender,
+        tray: FakeTrayRenderer,
+        transform_backend: FakeTransformBackend,
+    ) -> None:
+        # 5 open failures == _MAX_RETRIES → the first paste raises
+        # ClipboardContentionError; the count is then exhausted so the recovery
+        # re-paste succeeds.
+        clipboard = FakeClipboardIO(open_failures=5)
+        overlay = FakeOverlayRenderer()
+        core = self._core_with_clipboard(
+            backend=backend, clipboard=clipboard, keystroke=keystroke, tray=tray,
+            overlay=overlay, transform_backend=transform_backend,
+        )
+
+        backend._result = "hello world"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        # The paste failed (never reached set_text / Ctrl+V)...
+        assert _set_texts(clipboard) == []
+        assert keystroke.paste_count == 0
+        # ...but the buffer holds the dictation, the tray flag is set, and the
+        # error flashed. No Last Paste is armed (nothing landed).
+        assert core._most_recent_dictation == "hello world "
+        assert tray.has_last_dictation is True
+        assert core._last_paste is None
+        assert any(c[0] == "show_error" for c in overlay.calls)
+
+        # Recovery: saying "paste" re-pastes the held dictation, now successfully.
+        backend._result = "paste"
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+        assert _set_texts(clipboard) == ["hello world "]
+        assert keystroke.paste_count == 1
+        assert core._last_paste is not None
+        assert core._last_paste.text == "hello world "
+
+    def test_non_clipboard_bug_propagates_not_masked_as_contention(
+        self,
+        backend: FakeTranscriberBackend,
+        keystroke: FakeKeystrokeSender,
+        tray: FakeTrayRenderer,
+        transform_backend: FakeTransformBackend,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Only the clipboard-contention classes (ClipboardContentionError /
+        # OSError) are treated as recoverable. A genuine bug in the paste path
+        # (here a ValueError) must NOT be swallowed as contention — it propagates
+        # so it surfaces with a traceback instead of masquerading as a transient
+        # failure. The buffer is still populated first (recovery preserved).
+        clipboard = FakeClipboardIO()
+
+        def _boom() -> str | None:
+            raise ValueError("genuine bug in the paste path")
+
+        monkeypatch.setattr(clipboard, "save", _boom)
+        core = self._core_with_clipboard(
+            backend=backend, clipboard=clipboard, keystroke=keystroke, tray=tray,
+            overlay=FakeOverlayRenderer(), transform_backend=transform_backend,
+        )
+        core._last_text = "some text"
+        core._pending_replace_chars = 0
+
+        with pytest.raises(ValueError):
+            core._do_paste(now_ms=0)
+        assert core._most_recent_dictation == "some text "
+
+    def test_successful_paste_leaves_buffer_unchanged_regression(
+        self,
+        backend: FakeTranscriberBackend,
+        keystroke: FakeKeystrokeSender,
+        tray: FakeTrayRenderer,
+        transform_backend: FakeTransformBackend,
+    ) -> None:
+        # The buffer moving before the paste must not change the happy path:
+        # a successful paste still leaves the buffer holding the dictation and
+        # arms the Last Paste.
+        clipboard = FakeClipboardIO()
+        core = self._core_with_clipboard(
+            backend=backend, clipboard=clipboard, keystroke=keystroke, tray=tray,
+            overlay=FakeOverlayRenderer(), transform_backend=transform_backend,
+        )
+        backend._result = "landed fine"
+        _cycle(core, start_ms=0, end_ms=1_000)
+        assert keystroke.paste_count == 1
+        assert core._most_recent_dictation == "landed fine "
+        assert tray.has_last_dictation is True
+        assert core._last_paste is not None
+        assert core._last_paste.text == "landed fine "
 
 
 class TestTrayHasLastDictationFlag:
