@@ -752,11 +752,10 @@ class DaemonCore:
                     # Regular dictation only: apply deterministic Replacements
                     # (ADR-0024) just before this text becomes the paste payload.
                     text = self._apply_replacements(result)  # type: ignore[arg-type]
-                    logger.info(
-                        "Transcription complete (%d chars): %r",
-                        len(text),
-                        text[:80] + ("..." if len(text) > 80 else ""),
-                    )
+                    # Never log dictated text content — it is private and the
+                    # rotating file handler would retain it for ~7 days (S-2 /
+                    # #188). Count only, mirroring the Transform path below.
+                    logger.info("Transcription complete (%d chars)", len(text))
                     self._last_text = text
                     commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
                     self._execute_commands(commands, now_ms=now_ms)
