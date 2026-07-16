@@ -82,10 +82,12 @@ driven entirely by a global hotkey — **Win+Alt** on Windows, **Option+Command
 | **Toggle record** | **Tap** the hotkey to start; tap again (or pause) to stop |
 | **Cancel** | Press **Esc** |
 
-A tap starts hands-free recording that auto-stops after a stretch of silence; a
-hold records only while held. Transcribed text is pasted into the focused window
-automatically. While recording, a small **pill** appears in the corner of the
-active screen with a live waveform.
+A tap starts hands-free recording that auto-stops **and transcribes** after a
+stretch of silence (a long pause finishes your dictation rather than discarding
+it); a hold records only while held. Transcribed text is pasted into the focused
+window automatically. Press **Esc** to cancel without transcribing. While
+recording, a small **pill** appears in the corner of the active screen with a
+live waveform.
 
 **Dictation is never lost.** If text lands nowhere (no window focused, or focus
 drifted mid-dictation), Dictatem holds it — focus where it should go and say
@@ -123,7 +125,7 @@ live in-app guide), **Check for Updates…** (Windows), **Show Log**, **Restart*
 - **Global hotkey** — activate from any window; push-to-talk or hands-free toggle.
 - **On-device transcription** — Faster-Whisper, GPU-accelerated on NVIDIA, CPU on macOS.
 - **Offline after setup** — the model downloads once on first run; every dictation after that needs no network.
-- **Smart paste** — saves and restores your clipboard and window focus around each paste, and never clutters clipboard history.
+- **Smart paste** — saves and restores your clipboard **text** and window focus around each paste, and never clutters clipboard history. (Non-text clipboard content — images, copied files — is not preserved yet.)
 - **Trigger Words** — rewrite the last paste in place via a local Ollama model.
 - **Custom vocabulary & replacements** — bias recognition toward your jargon, and rewrite words deterministically (see [Customising](#customising)).
 - **Overlay pill** — corner indicator with a live waveform; encodes recording phase by colour.
@@ -132,12 +134,46 @@ live in-app guide), **Check for Updates…** (Windows), **Show Log**, **Restart*
 
 ---
 
+## Privacy
+
+Your voice and your words never leave your machine. Dictatem has **no telemetry**,
+no accounts, and no background listener — audio is transcribed in memory and is
+**never written to disk**. Here is the *complete* list of times Dictatem touches
+the network:
+
+- **One-time model download** — the Faster-Whisper weights are fetched from
+  Hugging Face at setup / on your first dictation. After that, transcription is
+  fully offline.
+- **Manual update check (Windows)** — only when you click **Check for Updates…**
+  in the tray; it asks `api.github.com` for the latest release number and sends
+  nothing else. There is no automatic/background check.
+- **Install & upgrade** — the install one-liner fetches `uv`/CPython, Dictatem,
+  and its dependencies from `astral.sh`, PyPI, and `github.com`.
+- **Trigger Words** — firing a [Trigger Word](#trigger-words) sends the text
+  being rewritten to `[transform].base_url`, which is your **local** Ollama
+  (`http://localhost:11434`) by default. Keep it local: if you point `base_url`
+  at a remote host, your text goes there.
+
+No audio or transcript is ever transmitted, and the log file
+(`%APPDATA%\Dictatem\logs\daemon.log` on Windows,
+`~/Library/Logs/Dictatem/daemon.log` on macOS) records **only character counts**,
+never the dictated text itself.
+
+> **macOS clipboard caveat.** The clipboard-history exclusion markers that keep a
+> dictation out of your clipboard manager are Windows-only. On macOS the
+> dictation transiently sits on the pasteboard (~1.5 s) before the original
+> clipboard is restored, so a clipboard-history app could capture it in that
+> window.
+
+---
+
 ## Configuration
 
-On first launch a commented default config is written to
-`~/.dictatem/config.toml` — open it any time with **Open config file…** in the
-tray menu. There is no settings UI ([by design](docs/adr/0022-no-settings-ui-config-is-a-discoverable-file.md));
-the file is self-documented. The knobs you're most likely to touch:
+On first launch a default `config.toml` is written to `~/.dictatem/` — open it
+any time with **Open config file…** in the tray menu. There is no settings UI
+([by design](docs/adr/0022-no-settings-ui-config-is-a-discoverable-file.md)); the
+keys are documented here rather than in the file. The knobs you're most likely
+to touch:
 
 ```toml
 [hotkey]
@@ -214,7 +250,7 @@ overlay flashes a message telling you which step is missing.
   for you (safe while running — it stops the old daemon first).
 - **macOS** — re-run the [install one-liner](#macos); it refreshes the tool, the
   `.app`, and the start-at-login entry together. *(An in-app updater is not yet
-  available on macOS.)*
+  available on macOS — [#193](https://github.com/JohnJohn4/dictatem/issues/193).)*
 
 You can also update either platform by re-running the one-liner with a newer
 version tag in the URL — see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest).
@@ -271,6 +307,12 @@ again before a manual re-install (the tray update re-detects instead).
   **`python3.12`** — grant that. A signed, "Dictatem"-labelled bundle is planned
   ([#91](https://github.com/JohnJohn4/dictatem/issues/91)).
 - **Before the grants are in,** the daemon still runs — record from the menu.
+- **Clipboard-history exclusion is Windows-only.** On macOS a dictation
+  transiently sits on the pasteboard (~1.5 s) before your original clipboard is
+  restored, so a clipboard-history app could capture it — see
+  [Privacy](#privacy).
+- **Updating is manual** — re-run the install one-liner; there's no in-app
+  updater yet ([#193](https://github.com/JohnJohn4/dictatem/issues/193)).
 </details>
 
 <details>
