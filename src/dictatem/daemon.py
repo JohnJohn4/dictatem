@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from dictatem.exceptions import (
     AudioCaptureError,
+    ClipboardContentionError,
     ModelLoadError,
     PlatformNotSupportedError,
     TranscriptionFailedError,
@@ -974,6 +975,18 @@ class DaemonCore:
             self._transform_thread.join(timeout=5.0)
         self.check_transform_result(now_ms=now_ms)
 
+    def _flash_error_and_settle(self) -> None:
+        """Quiet error flash + return to idle — the shared tail of ``_do_paste``'s
+        non-happy exits (focus-drift hold, Trigger Fire paste-time discard, and
+        paste failure). There is no sound surface, so the flash is silent, and the
+        overlay is deliberately NOT hidden here (``hide()`` would cut the flash
+        short — it is only for the happy path). Kept in one place so the recovery
+        UX can't drift between these branches.
+        """
+        self._overlay.show_error()
+        self._tray.set_idle()
+        self._last_text = None
+
     def _do_paste(self, *, now_ms: int = 0) -> None:
         replace = self._pending_replace_chars
         self._pending_replace_chars = 0
@@ -1004,38 +1017,69 @@ class DaemonCore:
                 )
                 self._most_recent_dictation = normalized
                 self._tray.set_has_last_dictation(True)
-                # The quiet "saved — say paste" flash: the overlay's error flash
-                # carries no sound (there is no sound surface), and we never call
-                # foreground.restore — so this is informational, not pushy.
-                self._overlay.show_error()
-                self._tray.set_idle()
-                self._last_text = None
+                # The quiet "saved — say paste" flash: informational, not pushy —
+                # no sound (there is no sound surface) and no foreground.restore.
+                self._flash_error_and_settle()
                 return
 
-            paste(
-                self._last_text,
-                clipboard=self._clipboard,
-                keystroke=self._keystroke,
-                foreground=self._foreground,
-                replace_chars=replace,
-                # One captured target drives the drift check, the focus restore,
-                # AND the Last Paste below — so they can't disagree from
-                # re-capturing the foreground at slightly different instants (#97).
-                target_id=current_target_id,
-                schedule_restore=self._restore_scheduler,
-            )
+            # Retain regular dictation for voice/tray recovery (ADR-0023 / #119)
+            # BEFORE attempting the paste (#190). If paste() raises (clipboard
+            # contention after the open retries, or an OSError from save()), the
+            # exception would otherwise unwind past a success-only buffer write,
+            # so the very dictation whose paste failed — the exact case the
+            # recovery buffer exists for — would be lost. A Trigger Fire
+            # (replace > 0) pastes Transform output, not a dictation, so it must
+            # NOT overwrite the Most-recent dictation.
+            if replace == 0:
+                self._most_recent_dictation = normalized
+                self._tray.set_has_last_dictation(True)
+
+            try:
+                paste(
+                    self._last_text,
+                    clipboard=self._clipboard,
+                    keystroke=self._keystroke,
+                    foreground=self._foreground,
+                    replace_chars=replace,
+                    # One captured target drives the drift check, the focus
+                    # restore, AND the Last Paste below — so they can't disagree
+                    # from re-capturing the foreground at slightly different
+                    # instants (#97).
+                    target_id=current_target_id,
+                    schedule_restore=self._restore_scheduler,
+                )
+            except (ClipboardContentionError, OSError):
+                # The clipboard failure classes the recovery buffer exists for
+                # (contention after the open retries, or an OSError from the
+                # win32/mac clipboard). A regular dictation's text is already in
+                # the Most-recent buffer (written above), so it is recoverable by
+                # saying "paste" or via the tray item; a Trigger Fire's Transform
+                # output is not retained (#119), so nothing is held for it. Flash
+                # the error and settle WITHOUT re-raising, so the flash isn't
+                # immediately hidden by _recover_to_idle, and do not arm Trigger
+                # Words against text that may not have landed. Any OTHER exception
+                # is a genuine bug — let it propagate to check_transcription_result
+                # / check_transform_result so it surfaces with a traceback rather
+                # than masquerading as recoverable contention.
+                logger.warning(
+                    "Paste failed (%d chars, %s)%s",
+                    len(normalized),
+                    "Trigger Fire" if replace else "dictation",
+                    "" if replace else " — held for recovery",
+                    exc_info=True,
+                )
+                self._last_paste = None
+                self._flash_error_and_settle()
+                return
+
+            # Last Paste is armed only on a SUCCESSFUL paste — it arms Trigger
+            # Words against text that actually landed (invariant kept by #190).
             self._last_paste = LastPaste(
                 text=normalized,
                 char_count=len(normalized),
                 target_id=current_target_id,
                 pasted_at_ms=now_ms,
             )
-            # Retain regular dictation for voice/tray recovery (ADR-0023 / #119).
-            # A Trigger Fire (replace > 0) pastes Transform output, not a
-            # dictation, so it must NOT overwrite the Most-recent dictation.
-            if replace == 0:
-                self._most_recent_dictation = normalized
-                self._tray.set_has_last_dictation(True)
         else:
             logger.warning(
                 "Paste skipped: text=%r, clipboard=%s, keystroke=%s, foreground=%s",
