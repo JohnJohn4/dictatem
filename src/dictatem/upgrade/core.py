@@ -19,6 +19,10 @@ from __future__ import annotations
 import enum
 import json
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # The GitHub repository the release check and install one-liner target.
 GITHUB_REPO = "JohnJohn4/dictatem"
@@ -136,6 +140,64 @@ def decide_upgrade(current_version: str, latest_tag: str | None) -> UpgradeDecis
         kind=UpgradeKind.UP_TO_DATE,
         message=f"Dictatem is up to date ({_display_version(current_version)}).",
     )
+
+
+@dataclass(frozen=True)
+class UpgradeConfirmation:
+    """The "Install update?" question asked before anything is downloaded."""
+
+    title: str
+    text: str
+
+
+def upgrade_confirmation(current_version: str, tag: str) -> UpgradeConfirmation:
+    """Build the explicit consent prompt shown before the installer runs (#200).
+
+    The upgrade downloads and executes ``install.ps1`` from GitHub, so the user
+    must say yes first and be told exactly what will happen (pre-launch review
+    S-1). The text names both versions and the source.
+    """
+    return UpgradeConfirmation(
+        title=f"Install Dictatem {tag}?",
+        text=(
+            f"Dictatem {tag} is available (you have "
+            f"{_display_version(current_version)}).\n\n"
+            f"Installing downloads and runs the {tag} installer (install.ps1) "
+            f"from github.com/{GITHUB_REPO} in a new PowerShell window. "
+            "Dictatem will close and restart when it finishes."
+        ),
+    )
+
+
+def upgrade_declined_message(tag: str) -> str:
+    """Notification after the user says no — nothing was downloaded or run."""
+    return f"Update to {tag} skipped. Use Check for Updates… any time to install it."
+
+
+def apply_upgrade_decision(
+    decision: UpgradeDecision,
+    *,
+    current_version: str,
+    confirm: Callable[[UpgradeConfirmation], bool],
+    notify: Callable[[str, str], None],
+    start_upgrade: Callable[[str], None],
+) -> bool:
+    """Act on a finished check; return ``True`` iff the upgrade was started.
+
+    The installer is only ever launched after *confirm* returns ``True`` — an
+    available update never runs on its own (#200). Declining notifies and
+    returns ``False`` so the caller re-enables checking. Side effects arrive as
+    injected callables, so the whole flow is unit-tested without Qt.
+    """
+    if decision.kind is UpgradeKind.UPGRADE_AVAILABLE and decision.tag:
+        if not confirm(upgrade_confirmation(current_version, decision.tag)):
+            notify("Dictatem", upgrade_declined_message(decision.tag))
+            return False
+        notify("Dictatem", decision.message)
+        start_upgrade(decision.tag)
+        return True
+    notify("Dictatem", decision.message)
+    return False
 
 
 def install_one_liner_url(tag: str) -> str:
