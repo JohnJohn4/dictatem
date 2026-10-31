@@ -55,6 +55,8 @@ DICTATEM_MODULES = [
     "dictatem.overlay.state",
     "dictatem.tray",
     "dictatem.tray.state",
+    "dictatem.upgrade.core",
+    "dictatem.upgrade.prompt",
     "dictatem.autostart.launch_agent",
     "dictatem.macapp",
     "dictatem.macapp.bundle",

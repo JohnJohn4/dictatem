@@ -64,6 +64,13 @@ class UpdateChecker(QObject):
     balloon, *confirm* asks the user before anything is installed (default: the
     :func:`ask_install_confirmation` dialog), *start_upgrade* launches the
     installer for a tag.
+
+    *on_update_available*, when given, takes over the "newer release found"
+    outcome entirely (#193): no "Updating… will restart" balloon and no
+    *start_upgrade* — it receives the decision instead (macOS shows a
+    copy-the-command prompt; nothing auto-executes). The checker then goes idle
+    again, since no installer is about to replace this daemon. ``None`` keeps
+    the original in-app behaviour (Windows).
     """
 
     _finished = Signal(object)  # carries an UpgradeDecision across threads
@@ -76,6 +83,7 @@ class UpdateChecker(QObject):
         notify: Callable[[str, str], None],
         start_upgrade: Callable[[str], None],
         confirm: Callable[[UpgradeConfirmation], bool] = ask_install_confirmation,
+        on_update_available: Callable[[UpgradeDecision], None] | None = None,
     ) -> None:
         super().__init__()
         self._current_version = current_version
@@ -83,6 +91,7 @@ class UpdateChecker(QObject):
         self._notify = notify
         self._start_upgrade = start_upgrade
         self._confirm = confirm
+        self._on_update_available = on_update_available
         self._busy = False
         self._finished.connect(self._on_finished)
 
@@ -105,9 +114,19 @@ class UpdateChecker(QObject):
         self._finished.emit(decision)
 
     def _on_finished(self, decision: UpgradeDecision) -> None:
-        # Back on the Qt main thread (queued signal): safe to touch the tray and
-        # show the confirm dialog. Still busy while the dialog is up, so a second
-        # tray click can't stack a second prompt.
+        # Back on the Qt main thread (queued signal): safe to touch the tray.
+        if (
+            self._on_update_available is not None
+            and decision.kind is UpgradeKind.UPGRADE_AVAILABLE
+            and decision.tag
+        ):
+            # The handler blocks in a modal dialog; stay busy until it returns
+            # so a second click can't stack a second prompt behind it.
+            try:
+                self._on_update_available(decision)
+            finally:
+                self._busy = False
+            return
         try:
             started = apply_upgrade_decision(
                 decision,
