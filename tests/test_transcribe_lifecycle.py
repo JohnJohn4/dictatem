@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import threading
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pytest
 
@@ -10,6 +13,9 @@ from dictatem.transcribe.lifecycle import TranscribeLifecycle
 from dictatem.types import EmptyResult
 from tests.fakes import FakeTranscriberBackend
 from tests.support import wait_until
+
+if TYPE_CHECKING:
+    from dictatem.types import TranscriptionResult
 
 AUDIO = np.zeros(16000, dtype=np.float32)
 
@@ -431,3 +437,141 @@ class TestImportSafety:
             assert violations == [], (
                 f"lifecycle.py pulled in forbidden module(s): {violations}"
             )
+
+
+class TestUnloadDuringTranscription:
+    """F-7 / #236: an unload never pulls the model out from under an in-flight
+    transcription; it is deferred and runs once the transcription finishes."""
+
+    @staticmethod
+    def _start_blocked_transcription(
+        lc: TranscribeLifecycle, backend: FakeTranscriberBackend
+    ) -> tuple[threading.Thread, list[TranscriptionResult]]:
+        results: list[TranscriptionResult] = []
+        backend.block_transcribe()
+        thread = threading.Thread(
+            target=lambda: results.append(lc.transcribe(AUDIO)), daemon=True
+        )
+        thread.start()
+        wait_until(lambda: len(backend.transcribe_calls) >= 1)
+        return thread, results
+
+    def test_explicit_unload_is_deferred_until_transcription_completes(
+        self,
+    ) -> None:
+        backend = FakeTranscriberBackend(result="hello world")
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        thread, results = self._start_blocked_transcription(lc, backend)
+
+        lc.unload()  # the tray "Unload model" click, mid-transcription
+        assert backend.is_loaded is True
+        assert backend.unload_count == 0
+
+        backend.release_transcribe()
+        thread.join(timeout=2.0)
+
+        assert results == ["hello world"]
+        assert backend.is_loaded is False
+        assert backend.unload_count == 1
+
+    def test_idle_unload_is_deferred_until_after_transcription(self) -> None:
+        now = [0.0]
+        backend = FakeTranscriberBackend(result="hello world")
+        lc = TranscribeLifecycle(
+            backend=backend, clock=lambda: now[0], idle_timeout_s=1800.0
+        )
+        lc.transcribe(AUDIO)  # model resident, last activity at t=0
+        thread, results = self._start_blocked_transcription(lc, backend)
+
+        now[0] = 30 * 60  # the idle deadline arrives mid-transcription
+        lc.check_idle()
+        assert backend.is_loaded is True
+
+        backend.release_transcribe()
+        thread.join(timeout=2.0)
+        assert results == ["hello world"]
+        assert backend.is_loaded is True  # idle restarts from the end
+
+        now[0] = 60 * 60  # a full idle period after the transcription ended
+        lc.check_idle()
+        assert backend.is_loaded is False
+        assert backend.unload_count == 1
+
+    def test_long_transcription_does_not_unload_immediately_on_return(
+        self,
+    ) -> None:
+        now = [0.0]
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(
+            backend=backend, clock=lambda: now[0], idle_timeout_s=1800.0
+        )
+        thread, _ = self._start_blocked_transcription(lc, backend)
+
+        now[0] = 45 * 60  # transcribing well past the idle threshold
+        backend.release_transcribe()
+        thread.join(timeout=2.0)
+
+        lc.check_idle()
+        assert backend.is_loaded is True
+
+        now[0] = 45 * 60 + 29 * 60
+        lc.check_idle()
+        assert backend.is_loaded is True
+
+        now[0] = 45 * 60 + 30 * 60
+        lc.check_idle()
+        assert backend.is_loaded is False
+
+    def test_load_after_pending_unload_keeps_model_resident(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        thread, _ = self._start_blocked_transcription(lc, backend)
+
+        lc.unload()  # deferred
+        lc.preload()  # a new load (e.g. load-on-arm) supersedes it
+
+        backend.release_transcribe()
+        thread.join(timeout=2.0)
+
+        assert backend.is_loaded is True
+        assert backend.unload_count == 0
+
+    def test_deferred_unload_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        thread, _ = self._start_blocked_transcription(lc, backend)
+
+        with caplog.at_level("INFO", logger="dictatem.transcribe.lifecycle"):
+            lc.unload()
+        assert any("deferred" in r.getMessage().lower() for r in caplog.records)
+
+        backend.release_transcribe()
+        thread.join(timeout=2.0)
+
+    def test_failed_transcription_still_runs_deferred_unload(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        backend.queue_error(GPUOutOfMemoryError())
+        backend.queue_error(GPUOutOfMemoryError())
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                lc.transcribe(AUDIO)
+            except TranscriptionFailedError as exc:
+                errors.append(exc)
+
+        backend.block_transcribe()
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        wait_until(lambda: len(backend.transcribe_calls) >= 1)
+
+        lc.unload()
+        backend.release_transcribe()
+        thread.join(timeout=2.0)
+
+        assert len(errors) == 1
+        assert backend.is_loaded is False
+        assert backend.unload_count == 1
