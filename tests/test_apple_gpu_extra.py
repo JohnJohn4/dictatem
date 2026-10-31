@@ -167,3 +167,12 @@ class TestCiResolvesTheExtra:
         ci = _CI_YML.read_text(encoding="utf-8")
         assert re.search(r"uv sync\b[^\n]*--extra apple-gpu", ci)
         assert "macos-latest" in ci
+
+    def test_windows_leg_checks_apple_gpu_adds_nothing(self) -> None:
+        # `uv sync --check` exits non-zero if syncing the extra would change the
+        # runtime environment, so the Windows leg proves the MLX set is gated off.
+        ci = _CI_YML.read_text(encoding="utf-8")
+        assert re.search(
+            r"if: runner\.os == 'Windows'\s*\n\s*run: uv sync --extra apple-gpu --check\b",
+            ci,
+        )
