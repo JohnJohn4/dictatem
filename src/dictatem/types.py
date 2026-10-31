@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -11,6 +12,11 @@ import numpy.typing as npt
 SAMPLE_RATE: int = 16000
 
 AudioChunk = npt.NDArray[np.float32]
+
+# The transcription devices Dictatem can run (``[model].device``): faster-whisper
+# on ``cuda`` / ``cpu``, the Apple-GPU MLX engine on ``mlx`` (spec #224). A
+# config may still hold any string; backend selection maps unknown ones to CPU.
+Device = Literal["cuda", "cpu", "mlx"]
 
 
 @dataclass(frozen=True)

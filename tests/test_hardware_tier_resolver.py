@@ -378,6 +378,12 @@ class TestFallbackNotice:
         assert "cuda" not in notice.body.lower()
         assert "config is unchanged" in notice.body
 
+    def test_device_label_names_the_missing_hardware_for_the_log(self) -> None:
+        assert fallback_notice("cuda-absent").device_label == "GPU"
+        assert fallback_notice("mlx-unavailable").device_label == "Apple GPU"
+        assert fallback_notice("mlx-load-failed").device_label == "Apple GPU"
+        assert fallback_notice("mlx-transcribe-failed").device_label == "Apple GPU"
+
 
 def _mlx_mac(unified_memory_mb: int | None) -> HardwareProfile:
     return HardwareProfile(
