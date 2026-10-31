@@ -96,6 +96,14 @@ _TIER_TABLE: dict[str, ResolvedHardware] = {
 }
 
 
+def tier_row(tier: str) -> ResolvedHardware:
+    """Return the resolved row for the named *tier* (e.g. ``"CPU"``).
+
+    Raises ``KeyError`` for an unknown tier name.
+    """
+    return _TIER_TABLE[tier]
+
+
 class HardwareTierResolver:
     """Map a HardwareProfile to a ResolvedHardware (pure, no I/O)."""
 
