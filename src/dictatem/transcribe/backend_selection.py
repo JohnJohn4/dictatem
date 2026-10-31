@@ -1,8 +1,9 @@
 """Transcription backend selection — which engine runs the effective device (#229).
 
 :func:`select_backend` is pure: it maps the session's effective
-``[model].device`` to a backend kind. ``cuda`` and ``cpu`` run faster-whisper
-(the behaviour before #224); ``mlx`` is reserved for the Apple-GPU MLX backend
+:class:`~dictatem.types.ResolvedHardware` (its ``[model].device``) to a
+backend kind. ``cuda`` and ``cpu`` run faster-whisper (the behaviour before
+#224); ``mlx`` is reserved for the Apple-GPU MLX backend
 (spec #224). Any other device string resolves to the whole ``CPU`` tier row with
 a warning, because faster-whisper would raise at model load on a device it
 doesn't know (the same reasoning as the ADR-0009 cuda guard).
@@ -16,24 +17,28 @@ importing this module never pulls in faster-whisper (or MLX).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, get_args
 
 from dictatem.hardware.resolver import tier_row
+from dictatem.types import Device
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from dictatem.hardware.resolver import RuntimeFallbackReason
     from dictatem.interfaces import TranscriberBackend
+    from dictatem.types import ResolvedHardware
 
 BackendKind = Literal["faster-whisper", "mlx"]
 
-# Device value -> engine. Adding an engine is one row here plus one branch in
-# build_transcriber.
-_DEVICE_TO_KIND: dict[str, BackendKind] = {
+# Device value -> engine. Adding an engine is one row here (plus its value in
+# ``Device``) and one branch in build_transcriber.
+_DEVICE_TO_KIND: dict[Device, BackendKind] = {
     "cuda": "faster-whisper",
     "cpu": "faster-whisper",
     "mlx": "mlx",
 }
+_KNOWN_DEVICES: tuple[Device, ...] = get_args(Device)
 
 
 @dataclass(frozen=True)
@@ -46,27 +51,43 @@ class BackendSelection:
 
     kind: BackendKind
     model: str
-    device: str
+    device: Device
     compute_type: str
     warning: str | None = None
 
 
-def select_backend(*, device: str, model: str, compute_type: str) -> BackendSelection:
-    """Pick the backend for the effective *device* / *model* / *compute_type*. Pure."""
-    kind = _DEVICE_TO_KIND.get(device)
-    if kind is not None:
-        return BackendSelection(
-            kind=kind, model=model, device=device, compute_type=compute_type
-        )
-    cpu = tier_row("CPU")
+def _known_device(device: str) -> Device | None:
+    """*device* as a known :data:`~dictatem.types.Device`, else ``None``. Pure."""
+    for known in _KNOWN_DEVICES:
+        if device == known:
+            return known
+    return None
+
+
+def _selection_for(row: ResolvedHardware, *, warning: str | None = None) -> BackendSelection:
+    """The selection running *row* as-is. *row*'s device must be known."""
+    device = _known_device(row.device)
+    if device is None:
+        raise ValueError(f"tier row {row.tier!r} has an unknown device {row.device!r}")
     return BackendSelection(
-        kind=_DEVICE_TO_KIND[cpu.device],
-        model=cpu.model,
-        device=cpu.device,
-        compute_type=cpu.compute_type,
+        kind=_DEVICE_TO_KIND[device],
+        model=row.model,
+        device=device,
+        compute_type=row.compute_type,
+        warning=warning,
+    )
+
+
+def select_backend(resolved: ResolvedHardware) -> BackendSelection:
+    """Pick the backend for the session's *resolved* transcription values. Pure."""
+    if _known_device(resolved.device) is not None:
+        return _selection_for(resolved)
+    cpu = tier_row("CPU")
+    return _selection_for(
+        cpu,
         warning=(
-            f"Unknown [model].device {device!r} (expected one of "
-            f"{', '.join(sorted(_DEVICE_TO_KIND))}) — running on CPU "
+            f"Unknown [model].device {resolved.device!r} (expected one of "
+            f"{', '.join(sorted(_KNOWN_DEVICES))}) — running on CPU "
             f"({cpu.model}/{cpu.device}/{cpu.compute_type}) for this session. "
             "The config file is unchanged."
         ),
@@ -79,13 +100,7 @@ def cpu_fallback_selection() -> BackendSelection:
     The whole ``Apple-Silicon`` CPU row on faster-whisper, the same row the
     startup reconcile picks for an unusable ``mlx`` pin on Apple Silicon.
     """
-    row = tier_row("Apple-Silicon")
-    return BackendSelection(
-        kind=_DEVICE_TO_KIND[row.device],
-        model=row.model,
-        device=row.device,
-        compute_type=row.compute_type,
-    )
+    return _selection_for(tier_row("Apple-Silicon"))
 
 
 def build_transcriber(
@@ -94,7 +109,7 @@ def build_transcriber(
     language: str | None,
     vad_filter: bool,
     vocabulary: list[str],
-    on_fallback: Callable[[], None] | None = None,
+    on_fallback: Callable[[RuntimeFallbackReason], None] | None = None,
 ) -> TranscriberBackend:
     """Construct the (unloaded) backend for *selection*.
 

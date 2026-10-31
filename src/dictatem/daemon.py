@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
     from dictatem.audio.buffer import AudioBuffer
     from dictatem.config import Config
+    from dictatem.hardware.resolver import RuntimeFallbackReason
     from dictatem.hotkey.classifier import (
         HookDecision,
         HotkeyClassifier,
@@ -1300,15 +1301,16 @@ class DaemonCore:
         except Exception:
             logger.error("Error starting first-run model fetch", exc_info=True)
 
-    def on_transcriber_fallback(self) -> None:
+    def on_transcriber_fallback(self, reason: RuntimeFallbackReason) -> None:
         """The MLX engine failed and the session switched to CPU (#232).
 
         Thread-safe: called by the fallback composite from whichever thread hit
-        the failure. Queues the one "Running on CPU" notification for the tick.
+        the failure. *reason* says whether MLX failed to load or failed while
+        transcribing. Queues the one "Running on CPU" notification for the tick.
         """
         from dictatem.hardware.resolver import fallback_notice
 
-        notice = fallback_notice("mlx-load-failed")
+        notice = fallback_notice(reason)
         self._pending_notifications.put((notice.title, notice.body))
 
     def check_notifications(self) -> None:
@@ -1952,25 +1954,18 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         compute_type=config.model.compute_type,
         profile=probe.probe(),
     )
-    effective = reconciliation.resolved
     fallback_reason = reconciliation.fallback_reason
-    # Transcription hardware only. We deliberately do NOT apply
-    # effective.transform_model: the Transform/Ollama model is independent of
+    # Transcription hardware only. select_backend reads only the model, device
+    # and compute_type: we deliberately do NOT apply the resolved
+    # transform_model, because the Transform/Ollama model is independent of
     # CUDA and reconcile carries the CPU tier's tag in the fallback case purely
     # as a side effect of returning the whole row (see ADR-0009).
     # Pick the transcription engine for the effective device (#229): cuda/cpu
     # run faster-whisper, mlx is the Apple-GPU engine (#224), and an unknown
     # device string warns and runs the CPU row for this session.
-    selection = select_backend(
-        device=effective.device,
-        model=effective.model,
-        compute_type=effective.compute_type,
-    )
+    selection = select_backend(reconciliation.resolved)
     if selection.warning is not None:
         logger.warning("%s", selection.warning)
-    effective_model = selection.model
-    effective_device = selection.device
-    effective_compute_type = selection.compute_type
 
     logging.getLogger().setLevel(
         getattr(logging, config.logging.level.upper(), logging.INFO)
@@ -2052,7 +2047,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         language=config.model.language,
         vad_filter=config.model.vad_filter,
         vocabulary=vocabulary,
-        on_fallback=lambda: daemon.on_transcriber_fallback(),
+        on_fallback=lambda reason: daemon.on_transcriber_fallback(reason),
     )
     lifecycle = TranscribeLifecycle(
         backend=backend,
@@ -2500,14 +2495,14 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             "Configured %s (device=%s, model=%s, compute_type=%s) is "
             "unavailable on this machine (%s) — running on CPU "
             "(%s/%s/%s) for this session. The config file is unchanged.",
-            "Apple GPU" if fallback_reason == "mlx-unavailable" else "GPU",
+            notice.device_label,
             config.model.device,
             config.model.name,
             config.model.compute_type,
             fallback_reason,
-            effective_model,
-            effective_device,
-            effective_compute_type,
+            selection.model,
+            selection.device,
+            selection.compute_type,
         )
         QTimer.singleShot(
             2000, lambda: tray.show_notification(notice.title, notice.body)

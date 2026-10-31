@@ -613,7 +613,7 @@ class TestMlxSessionFallback:
         composite = FallbackTranscriber(
             primary=primary,
             fallback_factory=lambda: fallback,
-            on_fallback=lambda: holder[0].on_transcriber_fallback(),
+            on_fallback=lambda reason: holder[0].on_transcriber_fallback(reason),
         )
         core = DaemonCore(
             state_machine=sm,
@@ -652,3 +652,44 @@ class TestMlxSessionFallback:
         assert len(fallback_notices) == 1
         assert "config is unchanged" in fallback_notices[0][1]
         assert tray.notifications == fallback_notices  # no failure notification
+        assert "failed to load" in fallback_notices[0][1]
+
+    def test_an_mlx_transcribe_failure_notice_says_it_failed_while_transcribing(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+    ) -> None:
+        primary = FakeTranscriberBackend(result="from the gpu")
+        primary.queue_error(RuntimeError("[metal] command buffer failed"))
+        fallback = FakeTranscriberBackend(result="hello from the cpu")
+        holder: list[DaemonCore] = []
+        composite = FallbackTranscriber(
+            primary=primary,
+            fallback_factory=lambda: fallback,
+            on_fallback=lambda reason: holder[0].on_transcriber_fallback(reason),
+        )
+        core = DaemonCore(
+            state_machine=sm,
+            audio_capture=audio,
+            lifecycle=TranscribeLifecycle(backend=composite, clock=lambda: 0.0),
+            overlay=overlay,
+            tray=tray,
+            clipboard=clipboard,
+            keystroke=keystroke,
+            foreground=foreground,
+        )
+        holder.append(core)
+
+        _do_ptt_cycle(core)
+
+        assert keystroke.paste_count == 1
+        fallback_notices = [n for n in tray.notifications if n[0] == "Running on CPU"]
+        assert len(fallback_notices) == 1
+        body = fallback_notices[0][1]
+        assert "while transcribing" in body
+        assert "failed to load" not in body

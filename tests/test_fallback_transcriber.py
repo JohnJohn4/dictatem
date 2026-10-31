@@ -56,11 +56,11 @@ class _CountingFactory:
 
 
 def test_callback_fires_exactly_once_across_the_session() -> None:
-    calls: list[None] = []
+    calls: list[str] = []
     composite = FallbackTranscriber(
         primary=_failing_primary(),
         fallback_factory=_CountingFactory(),
-        on_fallback=lambda: calls.append(None),
+        on_fallback=calls.append,
     )
 
     for _ in range(3):
@@ -68,7 +68,7 @@ def test_callback_fires_exactly_once_across_the_session() -> None:
         composite.transcribe(AUDIO)
         composite.unload_model()
 
-    assert len(calls) == 1
+    assert calls == ["mlx-load-failed"]
 
 
 def test_primary_is_never_retried_after_falling_back() -> None:
@@ -92,9 +92,9 @@ def test_primary_is_never_retried_after_falling_back() -> None:
 def test_fallback_factory_is_not_invoked_on_the_happy_path() -> None:
     primary = FakeTranscriberBackend(result="from mlx")
     factory = _CountingFactory()
-    calls: list[None] = []
+    calls: list[str] = []
     composite = FallbackTranscriber(
-        primary=primary, fallback_factory=factory, on_fallback=lambda: calls.append(None)
+        primary=primary, fallback_factory=factory, on_fallback=calls.append
     )
 
     composite.download_to_disk()
@@ -143,16 +143,16 @@ def test_a_transcribe_time_failure_reruns_the_same_audio_on_the_fallback() -> No
     primary = FakeTranscriberBackend(result="from mlx")
     primary.queue_error(RuntimeError("[metal] command buffer failed"))
     factory = _CountingFactory()
-    calls: list[None] = []
+    calls: list[str] = []
     composite = FallbackTranscriber(
-        primary=primary, fallback_factory=factory, on_fallback=lambda: calls.append(None)
+        primary=primary, fallback_factory=factory, on_fallback=calls.append
     )
     composite.load_model()
 
     assert composite.transcribe(AUDIO) == "from cpu"
     assert factory.built[0].transcribe_calls[0] is AUDIO
     assert primary.is_loaded is False  # the failed engine's memory is released
-    assert len(calls) == 1
+    assert calls == ["mlx-transcribe-failed"]
 
 
 def test_a_failing_fallback_raises_the_fallback_error() -> None:
@@ -181,7 +181,7 @@ def test_a_failing_fallback_surfaces_as_todays_transcription_failure_via_lifecyc
 
 
 def test_a_raising_callback_does_not_lose_the_dictation() -> None:
-    def boom() -> None:
+    def boom(_reason: str) -> None:
         raise RuntimeError("tray gone")
 
     composite = FallbackTranscriber(
@@ -216,3 +216,46 @@ def test_the_cause_is_logged_once_as_a_warning(caplog: pytest.LogCaptureFixture)
     warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1
     assert "Metal device not found" in warnings[0].getMessage()
+
+
+class _RaisingFactory:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self) -> FakeTranscriberBackend:
+        self.calls += 1
+        raise ImportError("faster_whisper missing")
+
+
+def test_a_raising_factory_latches_and_never_retries_the_primary() -> None:
+    primary = _failing_primary()
+    factory = _RaisingFactory()
+    reasons: list[str] = []
+    composite = FallbackTranscriber(
+        primary=primary, fallback_factory=factory, on_fallback=reasons.append
+    )
+
+    with pytest.raises(ImportError, match="faster_whisper missing"):
+        composite.load_model()
+    with pytest.raises(ImportError, match="faster_whisper missing"):
+        composite.load_model()
+    with pytest.raises(ImportError, match="faster_whisper missing"):
+        composite.transcribe(AUDIO)
+
+    assert primary.load_count == 1
+    assert primary.transcribe_calls == []
+    assert composite.fell_back is True
+    assert composite.is_loaded is False
+    assert reasons == ["mlx-load-failed"]
+
+
+def test_a_raising_factory_surfaces_as_todays_transcription_failure_via_lifecycle() -> None:
+    lifecycle = TranscribeLifecycle(
+        backend=FallbackTranscriber(
+            primary=_failing_primary(), fallback_factory=_RaisingFactory()
+        ),
+        clock=lambda: 0.0,
+    )
+
+    with pytest.raises(ImportError):
+        lifecycle.transcribe(AUDIO)

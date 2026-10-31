@@ -57,9 +57,22 @@ UNIFIED_MEMORY_HIGH_MB = 12 * 1024  # >= this -> Apple-GPU, else Apple-GPU-low
 # `gemma4:e2b` is deliberately NOT "corrected" to a standard gemma3 tag.
 _TRANSFORM_MODEL = "gemma4:e2b"
 
+# The auto-selectable Hardware Tiers (the rows of the table above). A Literal,
+# so a misspelt tier name is a type error rather than a runtime KeyError.
+TierName = Literal[
+    "GPU-high",
+    "GPU-mid",
+    "GPU-low",
+    "GPU-unknown",
+    "Apple-GPU",
+    "Apple-GPU-low",
+    "Apple-Silicon",
+    "CPU",
+]
+
 # Resolved settings keyed by tier name. The resolver's only job is to pick a
 # key; this keeps the GPU-mid and GPU-unknown rows identical-by-construction.
-_TIER_TABLE: dict[str, ResolvedHardware] = {
+_TIER_TABLE: dict[TierName, ResolvedHardware] = {
     "GPU-high": ResolvedHardware(
         tier="GPU-high",
         model="large-v3-turbo",
@@ -122,9 +135,10 @@ _TIER_TABLE: dict[str, ResolvedHardware] = {
 # Why a session fell back (#231): the configured device's hardware is absent.
 # Machine-readable so the notification can name the cause.
 FallbackReason = Literal["cuda-absent", "mlx-unavailable"]
-# Why a running session switched engines (#232): the MLX engine failed to load
-# or transcribe. Not a reconcile outcome, so it is kept out of FallbackReason.
-RuntimeFallbackReason = Literal["mlx-load-failed"]
+# Why a running session switched engines (#232): the MLX engine failed to load,
+# or failed while transcribing. Not a reconcile outcome, so it is kept out of
+# FallbackReason.
+RuntimeFallbackReason = Literal["mlx-load-failed", "mlx-transcribe-failed"]
 
 
 @dataclass(frozen=True)
@@ -144,41 +158,67 @@ class Reconciliation:
 
 @dataclass(frozen=True)
 class FallbackNotice:
-    """Title and body of the one tray notification for a session fallback."""
+    """Everything the daemon says about one session fallback to CPU.
+
+    ``title`` / ``body`` are the one tray notification; ``device_label`` names
+    the configured hardware that went missing, for the log line.
+    """
 
     title: str
     body: str
+    device_label: str
 
 
-_FALLBACK_BODIES: dict[FallbackReason | RuntimeFallbackReason, str] = {
-    "cuda-absent": (
-        "Configured GPU (cuda) isn't available — running on CPU this session. "
-        "Your config is unchanged; restore the GPU to use it again."
+# Reason -> notice. A new reason is one entry here.
+_FALLBACK_NOTICES: dict[FallbackReason | RuntimeFallbackReason, FallbackNotice] = {
+    "cuda-absent": FallbackNotice(
+        title="Running on CPU",
+        body=(
+            "Configured GPU (cuda) isn't available — running on CPU this "
+            "session. Your config is unchanged; restore the GPU to use it again."
+        ),
+        device_label="GPU",
     ),
-    "mlx-unavailable": (
-        "The Apple GPU engine (device = \"mlx\") isn't usable on this machine — "
-        "running on CPU this session. Your config is unchanged; it needs an "
-        "Apple-Silicon Mac on macOS 14+ with the apple-gpu engine installed "
-        "(re-run the installer), or set [model].device back to \"cpu\"."
+    "mlx-unavailable": FallbackNotice(
+        title="Running on CPU",
+        body=(
+            "The Apple GPU engine (device = \"mlx\") isn't usable on this "
+            "machine — running on CPU this session. Your config is unchanged; "
+            "it needs an Apple-Silicon Mac on macOS 14+ with the apple-gpu "
+            "engine installed (re-run the installer), or set [model].device "
+            "back to \"cpu\"."
+        ),
+        device_label="Apple GPU",
     ),
-    "mlx-load-failed": (
-        "The Apple GPU engine (MLX) failed to load — your dictation and the "
-        "rest of this session run on CPU. Your config is unchanged; the next "
-        "launch tries the GPU again. See the log for the cause."
+    "mlx-load-failed": FallbackNotice(
+        title="Running on CPU",
+        body=(
+            "The Apple GPU engine (MLX) failed to load — your dictation and the "
+            "rest of this session run on CPU. Your config is unchanged; the next "
+            "launch tries the GPU again. See the log for the cause."
+        ),
+        device_label="Apple GPU",
+    ),
+    "mlx-transcribe-failed": FallbackNotice(
+        title="Running on CPU",
+        body=(
+            "The Apple GPU engine (MLX) failed while transcribing — this "
+            "dictation was re-run on CPU, and the rest of this session runs "
+            "there too. Your config is unchanged; the next launch tries the GPU "
+            "again. See the log for the cause."
+        ),
+        device_label="Apple GPU",
     ),
 }
 
 
 def fallback_notice(reason: FallbackReason | RuntimeFallbackReason) -> FallbackNotice:
-    """The tray notification naming why this session fell back to CPU. Pure."""
-    return FallbackNotice(title="Running on CPU", body=_FALLBACK_BODIES[reason])
+    """The notice naming why this session fell back to CPU. Pure."""
+    return _FALLBACK_NOTICES[reason]
 
 
-def tier_row(tier: str) -> ResolvedHardware:
-    """Return the resolved row for the named *tier* (e.g. ``"CPU"``).
-
-    Raises ``KeyError`` for an unknown tier name.
-    """
+def tier_row(tier: TierName) -> ResolvedHardware:
+    """Return the resolved row for the named *tier* (e.g. ``"CPU"``)."""
     return _TIER_TABLE[tier]
 
 
@@ -241,7 +281,7 @@ class HardwareTierResolver:
         )
 
     @staticmethod
-    def _classify(profile: HardwareProfile) -> str:
+    def _classify(profile: HardwareProfile) -> TierName:
         """Return the tier name for *profile*. Pure, total over all profiles."""
         if not profile.cuda_available:
             if profile.mlx_available:

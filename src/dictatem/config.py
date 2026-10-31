@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from dictatem.interfaces import HardwareProbe
+    from dictatem.types import HardwareProfile
 
 logger = logging.getLogger(__name__)
 
@@ -219,6 +220,17 @@ def _warn_if_transform_not_local(transform: TransformConfig) -> None:
         )
 
 
+def _detected_as_mac(profile: HardwareProfile) -> bool:
+    """Whether the first-run log should describe *profile* as a Mac.
+
+    A Mac (Apple Silicon, or unified memory known) with no CUDA: its tier is
+    decided by MLX and unified memory, not CUDA and VRAM (#233).
+    """
+    return not profile.cuda_available and (
+        profile.apple_silicon or profile.unified_memory_mb is not None
+    )
+
+
 def _bake_first_run_config(probe: HardwareProbe) -> Config:
     """Probe the machine once, resolve the tier, and bake concrete values.
 
@@ -230,21 +242,19 @@ def _bake_first_run_config(probe: HardwareProbe) -> Config:
     profile = probe.probe()
     resolved = HardwareTierResolver().resolve(profile)
 
-    if profile.cuda_available or not (
-        profile.apple_silicon or profile.unified_memory_mb is not None
-    ):
-        vram = (
-            "unknown VRAM" if profile.total_vram_mb is None else f"{profile.total_vram_mb} MB"
-        )
-        detected = ("CUDA" if profile.cuda_available else "no CUDA", vram)
-    else:
-        # A Mac: name MLX and unified memory, which decide the Apple tiers.
+    if _detected_as_mac(profile):
+        # Name MLX and unified memory, which decide the Apple tiers.
         memory = (
             "unknown unified memory"
             if profile.unified_memory_mb is None
             else f"{profile.unified_memory_mb} MB unified memory"
         )
         detected = ("MLX usable" if profile.mlx_available else "no MLX", memory)
+    else:
+        vram = (
+            "unknown VRAM" if profile.total_vram_mb is None else f"{profile.total_vram_mb} MB"
+        )
+        detected = ("CUDA" if profile.cuda_available else "no CUDA", vram)
     logger.info(
         "Detected %s, %s -> tier %s: %s/%s/%s, transform %s",
         *detected,

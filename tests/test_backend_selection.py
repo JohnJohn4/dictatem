@@ -14,11 +14,23 @@ from dictatem.transcribe.backend_selection import (
 from dictatem.transcribe.fallback import FallbackTranscriber
 from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
 from dictatem.transcribe.mlx_models import mlx_recognition_hint
+from dictatem.types import ResolvedHardware
+
+
+def _resolved(device: str, model: str, compute_type: str) -> ResolvedHardware:
+    """A pinned ("configured") reconcile result, as the daemon passes it."""
+    return ResolvedHardware(
+        tier="configured",
+        model=model,
+        device=device,
+        compute_type=compute_type,
+        transform_model="",
+    )
 
 
 class TestSelectBackend:
     def test_cuda_selects_faster_whisper_unchanged(self) -> None:
-        sel = select_backend(device="cuda", model="large-v3-turbo", compute_type="float16")
+        sel = select_backend(_resolved("cuda", "large-v3-turbo", "float16"))
         assert sel == BackendSelection(
             kind="faster-whisper",
             model="large-v3-turbo",
@@ -28,7 +40,7 @@ class TestSelectBackend:
         )
 
     def test_cpu_selects_faster_whisper_unchanged(self) -> None:
-        sel = select_backend(device="cpu", model="small", compute_type="int8")
+        sel = select_backend(_resolved("cpu", "small", "int8"))
         assert sel == BackendSelection(
             kind="faster-whisper",
             model="small",
@@ -38,7 +50,7 @@ class TestSelectBackend:
         )
 
     def test_mlx_is_reserved_for_the_mlx_backend(self) -> None:
-        sel = select_backend(device="mlx", model="large-v3-turbo", compute_type="float16")
+        sel = select_backend(_resolved("mlx", "large-v3-turbo", "float16"))
         assert sel == BackendSelection(
             kind="mlx",
             model="large-v3-turbo",
@@ -48,7 +60,7 @@ class TestSelectBackend:
         )
 
     def test_unknown_device_warns_and_resolves_to_the_cpu_row(self) -> None:
-        sel = select_backend(device="metal", model="large-v3-turbo", compute_type="float16")
+        sel = select_backend(_resolved("metal", "large-v3-turbo", "float16"))
         assert sel.kind == "faster-whisper"
         # The whole CPU row (base/cpu/int8), not just the device: a GPU
         # compute_type would not run on CPU either (ADR-0009).
@@ -65,7 +77,7 @@ class TestBuildTranscriber:
         self,
     ) -> None:
         for device in ("cuda", "cpu"):
-            sel = select_backend(device=device, model="small", compute_type="int8")
+            sel = select_backend(_resolved(device, "small", "int8"))
             backend = self._build(sel)
             assert isinstance(backend, FasterWhisperBackend)
             assert isinstance(backend, TranscriberBackend)
@@ -78,7 +90,7 @@ class TestBuildTranscriber:
         # lazily on the backend's worker thread at load time (#231). The MLX
         # backend is wrapped in the CPU session fallback (#232).
         before = set(sys.modules)
-        sel = select_backend(device="mlx", model="large-v3-turbo", compute_type="float16")
+        sel = select_backend(_resolved("mlx", "large-v3-turbo", "float16"))
         backend = self._build(sel)
         assert isinstance(backend, FallbackTranscriber)
         assert backend.fell_back is False
@@ -89,13 +101,13 @@ class TestBuildTranscriber:
 
     def test_cuda_and_cpu_are_never_wrapped_in_the_fallback_composite(self) -> None:
         for device in ("cuda", "cpu"):
-            sel = select_backend(device=device, model="small", compute_type="int8")
+            sel = select_backend(_resolved(device, "small", "int8"))
             backend = build_transcriber(
                 sel,
                 language=None,
                 vad_filter=True,
                 vocabulary=[],
-                on_fallback=lambda: None,
+                on_fallback=lambda _reason: None,
             )
             assert not isinstance(backend, FallbackTranscriber)
 
