@@ -53,6 +53,10 @@ class FakeOverlayRenderer:
         self.state = "held"
         self.calls.append(("show_held",))
 
+    def show_say_again(self) -> None:
+        self.state = "say_again"
+        self.calls.append(("show_say_again",))
+
     def hide(self) -> None:
         self.visible = False
         self.state = "hidden"

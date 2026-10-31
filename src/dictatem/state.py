@@ -29,6 +29,8 @@ class Event(enum.Enum):
     MAX_DURATION = "max_duration"
     TRANSCRIPTION_DONE = "transcription_done"
     EMPTY_RESULT = "empty_result"
+    # Close to a Trigger Word but not sure: paste nothing, say again (#248).
+    BORDERLINE = "borderline"
 
 
 class Command(enum.Enum):
@@ -37,6 +39,7 @@ class Command(enum.Enum):
     CANCEL = "cancel"
     PASTE = "paste"
     FLASH_ERROR = "flash_error"
+    FLASH_SAY_AGAIN = "flash_say_again"
     START_TAP_TIMER = "start_tap_timer"
     CANCEL_TAP_TIMER = "cancel_tap_timer"
     # The hotkey was pressed while working: show "did my press register?"
@@ -124,6 +127,10 @@ class StateMachine:
         self._state = State.IDLE
         return [Command.FLASH_ERROR]
 
+    def _transcribing_borderline(self, _now_ms: int) -> list[Command]:
+        self._state = State.IDLE
+        return [Command.FLASH_SAY_AGAIN]
+
     def _transcribing_key_down(self, _now_ms: int) -> list[Command]:
         # Stay put: the press is acknowledged, never acted on. A Trigger Fire
         # Transform also runs in TRANSCRIBING, so this covers both (#240).
@@ -152,5 +159,6 @@ _HANDLERS: dict[tuple[State, Event], _Handler] = {
     (State.TRANSCRIBING, Event.TRANSCRIPTION_DONE): StateMachine._transcribing_done,
     (State.TRANSCRIBING, Event.ESC): StateMachine._cancel_to_idle,
     (State.TRANSCRIBING, Event.EMPTY_RESULT): StateMachine._transcribing_empty,
+    (State.TRANSCRIBING, Event.BORDERLINE): StateMachine._transcribing_borderline,
     (State.TRANSCRIBING, Event.KEY_DOWN): StateMachine._transcribing_key_down,
 }
