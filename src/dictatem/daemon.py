@@ -70,6 +70,7 @@ if TYPE_CHECKING:
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
     from dictatem.transcribe.replacements import Replacement
     from dictatem.transform.lifecycle import TransformLifecycle
+    from dictatem.types import AudioChunk, SegmentConfidence, TranscriptionResult
     from dictatem.upgrade.core import UpgradeDecision
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,49 @@ def _target_name(target: TriggerTarget) -> str:
     if isinstance(target, BuiltinAction):
         return target.name
     return target.alias
+
+
+def _format_confidence(confidence: SegmentConfidence | None) -> str:
+    """Segment confidence for a diagnostic log line — numbers only, never text."""
+    if confidence is None:
+        return "confidence=unknown"
+    return (
+        f"avg_logprob={confidence.avg_logprob:.2f} "
+        f"no_speech_prob={confidence.no_speech_prob:.2f}"
+    )
+
+
+@dataclass(frozen=True)
+class _FirstPassDone:
+    """A first-pass transcription result, with the audio kept for a confirm pass."""
+
+    result: TranscriptionResult
+    audio_duration_s: float
+    audio: AudioChunk
+
+
+@dataclass(frozen=True)
+class _ConfirmPassDone:
+    """The confirm pass's re-listen of a Borderline (#249).
+
+    *first_pass* is the Borderline utterance as first heard: its post-VAD
+    speech duration is the honest measure of how long the user spoke.
+    """
+
+    borderline: Borderline
+    first_pass: Utterance
+    result: TranscriptionResult
+
+
+@dataclass(frozen=True)
+class _ConfirmPassFailed:
+    """The confirm pass raised an error that is not surfaced to the user.
+
+    Model-load and GPU-out-of-memory failures are surfaced exactly like the
+    first pass's instead; anything else just asks the user to say it again.
+    """
+
+    error_name: str
 
 
 def _add_rotating_log_file() -> logging.handlers.TimedRotatingFileHandler | None:
@@ -735,10 +779,10 @@ class DaemonCore:
         if self._latency_monitor is not None:
             self._latency_monitor.begin()
 
-        def _worker(captured_audio: object) -> None:
+        def _worker(captured_audio: AudioChunk) -> None:
             q = self._transcription_queue
             try:
-                result = self._lifecycle.transcribe(captured_audio)  # type: ignore[arg-type]
+                result = self._lifecycle.transcribe(captured_audio)
             except TranscriptionFailedError:
                 q.put((epoch, "transcription_failed", None))
             except ModelLoadError as exc:
@@ -748,7 +792,9 @@ class DaemonCore:
             else:
                 # The audio rides along so a Borderline can be re-listened to
                 # by the confirm pass (#249).
-                q.put((epoch, "ok", (result, audio_duration_s, captured_audio)))
+                q.put(
+                    (epoch, "ok", _FirstPassDone(result, audio_duration_s, captured_audio))
+                )
 
         t = threading.Thread(
             target=_worker, args=(audio,), daemon=True, name="transcribe-worker"
@@ -803,10 +849,15 @@ class DaemonCore:
                     "An unexpected error occurred during transcription; check log",
                 )
                 self._recover_to_idle()
-            elif kind in ("confirm_ok", "confirm_failed"):
-                self._finish_confirm_pass(kind, data, now_ms=now_ms)
+            elif isinstance(data, (_ConfirmPassDone, _ConfirmPassFailed)):
+                self._finish_confirm_pass(data, now_ms=now_ms)
             else:
-                result, audio_duration_s, audio = data  # type: ignore[misc]
+                assert isinstance(data, _FirstPassDone)
+                result, audio_duration_s, audio = (
+                    data.result,
+                    data.audio_duration_s,
+                    data.audio,
+                )
                 # One-shot "transcriptions are slow" tip (see ADR-0007): close
                 # the latency sample opened in _do_transcribe. The tip itself
                 # is shown in ``finally`` so it never precedes the paste.
@@ -932,18 +983,11 @@ class DaemonCore:
             if transcript.speech_duration_s is not None
             else "unknown"
         )
-        conf = transcript.confidence
-        confidence = (
-            f"avg_logprob={conf.avg_logprob:.2f} "
-            f"no_speech_prob={conf.no_speech_prob:.2f}"
-            if conf is not None
-            else "confidence=unknown"
-        )
         logger.debug(
             "Short utterance: recording=%.2fs speech=%s %s",
             recording_s,
             speech,
-            confidence,
+            _format_confidence(transcript.confidence),
         )
 
     def _route_fire(self, decision: Fire, *, now_ms: int) -> None:
@@ -954,7 +998,7 @@ class DaemonCore:
             self._handle_trigger_fire(decision.target.prompt, now_ms=now_ms)
 
     def _handle_borderline(
-        self, decision: Borderline, utterance: Utterance, audio: object
+        self, decision: Borderline, utterance: Utterance, audio: AudioChunk
     ) -> None:
         """Close to a Trigger Word but not sure: listen once more (#248, #249).
 
@@ -965,17 +1009,11 @@ class DaemonCore:
         cancels it like any in-flight transcription); its result lands in
         :meth:`_finish_confirm_pass`.
         """
-        conf = utterance.confidence
-        confidence = (
-            f"avg_logprob={conf.avg_logprob:.2f} no_speech_prob={conf.no_speech_prob:.2f}"
-            if conf is not None
-            else "confidence=unknown"
-        )
         logger.info(
             "Trigger Word Borderline: candidates=%s band=%s %s",
             ",".join(_target_name(t) for t in decision.candidates),
             decision.band.value,
-            confidence,
+            _format_confidence(utterance.confidence),
         )
         trigger_words = self._trigger_recognizer.trigger_words(
             transforms_armed=self._transforms_armed()
@@ -986,26 +1024,37 @@ class DaemonCore:
         def _worker() -> None:
             q = self._transcription_queue
             try:
-                result = lifecycle.transcribe_command(audio, trigger_words)  # type: ignore[arg-type]
+                result = lifecycle.transcribe_command(audio, trigger_words)
+            except TranscriptionFailedError:
+                # GPU out of memory after the lifecycle's retry, and a broken
+                # model below: surfaced exactly like the first pass, never
+                # hidden behind a say-again.
+                q.put((epoch, "transcription_failed", None))
+            except ModelLoadError as exc:
+                q.put((epoch, "model_error", exc))
             except Exception as exc:
-                q.put((epoch, "confirm_failed", type(exc).__name__))
+                q.put((epoch, "confirm_failed", _ConfirmPassFailed(type(exc).__name__)))
             else:
-                q.put((epoch, "confirm_ok", (decision, utterance, result)))
+                q.put((epoch, "confirm_ok", _ConfirmPassDone(decision, utterance, result)))
 
         t = threading.Thread(target=_worker, daemon=True, name="confirm-worker")
         self._transcription_thread = t
         t.start()
 
-    def _finish_confirm_pass(self, kind: str, data: object, *, now_ms: int) -> None:
+    def _finish_confirm_pass(
+        self, outcome: _ConfirmPassDone | _ConfirmPassFailed, *, now_ms: int
+    ) -> None:
         """Judge the confirm pass: fire a confirmed candidate, else say again.
 
         Only the outcome kind and action name are logged, never text (#249).
         """
-        if kind == "confirm_failed":
-            logger.warning("Trigger Word confirm pass failed (%s); say again", data)
+        if isinstance(outcome, _ConfirmPassFailed):
+            logger.warning(
+                "Trigger Word confirm pass failed (%s); say again", outcome.error_name
+            )
             self._say_again(now_ms=now_ms)
             return
-        borderline, first, result = data  # type: ignore[misc]
+        result = outcome.result
         if isinstance(result, EmptyResult):
             logger.info("Trigger Word confirm pass: empty; say again")
             self._say_again(now_ms=now_ms)
@@ -1015,11 +1064,11 @@ class DaemonCore:
         # measure of how long the user spoke.
         utterance = Utterance(
             text=result.text,
-            speech_duration_s=first.speech_duration_s,
+            speech_duration_s=outcome.first_pass.speech_duration_s,
             confidence=result.confidence,
         )
         decision = self._trigger_recognizer.confirm(
-            borderline, utterance, transforms_armed=self._transforms_armed()
+            outcome.borderline, utterance, transforms_armed=self._transforms_armed()
         )
         if isinstance(decision, Fire):
             logger.info(
@@ -2044,7 +2093,7 @@ def log_trigger_lexicon_warnings(
     """Log the load-time Trigger Word collision check (#251, spec #226 Layer 4).
 
     One warning per pair of Aliases of different actions that sound alike,
-    one info note per Alias too short for fuzzy tolerance. Alias and file
+    and one per Alias too short for fuzzy tolerance. Alias and file
     names are configuration, not dictated content (#188). Never raises.
     """
     from dictatem.transform.collisions import PASTE_ACTION_LABEL, check_trigger_lexicon
@@ -2063,7 +2112,7 @@ def log_trigger_lexicon_warnings(
             if e.action == PASTE_ACTION_LABEL
             else f"{prompts_dir / e.action}"
         )
-        logger.info(
+        logger.warning(
             "Trigger Word %r (%s) is too short for fuzzy matching — it only "
             "fires when heard exactly. A longer word is more reliable.",
             e.alias, where,

@@ -9,28 +9,35 @@ Prompt File's Aliases — it reports:
 - **exact-only** Aliases: shorter than :data:`FUZZY_MIN_ALIAS_LEN`, so they
   get no fuzzy tolerance at all.
 
-Two Aliases collide when their phonetic keys are equal (and long enough to
-mean something) or when their similarity is at least
-:data:`COLLISION_SCORE`. That bound is ``2 * FUZZY_STRONG_SCORE - 1``: with
-similarity ≈ 1 - normalised edit distance, two Aliases this close can *both*
-be strong matches for one utterance heard halfway between them (e.g.
-"palace" / "polish"). Aliases of the same action ("summarize" /
-"summarise") never collide.
+Two Aliases collide when they are equal, when their phonetic keys are equal
+(and long enough to mean something), or — only when both are long enough for
+fuzzy tolerance — when their spelling or phonetic-key similarity is at least
+:data:`COLLISION_SCORE`. An exact-only Alias never fires on a near-miss, so it
+is only paired on an identical sound.
+
+:data:`COLLISION_SCORE` (0.60) is a deliberately cautious "within fuzzy range"
+heuristic (spec #226 Layer 4: an Alias that "sits within fuzzy range of"
+another), not a derived guarantee. It sits below the recognizer's weak band
+(:data:`FUZZY_WEAK_SCORE`) so that pairs a mishearing could plausibly carry
+from one to the other are flagged — "palace" / "polish" scores only 0.67 on
+phonetic keys yet is exactly the kind of pair a user should hear about. A
+false warning costs a log line; a missed one costs a wrong Trigger Fire
+(ADR-0028). Aliases of the same action ("summarize" / "summarise") never
+collide.
 
 Alias names are configuration, not dictated content, so the daemon logs them.
 """
 
 from __future__ import annotations
 
-import string
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from dictatem.transform.alias import normalise_alias
 from dictatem.transform.phonetic import phonetic_key, similarity
 from dictatem.transform.recognizer import (
     FUZZY_MIN_ALIAS_LEN,
     FUZZY_MIN_EQUAL_KEY_LEN,
-    FUZZY_STRONG_SCORE,
     PASTE_ACTION,
 )
 
@@ -40,9 +47,9 @@ if TYPE_CHECKING:
 # The action label the report uses for the built-in `paste` action.
 PASTE_ACTION_LABEL = f"built-in `{PASTE_ACTION}`"
 
-# Two Aliases at least this similar can both be strong fuzzy matches for the
-# same utterance (see module docstring).
-COLLISION_SCORE = 2 * FUZZY_STRONG_SCORE - 1
+# Cautious "within fuzzy range" bound for warning about two Aliases (see the
+# module docstring and ADR-0028). A heuristic, deliberately below the weak band.
+COLLISION_SCORE = 0.60
 
 
 @dataclass(frozen=True)
@@ -90,7 +97,7 @@ def check_trigger_lexicon(
     ]
     for action, aliases in sources:
         for raw in aliases:
-            alias = _normalise(raw)
+            alias = normalise_alias(raw)
             if alias and alias not in claimed:
                 claimed.add(alias)
                 lexicon.append((alias, action))
@@ -110,11 +117,14 @@ def check_trigger_lexicon(
 
 
 def _sound_alike(a: str, b: str) -> bool:
+    if a == b:
+        return True
     key_a, key_b = phonetic_key(a), phonetic_key(b)
     if key_a == key_b and len(key_a) >= FUZZY_MIN_EQUAL_KEY_LEN:
         return True
+    # An exact-only Alias gets no fuzzy tolerance, so merely similar spelling
+    # can't make it compete — only an identical sound (above) can.
+    if min(len(a), len(b)) < FUZZY_MIN_ALIAS_LEN:
+        return False
     return max(similarity(a, b), similarity(key_a, key_b)) >= COLLISION_SCORE
 
-
-def _normalise(token: str) -> str:
-    return token.strip().strip(string.punctuation).lower()

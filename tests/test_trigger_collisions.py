@@ -100,6 +100,24 @@ class TestExactOnlyAliases:
         report = check_trigger_lexicon({}, paste_aliases=["glue"])
         assert report.exact_only == [ExactOnlyAlias(alias="glue", action=PASTE_ACTION_LABEL)]
 
+    def test_exact_only_alias_is_not_paired_on_fuzzy_similarity(self) -> None:
+        # "glue" (4 letters) only ever fires when heard exactly, so a merely
+        # similar Alias of another action ("glued") can't compete with it.
+        report = check_trigger_lexicon({"stick.md": ["glued"]}, paste_aliases=["glue"])
+        assert report.collisions == []
+
+    def test_exact_only_alias_still_collides_on_an_equal_phonetic_key(self) -> None:
+        # "past" sounds exactly like "paste" (same key), so it still competes.
+        report = check_trigger_lexicon({"history.md": ["past"]})
+        assert report.collisions == [
+            AliasCollision(
+                alias="paste",
+                action=PASTE_ACTION_LABEL,
+                other_alias="past",
+                other_action="history.md",
+            )
+        ]
+
     def test_builtin_paste_itself_is_long_enough(self) -> None:
         assert check_trigger_lexicon({}).exact_only == []
 
