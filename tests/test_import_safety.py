@@ -41,6 +41,8 @@ DICTATEM_MODULES = [
     "dictatem.logpaths",
     "dictatem.paste",
     "dictatem.paste.pipeline",
+    # Pure pasteboard-type mapping for the macOS clipboard adapter (#244).
+    "dictatem.paste.mac_pasteboard_types",
     "dictatem.state",
     "dictatem.hardware.mac_probe",
     "dictatem.hotkey.classifier",

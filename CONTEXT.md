@@ -256,7 +256,9 @@ formats are captured; handle-based, OS-synthesized, and owner-drawn or
 delayed-render formats are skipped; and the total is held to a fixed size cap.
 Over the cap — or if a format could not be measured in time — only the text is
 kept and a warning names the formats and their sizes, never their content.
-Windows ships full-format snapshots (#243); macOS keeps text only until #244.
+Windows ships full-format snapshots (#243). On macOS (#244) the snapshot is
+every pasteboard item's types — legacy aliases and file promises skipped — and
+restore rebuilds the same items in order; it awaits real-Mac QA.
 
 ## UI surfaces
 
