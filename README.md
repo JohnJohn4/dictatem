@@ -56,10 +56,15 @@ curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.4/install.s
 ```
 
 This generates `~/Applications/Dictatem.app` and starts Dictatem in the menu bar
-via a per-user LaunchAgent (which also auto-starts it at login). On first launch
-Dictatem walks you through the two macOS permission grants it needs —
-**Accessibility** (to paste text) and **Input Monitoring** (to hear the hotkey);
-**Microphone** is prompted on your first dictation. See
+via a per-user LaunchAgent (which also auto-starts it at login). The installer
+waits until the menu-bar icon is up — the first launch can take up to a minute.
+**Setup isn't finished yet at that point:** Dictatem then asks for the two macOS
+permissions it needs — **Accessibility** (to paste text) and **Input Monitoring**
+(to hear the hotkey). Turn each on in System Settings, then choose **Restart**
+from the menu-bar menu; the hotkey and paste work only after that restart.
+**Microphone** is prompted on your first dictation. If a permission is still
+missing later, Dictatem tells you when the hotkey or a paste is blocked rather
+than failing silently. See
 [Troubleshooting](#troubleshooting) below for the macOS details that trip people up.
 
 > **macOS support is new.** The core flow is validated on Apple Silicon, but a
@@ -303,6 +308,7 @@ again before a manual re-install (the tray update re-detects instead).
   `Dictatem.app` (macOS then suppresses the menu-bar icon), and don't run
   `dictatem` from a bare terminal (macOS would attribute the permission grants to
   your *terminal app*, and the hotkey/paste would silently fail). To restart it:
+  choose **Restart** from the menu-bar menu (it relaunches through launchd), or run
   `launchctl kickstart -k gui/$(id -u)/com.dictatem.daemon`.
 - **Grant `python3.12`, not "Dictatem".** Because the daemon runs as the
   uv-managed CPython, the System Settings privacy panes list the entry as

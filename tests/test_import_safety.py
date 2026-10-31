@@ -61,6 +61,9 @@ DICTATEM_MODULES = [
     "dictatem.macapp.plist",
     "dictatem.permissions",
     "dictatem.permissions.mapper",
+    "dictatem.permissions.reprompt",
+    "dictatem.macapp.relaunch",
+    "dictatem.onboarding",
 ]
 
 # A known native adapter per platform. The discovery glob below must surface

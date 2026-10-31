@@ -8,6 +8,12 @@ this returns one ``PermissionGuidance`` per missing permission — the System
 Settings deep link to open and the user-facing copy to show — or the empty
 tuple when nothing is missing, which means "show no dialog".
 
+The copy comes in two contexts (#95): ``STARTUP`` (the launch-time probe —
+"allow Dictatem to …") and ``ON_USE`` (a gated action just failed — "Dictatem
+couldn't paste"), so a re-prompt explains what the user just saw happen
+instead of failing silently. Both are short and action-first: one line naming
+the exact pane and entry to turn on, one line on the one-time relaunch.
+
 This module is PURE: it imports nothing OS-specific, performs no I/O, and
 calls no native API — every branch is trivially unit-testable on any OS.
 The native half (the ``CGPreflight*`` probes in ``permissions.mac_tcc``,
@@ -46,6 +52,16 @@ class MacPermission(Enum):
     """Needed for the global-hotkey event tap (CGEventTap)."""
 
 
+class PromptContext(Enum):
+    """Why the guidance is being shown — selects the headline copy (#95)."""
+
+    STARTUP = auto()
+    """The launch-time probe found the grant missing."""
+
+    ON_USE = auto()
+    """A gated action (hotkey tap, paste) just failed for lack of the grant."""
+
+
 @dataclass(frozen=True)
 class PermissionGuidance:
     """How to guide the user through granting one missing permission."""
@@ -56,63 +72,133 @@ class PermissionGuidance:
     """``x-apple.systempreferences:`` deep link opening the exact Privacy &
     Security pane where the user grants the permission."""
 
+    title: str
+    """Short, action-first headline (the dialog's bold line)."""
+
     message: str
-    """User-facing copy: why Dictatem needs the permission, that the *user*
-    grants it in System Settings, and the required one-time relaunch."""
+    """The steps: which pane, which entry to turn on (the *user* grants it in
+    System Settings), and the one-time relaunch."""
+
+
+# The System Settings entry name when the TCC identity can't be determined.
+GENERIC_TCC_ENTRY = "Python"
+
+
+def tcc_entry_name(major: int, minor: int) -> str:
+    """The name the Privacy & Security panes list Dictatem under.
+
+    Until a signed bundle gives Dictatem its own identity (#91), TCC attributes
+    the grant to the uv-managed interpreter the daemon runs as, which the panes
+    show as ``python<major>.<minor>`` (e.g. ``python3.12``) — not "Dictatem"
+    (ADR-0014 amendment). Naming the exact row saves the user hunting for a
+    "Dictatem" entry that isn't there. Drop this when #91 lands.
+    """
+    return f"python{major}.{minor}"
 
 
 _RELAUNCH = (
-    "After you turn it on, quit and relaunch Dictatem once — macOS applies "
-    "the permission on the next launch."
+    "Then choose Restart from the Dictatem menu-bar menu — the change takes "
+    "effect once Dictatem relaunches."
 )
 
-# Until a signed bundle gives Dictatem its own identity (#91), the running
-# process is the Python interpreter, so the System Settings entry is named
-# "Python" (e.g. "python3.12"), not "Dictatem". Say so, or the user hunts for a
-# "Dictatem" row that isn't there. Drop this note when #91 lands.
-_LISTED_AS_PYTHON = ' (it appears in the list as "Python", not "Dictatem")'
+# Tray hotkey-hint text while the event tap is down for lack of Input
+# Monitoring (#95): the hint row is where the user looks when the hotkey "does
+# nothing", so it says why instead of advertising a chord that can't fire.
+HOTKEY_OFF_HINT = "Hotkey off — allow Input Monitoring"
 
-_GUIDANCE: dict[MacPermission, PermissionGuidance] = {
-    MacPermission.ACCESSIBILITY: PermissionGuidance(
-        permission=MacPermission.ACCESSIBILITY,
+
+@dataclass(frozen=True)
+class _Copy:
+    settings_url: str
+    pane: str
+    startup_title: str
+    on_use_title: str
+    on_use_consequence: str
+
+
+_COPY: dict[MacPermission, _Copy] = {
+    MacPermission.ACCESSIBILITY: _Copy(
         settings_url=(
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
         ),
-        message=(
-            "Dictatem needs the Accessibility permission to type and paste "
-            "dictated text. macOS only lets you grant it in System Settings: "
-            "open Privacy & Security > Accessibility and turn on Dictatem"
-            + _LISTED_AS_PYTHON
-            + ". "
-            + _RELAUNCH
+        pane="Accessibility",
+        startup_title="Allow Dictatem to paste your text",
+        on_use_title="Dictatem couldn't paste — allow Accessibility",
+        on_use_consequence=(
+            "Your text isn't lost: choose Copy last dictation from the menu-bar menu."
         ),
     ),
-    MacPermission.INPUT_MONITORING: PermissionGuidance(
-        permission=MacPermission.INPUT_MONITORING,
+    MacPermission.INPUT_MONITORING: _Copy(
         settings_url=(
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
         ),
-        message=(
-            "Dictatem needs the Input Monitoring permission to hear its "
-            "global dictation hotkey. macOS only lets you grant it in System "
-            "Settings: open Privacy & Security > Input Monitoring and turn "
-            "on Dictatem" + _LISTED_AS_PYTHON + ". " + _RELAUNCH
+        pane="Input Monitoring",
+        startup_title="Allow Dictatem to hear its hotkey",
+        on_use_title="Dictatem's hotkey isn't working — allow Input Monitoring",
+        on_use_consequence=(
+            "Meanwhile you can still record from the menu-bar menu."
         ),
     ),
 }
 
 
+def _guidance(
+    permission: MacPermission, *, context: PromptContext, listed_as: str
+) -> PermissionGuidance:
+    copy = _COPY[permission]
+    steps = (
+        f"In System Settings › Privacy & Security › {copy.pane}, turn on "
+        f"“{listed_as}” — that entry is Dictatem. {_RELAUNCH}"
+    )
+    if context is PromptContext.ON_USE:
+        return PermissionGuidance(
+            permission=permission,
+            settings_url=copy.settings_url,
+            title=copy.on_use_title,
+            message=f"{steps}\n\n{copy.on_use_consequence}",
+        )
+    return PermissionGuidance(
+        permission=permission,
+        settings_url=copy.settings_url,
+        title=copy.startup_title,
+        message=steps,
+    )
+
+
 def map_missing_permissions(
     missing: AbstractSet[MacPermission],
+    *,
+    context: PromptContext = PromptContext.STARTUP,
+    listed_as: str = GENERIC_TCC_ENTRY,
 ) -> tuple[PermissionGuidance, ...]:
     """Map *missing* onto per-permission guidance, one entry per permission.
 
     ``missing`` is whatever the native probes (the ``CGPreflight*`` pair,
-    tap-creation failure) reported absent. The empty set is the explicit
-    all-granted case and maps to the empty tuple — the caller shows no
-    dialog (blind iteration naturally shows none). Guidance comes back in
-    stable ``MacPermission`` declaration order regardless of the set's
-    iteration order. Always one uniform shape, mirroring
-    ``classify_transform_failure``.
+    tap-creation failure, a blocked paste) reported absent. The empty set is
+    the explicit all-granted case and maps to the empty tuple — the caller
+    shows no dialog (blind iteration naturally shows none). Guidance comes
+    back in stable ``MacPermission`` declaration order regardless of the set's
+    iteration order. *context* picks the startup vs on-use headline;
+    *listed_as* is the System Settings entry name (see :func:`tcc_entry_name`).
     """
-    return tuple(_GUIDANCE[p] for p in MacPermission if p in missing)
+    return tuple(
+        _guidance(p, context=context, listed_as=listed_as)
+        for p in MacPermission
+        if p in missing
+    )
+
+
+def reprompt_notification(
+    permission: MacPermission, *, listed_as: str = GENERIC_TCC_ENTRY
+) -> tuple[str, str]:
+    """``(title, body)`` for the throttled tray note on a repeat failed use (#95).
+
+    Shown instead of the dialog inside its cool-down, so a repeat failure is
+    never silent but never a modal nag either.
+    """
+    copy = _COPY[permission]
+    return (
+        copy.on_use_title,
+        f"{copy.on_use_consequence} To fix: turn on “{listed_as}” in Privacy & "
+        f"Security › {copy.pane}, then choose Restart.",
+    )

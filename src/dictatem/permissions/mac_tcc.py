@@ -45,6 +45,7 @@ from dictatem.permissions.mapper import (
     MacPermission,
     PermissionGuidance,
     map_missing_permissions,
+    tcc_entry_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,4 +70,5 @@ def check_permissions() -> tuple[PermissionGuidance, ...]:
             "Missing macOS permissions: %s",
             ", ".join(sorted(p.name for p in missing)),
         )
-    return map_missing_permissions(missing)
+    listed_as = tcc_entry_name(sys.version_info.major, sys.version_info.minor)
+    return map_missing_permissions(missing, listed_as=listed_as)

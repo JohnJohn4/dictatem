@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import os
 import queue
 import sys
 import threading
@@ -52,7 +53,7 @@ if TYPE_CHECKING:
         TrayRenderer,
     )
     from dictatem.overlay.state import OverlayState
-    from dictatem.permissions.mapper import PermissionGuidance
+    from dictatem.permissions.mapper import MacPermission, PermissionGuidance
     from dictatem.state import StateMachine
     from dictatem.transcribe.latency_monitor import LatencyMonitor
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
@@ -1620,6 +1621,18 @@ class _PlatformAdapters:
     means all granted, show nothing. ``None`` means the platform has no guided
     permission UX (Windows: the mic permission surfaces in-flow when capture
     fails).
+
+    ``bind_permission_reporter`` is the re-prompt-on-use seam (#95): the daemon
+    calls it once, before installing hooks, with a **thread-safe** "this
+    permission just blocked a gated action" callback, which the platform wires
+    into its native adapters (macOS: the event tap's creation failure and the
+    keystroke sender's Accessibility preflight). ``None`` = no such reports.
+
+    ``relaunch`` backs the tray **Restart** item: it spawns whatever restarts
+    the daemon the platform's supported way and returns ``True`` (the daemon
+    then quits so the new instance can take the single-instance lock), or
+    ``False`` when it can't (nothing spawned; the user is told how instead).
+    ``None`` leaves the item unwired (Windows, unchanged).
     """
 
     probe: HardwareProbe
@@ -1635,6 +1648,10 @@ class _PlatformAdapters:
         Callable[[Callable[[Key, KeyAction, int], HookDecision]], object] | None
     )
     check_permissions: Callable[[], tuple[PermissionGuidance, ...]] | None
+    bind_permission_reporter: (
+        Callable[[Callable[[MacPermission], None]], None] | None
+    ) = None
+    relaunch: Callable[[], bool] | None = None
 
 
 def _make_sounddevice_capture(config: Config, buffer: AudioBuffer) -> AudioCapture:
@@ -2108,6 +2125,40 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     _ver = _current_version()
     tray_icon.set_version_label(f"Dictatem v{_ver}" if _ver else "")
 
+    # Tray "Restart" (#95): the permission dialogs send the user here, since a
+    # new grant only applies after a relaunch. The platform adapter spawns the
+    # supported restart (macOS: a detached launchctl kickstart, so the new
+    # daemon is a launchd job and keeps its grants) and this daemon quits to
+    # free the single-instance lock. Unwired where there is no adapter.
+    if adapters.relaunch is not None:
+        relaunch = adapters.relaunch
+
+        def _on_tray_restart() -> None:
+            try:
+                if relaunch():
+                    daemon.on_tray_quit(app.quit)
+                    return
+            except Exception:
+                logger.error("Error restarting Dictatem", exc_info=True)
+            from dictatem.macapp.relaunch import MANUAL_RELAUNCH_HINT
+
+            tray.show_notification("Couldn't restart Dictatem", MANUAL_RELAUNCH_HINT)
+
+        tray_icon.on_restart = _on_tray_restart
+
+    # Ready signal for the installer (#95): once the loop runs and the tray icon
+    # is realized (QtTrayIcon queued its own 0 ms realize first), drop a marker
+    # the macOS install.sh waits on, so it can say "still setting up" through
+    # the cold first launch instead of claiming "done" before the icon exists.
+    from dictatem.onboarding import daemon_ready_marker, write_daemon_ready_marker
+
+    QTimer.singleShot(
+        0,
+        lambda: write_daemon_ready_marker(
+            daemon_ready_marker(Path.home()), pid=os.getpid()
+        ),
+    )
+
     # Usage Guide (ADR-0019): build the read-only help content from live config
     # so the "How to use Dictatem…" item reflects the actual activation chord.
     from dictatem.tray.usage_guide import usage_guide_html
@@ -2124,6 +2175,19 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             dark=True,
         ),
     )
+
+    # Re-prompt-on-use (#95). Native adapters report "permission X just blocked
+    # a gated action" from any thread (the event tap's own thread, the Qt
+    # thread for paste) into this queue; the tick drains it on the Qt thread,
+    # and the pure throttle decides dialog vs tray note vs nothing. Bound
+    # BEFORE the hooks install, so a tap that fails instantly is still caught.
+    from dictatem.permissions.mapper import MacPermission
+    from dictatem.permissions.reprompt import PermissionRepromptThrottle
+
+    permission_reports: queue.SimpleQueue[MacPermission] = queue.SimpleQueue()
+    reprompt_throttle = PermissionRepromptThrottle()
+    if adapters.bind_permission_reporter is not None:
+        adapters.bind_permission_reporter(permission_reports.put)
 
     bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:
@@ -2180,10 +2244,73 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     if is_first_run:
         QTimer.singleShot(2500, daemon.begin_first_run_model_fetch)
 
+    # Reports that arrive before the launch-time permission probe has finished
+    # are held back so the probe's own (startup-worded) dialogs go first and
+    # the throttle can dedupe — the event tap fails within milliseconds of
+    # launch, long before the 2 s deferred probe runs.
+    startup_permission_check_done = adapters.check_permissions is None
+    deferred_permission_reports: list[MacPermission] = []
+
+    def _close_permission_dialog(guidance: PermissionGuidance) -> None:
+        reprompt_throttle.dialog_closed(guidance.permission, time.monotonic())
+
+    def _show_permission_dialogs_now(guidances: list[PermissionGuidance]) -> None:
+        try:
+            from dictatem.permissions.qt_dialog import show_permission_dialogs
+
+            show_permission_dialogs(guidances, on_closed=_close_permission_dialog)
+        except Exception:
+            logger.error("Error showing a permission dialog", exc_info=True)
+
+    def _handle_permission_report(permission: MacPermission) -> None:
+        from dictatem.permissions.mapper import (
+            PromptContext,
+            map_missing_permissions,
+            reprompt_notification,
+            tcc_entry_name,
+        )
+        from dictatem.permissions.reprompt import RepromptAction
+
+        entry = tcc_entry_name(sys.version_info.major, sys.version_info.minor)
+        action = reprompt_throttle.on_use(permission, time.monotonic())
+        if action is RepromptAction.DIALOG:
+            guidances = list(
+                map_missing_permissions(
+                    {permission}, context=PromptContext.ON_USE, listed_as=entry
+                )
+            )
+            # Its own slot, never nested inside the tick that drained it: the
+            # dialog's exec() re-enters the event loop, which keeps ticking.
+            QTimer.singleShot(0, lambda: _show_permission_dialogs_now(guidances))
+        elif action is RepromptAction.NOTIFY:
+            title, body = reprompt_notification(permission, listed_as=entry)
+            tray.show_notification(title, body)
+
+    def _drain_permission_reports() -> None:
+        from dictatem.permissions.mapper import HOTKEY_OFF_HINT
+
+        while True:
+            try:
+                permission = permission_reports.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                logger.info("Permission blocked a gated action: %s", permission.name)
+                if permission is MacPermission.INPUT_MONITORING:
+                    # Where the user looks when the hotkey "does nothing".
+                    tray_icon.set_hotkey_hint(HOTKEY_OFF_HINT)
+                if startup_permission_check_done:
+                    _handle_permission_report(permission)
+                else:
+                    deferred_permission_reports.append(permission)
+            except Exception:
+                logger.error("Error surfacing a permission report", exc_info=True)
+
     def _on_tick() -> None:
         now = int(time.monotonic() * 1000)
         if bridge is not None:
             bridge.tick(now)
+        _drain_permission_reports()
         overlay.update_level(audio_buffer.current_level())
         daemon.check_loading_overlay(now_ms=now)
         daemon.check_model_download()
@@ -2226,17 +2353,32 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         check_permissions = adapters.check_permissions
 
         def _show_permission_guidance() -> None:
+            nonlocal startup_permission_check_done
             permissions_pending = False
             try:
                 guidances = check_permissions()
                 if guidances:
                     permissions_pending = True
-                    from dictatem.permissions.qt_dialog import show_permission_dialogs
-
-                    show_permission_dialogs(guidances)
+                    # Through the re-prompt throttle (#95) so a permission an
+                    # on-use report already surfaced isn't shown twice.
+                    due = reprompt_throttle.on_startup(
+                        {g.permission for g in guidances}, time.monotonic()
+                    )
+                    to_show = [g for g in guidances if g.permission in due]
+                    if to_show:
+                        _show_permission_dialogs_now(to_show)
             except Exception:
                 logger.error("Error in startup permission check", exc_info=True)
             finally:
+                startup_permission_check_done = True
+                for permission in deferred_permission_reports:
+                    try:
+                        _handle_permission_report(permission)
+                    except Exception:
+                        logger.error(
+                            "Error surfacing a permission report", exc_info=True
+                        )
+                deferred_permission_reports.clear()
                 _maybe_auto_open_usage_guide(permissions_pending=permissions_pending)
 
         QTimer.singleShot(2000, _show_permission_guidance)
@@ -2349,15 +2491,34 @@ def _start_macos_daemon() -> None:
     from dictatem.hardware.mac_probe import MacHardwareProbe
     from dictatem.hotkey.mac_hook import CGEventTapHook
     from dictatem.macapp.bundle import default_app_bundle_path
+    from dictatem.macapp.relaunch import spawn_launchd_relaunch
     from dictatem.paste.mac_clipboard import MacClipboardIO
     from dictatem.paste.mac_foreground import MacForegroundTracker
     from dictatem.paste.mac_keystroke import MacKeystrokeSender
     from dictatem.permissions.mac_tcc import check_permissions
+    from dictatem.permissions.mapper import MacPermission
+
+    keystroke = MacKeystrokeSender()
+    # Re-prompt-on-use (#95): the daemon binds its thread-safe reporter before
+    # installing the hook; the holder lets the hook (built later) and the
+    # keystroke sender both report through whatever was bound.
+    reporter: list[Callable[[MacPermission], None]] = []
+
+    def _report(permission: MacPermission) -> None:
+        for report in reporter:
+            report(permission)
+
+    def _bind_permission_reporter(report: Callable[[MacPermission], None]) -> None:
+        reporter[:] = [report]
+        keystroke.on_access_blocked = lambda: _report(MacPermission.ACCESSIBILITY)
 
     def _install_hook(handler: Callable[[Key, KeyAction, int], bool]) -> object:
         # macOS has no menu/Start side-effect to mask (#171 is Windows-only); the
         # CGEventTap hook ignores the handler's bool return and injects nothing.
-        hook = CGEventTapHook(handler)
+        hook = CGEventTapHook(
+            handler,
+            on_tap_failed=lambda: _report(MacPermission.INPUT_MONITORING),
+        )
         hook.install()
         return hook
 
@@ -2405,11 +2566,13 @@ def _start_macos_daemon() -> None:
             make_audio_capture=_make_macaudio_capture,
             autostart_registrar=autostart_registrar,
             clipboard=MacClipboardIO(),
-            keystroke=MacKeystrokeSender(),
+            keystroke=keystroke,
             foreground=MacForegroundTracker(),
             install_keyboard_hook=_install_hook,
             # macOS mouse-trigger hook (CGEventTap otherMouse*) is #121 (S9).
             install_mouse_hook=None,
             check_permissions=check_permissions,
+            bind_permission_reporter=_bind_permission_reporter,
+            relaunch=spawn_launchd_relaunch,
         )
     )
