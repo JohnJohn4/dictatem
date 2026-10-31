@@ -58,6 +58,29 @@ GPU engine on a qualifying Mac, run the one-liner with
 `DICTATEM_NO_APPLE_GPU=1` in front of `sh` (`… | DICTATEM_NO_APPLE_GPU=1 sh`).
 Re-running the installer later adds the engine without touching your config.
 
+**Opting into the Apple GPU.** Existing configs are never changed for you. With
+the GPU engine installed, switch transcription to the Apple GPU by setting these
+three lines under `[model]` in `~/.dictatem/config.toml`, then choose **Restart**
+from the menu-bar menu:
+
+```toml
+[model]
+name = "large-v3-turbo"         # or any Whisper size, or an mlx-community repo id
+device = "mlx"
+compute_type = "float16"
+```
+
+The first dictation fetches the MLX model (about 1.6 GB for `large-v3-turbo`);
+after that it loads from the cache with no network. **To revert**, set
+`device = "cpu"` and `compute_type = "int8"` (and `name = "small"` if you want
+the CPU default back), then Restart. If the GPU engine isn't usable on the
+machine (Intel Mac, macOS 12/13, the engine not installed, or a config copied to
+Windows), Dictatem runs on CPU for that session, shows one notification saying
+why, and leaves your config as it is. **Vocabulary caveat:** the GPU engine has
+no `hotwords` support, so your `vocabulary.md` terms are fed through
+`initial_prompt` instead. They still bias recognition, but more weakly than on
+the CPU engine.
+
 Run in **Terminal**:
 
 ```sh
@@ -138,7 +161,7 @@ live in-app guide), **Check for updates…**, **Show Log**, **Restart**,
 ## Features
 
 - **Global hotkey** — activate from any window; push-to-talk or hands-free toggle.
-- **On-device transcription** — Faster-Whisper, GPU-accelerated on NVIDIA, CPU on macOS.
+- **On-device transcription** — Faster-Whisper, GPU-accelerated on NVIDIA, CPU on macOS, with an opt-in Apple GPU (mlx-whisper) engine on Apple Silicon.
 - **Offline after setup** — the model downloads once on first run; every dictation after that needs no network.
 - **Smart paste** — saves and restores your clipboard **text** and window focus around each paste, and never clutters clipboard history. (Non-text clipboard content — images, copied files — is not preserved yet.)
 - **Trigger Words** — rewrite the last paste in place via a local Ollama model.
@@ -198,7 +221,7 @@ tap_threshold_ms = 200          # below this = toggle tap; above = push-to-talk 
 
 [model]
 name = "large-v3-turbo"         # auto-picked from your hardware on first run
-device = "cuda"                 # cuda or cpu
+device = "cuda"                 # cuda, cpu, or mlx (Apple GPU; see macOS above)
 idle_unload_minutes = 30        # free the model's memory after this much idle time
 
 [behaviour]

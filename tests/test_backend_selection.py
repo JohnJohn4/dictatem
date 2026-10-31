@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import logging
-from typing import TYPE_CHECKING
+import sys
 
 from dictatem.interfaces import TranscriberBackend
 from dictatem.transcribe.backend_selection import (
@@ -12,9 +11,8 @@ from dictatem.transcribe.backend_selection import (
     select_backend,
 )
 from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
-
-if TYPE_CHECKING:
-    import pytest
+from dictatem.transcribe.mlx_backend import MlxBackend
+from dictatem.transcribe.mlx_models import mlx_recognition_hint
 
 
 class TestSelectBackend:
@@ -72,14 +70,28 @@ class TestBuildTranscriber:
             assert isinstance(backend, TranscriberBackend)
             assert backend.is_loaded is False
 
-    def test_mlx_without_an_mlx_engine_degrades_to_cpu_faster_whisper(
-        self, caplog: pytest.LogCaptureFixture
+    def test_mlx_selection_builds_an_unloaded_mlx_backend_without_importing_mlx(
+        self,
     ) -> None:
-        # Until the MLX backend lands (#231) a hand-pinned `mlx` must not crash
-        # the daemon: it runs on CPU faster-whisper and says so once.
+        # Construction is import-safe on any OS: mlx / mlx_whisper are imported
+        # lazily on the backend's worker thread at load time (#231).
+        before = set(sys.modules)
         sel = select_backend(device="mlx", model="large-v3-turbo", compute_type="float16")
-        with caplog.at_level(logging.WARNING):
-            backend = self._build(sel)
-        assert isinstance(backend, FasterWhisperBackend)
+        backend = self._build(sel)
+        assert isinstance(backend, MlxBackend)
+        assert isinstance(backend, TranscriberBackend)
         assert backend.is_loaded is False
-        assert any("mlx" in r.getMessage().lower() for r in caplog.records)
+        new = set(sys.modules) - before
+        assert not [m for m in new if m.split(".")[0] in {"mlx", "mlx_whisper"}]
+
+
+class TestMlxVocabularyHint:
+    def test_vocabulary_is_fed_via_initial_prompt(self) -> None:
+        # mlx-whisper has no `hotwords`, so the pure hint selection must pick
+        # initial_prompt for the MLX path.
+        assert mlx_recognition_hint(["Dictatem", "Ollama"]) == {
+            "initial_prompt": "Dictatem Ollama"
+        }
+
+    def test_empty_vocabulary_leaves_the_call_unchanged(self) -> None:
+        assert mlx_recognition_hint([]) == {}

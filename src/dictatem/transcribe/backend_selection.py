@@ -15,7 +15,6 @@ importing this module never pulls in faster-whisper (or MLX).
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
@@ -23,8 +22,6 @@ from dictatem.hardware.resolver import tier_row
 
 if TYPE_CHECKING:
     from dictatem.interfaces import TranscriberBackend
-
-logger = logging.getLogger(__name__)
 
 BackendKind = Literal["faster-whisper", "mlx"]
 
@@ -83,27 +80,28 @@ def build_transcriber(
 ) -> TranscriberBackend:
     """Construct the (unloaded) backend for *selection*.
 
-    The one place an engine is chosen by kind. Until the MLX backend lands
-    (#231), an ``mlx`` selection degrades to the ``CPU`` row on faster-whisper
-    with a warning, so a hand-pinned ``mlx`` never stops dictation.
+    The one place an engine is chosen by kind. ``mlx`` builds the Apple-GPU
+    :class:`~dictatem.transcribe.mlx_backend.MlxBackend` (#231); constructing
+    it never imports MLX, so a pin that reconcile let through is safe to build
+    on any OS. The runtime fallback composite around it is #232.
     """
+    if selection.kind == "mlx":
+        from dictatem.transcribe.mlx_backend import MlxBackend
+
+        return MlxBackend(
+            model_name=selection.model,
+            compute_type=selection.compute_type,
+            language=language,
+            vad_filter=vad_filter,
+            vocabulary=vocabulary,
+        )
+
     from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
 
-    model, device, compute_type = selection.model, selection.device, selection.compute_type
-    if selection.kind == "mlx":
-        cpu = tier_row("CPU")
-        logger.warning(
-            "[model].device 'mlx' needs the Apple-GPU (MLX) engine, which this "
-            "build doesn't include — running on CPU (%s/%s/%s) for this session.",
-            cpu.model,
-            cpu.device,
-            cpu.compute_type,
-        )
-        model, device, compute_type = cpu.model, cpu.device, cpu.compute_type
     return FasterWhisperBackend(
-        model_name=model,
-        compute_type=compute_type,
-        device=device,
+        model_name=selection.model,
+        compute_type=selection.compute_type,
+        device=selection.device,
         language=language,
         vad_filter=vad_filter,
         vocabulary=vocabulary,

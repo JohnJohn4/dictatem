@@ -27,6 +27,10 @@ class HardwareProfile:
     # An Apple-Silicon Mac (arm64): no CUDA, but its CPU runs a larger Whisper
     # model fast enough for push-to-talk, so it gets its own tier.
     apple_silicon: bool = False
+    # MLX is usable here: Apple Silicon, macOS 14+, and the mlx-whisper engine
+    # installed (spec #224). Safe default False; the Mac probe populates it
+    # (#233). Reconcile uses it to guard a config pinning device "mlx" (#231).
+    mlx_available: bool = False
 
 
 @dataclass(frozen=True)

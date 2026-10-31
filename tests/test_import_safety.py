@@ -29,6 +29,9 @@ FORBIDDEN_MODULES = [
     "sounddevice",
     "faster_whisper",
     "ctranslate2",
+    # The Apple-GPU engine (#231): only MlxBackend's worker imports it, at load.
+    "mlx",
+    "mlx_whisper",
 ]
 
 DICTATEM_MODULES = [
@@ -53,6 +56,9 @@ DICTATEM_MODULES = [
     "dictatem.transcribe",
     "dictatem.transcribe.lifecycle",
     "dictatem.transcribe.backend_selection",
+    "dictatem.transcribe.mlx_models",
+    # Native adapter, but import-safe: mlx is imported lazily at load.
+    "dictatem.transcribe.mlx_backend",
     "dictatem.overlay.state",
     "dictatem.tray",
     "dictatem.tray.state",

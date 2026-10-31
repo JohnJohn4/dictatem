@@ -31,7 +31,8 @@ GPU can pin a larger tag (e.g. ``gemma4:e4b``) in config.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
 from dictatem.types import ResolvedHardware
 
@@ -96,6 +97,53 @@ _TIER_TABLE: dict[str, ResolvedHardware] = {
 }
 
 
+# Why a session fell back (#231): the configured device's hardware is absent.
+# Machine-readable so the notification can name the cause.
+FallbackReason = Literal["cuda-absent", "mlx-unavailable"]
+
+
+@dataclass(frozen=True)
+class Reconciliation:
+    """What :meth:`HardwareTierResolver.reconcile` decided for this session.
+
+    ``fallback_reason`` is ``None`` when the configured values are used as-is.
+    """
+
+    resolved: ResolvedHardware
+    fallback_reason: FallbackReason | None = None
+
+    @property
+    def did_fall_back(self) -> bool:
+        return self.fallback_reason is not None
+
+
+@dataclass(frozen=True)
+class FallbackNotice:
+    """Title and body of the one tray notification for a session fallback."""
+
+    title: str
+    body: str
+
+
+_FALLBACK_BODIES: dict[FallbackReason, str] = {
+    "cuda-absent": (
+        "Configured GPU (cuda) isn't available — running on CPU this session. "
+        "Your config is unchanged; restore the GPU to use it again."
+    ),
+    "mlx-unavailable": (
+        "The Apple GPU engine (device = \"mlx\") isn't usable on this machine — "
+        "running on CPU this session. Your config is unchanged; it needs an "
+        "Apple-Silicon Mac on macOS 14+ with the apple-gpu engine installed "
+        "(re-run the installer), or set [model].device back to \"cpu\"."
+    ),
+}
+
+
+def fallback_notice(reason: FallbackReason) -> FallbackNotice:
+    """The tray notification naming why this session fell back to CPU. Pure."""
+    return FallbackNotice(title="Running on CPU", body=_FALLBACK_BODIES[reason])
+
+
 def tier_row(tier: str) -> ResolvedHardware:
     """Return the resolved row for the named *tier* (e.g. ``"CPU"``).
 
@@ -118,7 +166,7 @@ class HardwareTierResolver:
         model: str,
         compute_type: str,
         profile: HardwareProfile,
-    ) -> tuple[ResolvedHardware, bool]:
+    ) -> Reconciliation:
         """Reconcile a config's pinned transcription values against *profile*.
 
         Guards the absent-GPU crash (see ADR-0009): faster-whisper raises at
@@ -126,12 +174,19 @@ class HardwareTierResolver:
         config pins ``cuda`` but ``profile`` reports no CUDA, fall back to the
         whole CPU tier (``base``/``cpu``/``int8``) for THIS session — flipping
         only the device would leave a cuda compute_type (``float16`` /
-        ``int8_float16``) that also won't run on CPU. Returns
-        ``(resolved, did_fall_back=True)``.
+        ``int8_float16``) that also won't run on CPU. The result carries
+        ``fallback_reason="cuda-absent"``.
+
+        Likewise a config pinning ``mlx`` on a profile without
+        ``mlx_available`` (Intel, macOS < 14, the apple-gpu extra missing, a
+        config copied to Windows) falls back to the whole ``Apple-Silicon`` CPU
+        row on Apple Silicon, or the ``CPU`` row elsewhere, with
+        ``fallback_reason="mlx-unavailable"`` (ADR-0013 amendment).
 
         Otherwise the pinned values are authoritative (ADR-0007): they are
-        returned unchanged as a ``"configured"`` ResolvedHardware with
-        ``did_fall_back=False``. This deliberately does NOT re-tier on VRAM —
+        returned unchanged as a ``"configured"`` ResolvedHardware with no
+        fallback reason. A ``cpu`` config is never upgraded to ``cuda`` or
+        ``mlx``. This deliberately does NOT re-tier on VRAM —
         only the crash is guarded, never a silent downgrade of a present GPU.
         Pure: no I/O, no native imports; the config object/file is never
         mutated.
@@ -141,16 +196,18 @@ class HardwareTierResolver:
         Transform/Ollama model is independent of CUDA (see ADR-0009).
         """
         if device == "cuda" and not profile.cuda_available:
-            return _TIER_TABLE["CPU"], True
-        return (
+            return Reconciliation(_TIER_TABLE["CPU"], "cuda-absent")
+        if device == "mlx" and not profile.mlx_available:
+            row = "Apple-Silicon" if profile.apple_silicon else "CPU"
+            return Reconciliation(_TIER_TABLE[row], "mlx-unavailable")
+        return Reconciliation(
             ResolvedHardware(
                 tier="configured",
                 model=model,
                 device=device,
                 compute_type=compute_type,
                 transform_model="",
-            ),
-            False,
+            )
         )
 
     @staticmethod

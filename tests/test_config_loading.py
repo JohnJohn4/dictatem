@@ -158,6 +158,37 @@ class TestLoadConfigPartialFile:
         assert cfg.overlay.fade_in_ms == 100  # default
 
 
+class TestLoadConfigMlxDevice:
+    """``mlx`` is a valid ``[model].device`` value (Apple-GPU opt-in, #231)."""
+
+    def test_the_three_line_opt_in_loads_as_written_and_the_file_is_unchanged(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "config.toml"
+        original = dedent("""\
+            [model]
+            name = "large-v3-turbo"
+            device = "mlx"
+            compute_type = "float16"
+        """)
+        path.write_text(original)
+        cfg = load_config(path)
+        assert (cfg.model.name, cfg.model.device, cfg.model.compute_type) == (
+            "large-v3-turbo",
+            "mlx",
+            "float16",
+        )
+        # Session fallback never rewrites the user's config (ADR-0009).
+        assert path.read_text() == original
+
+    def test_mlx_survives_a_write_and_reload(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        cfg = Config()
+        cfg.model.device = "mlx"
+        write_config(cfg, path)
+        assert load_config(path).model.device == "mlx"
+
+
 class TestLoadConfigMalformedToml:
     """Loading malformed TOML returns defaults and logs at WARNING."""
 

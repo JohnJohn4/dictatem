@@ -1910,14 +1910,19 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # load. On the absent-GPU case we fall back to the CPU tier FOR THIS SESSION
     # only — the config file is never rewritten, so the user's pinned GPU values
     # return automatically once the hardware does.
-    from dictatem.hardware.resolver import HardwareTierResolver
+    from dictatem.hardware.resolver import HardwareTierResolver, fallback_notice
 
-    effective, did_fall_back = HardwareTierResolver().reconcile(
+    # A config pinning mlx where MLX isn't usable falls back the same way (#231),
+    # to the Apple-Silicon CPU row on Apple Silicon or the CPU row elsewhere;
+    # fallback_reason says which hardware was missing.
+    reconciliation = HardwareTierResolver().reconcile(
         device=config.model.device,
         model=config.model.name,
         compute_type=config.model.compute_type,
         profile=probe.probe(),
     )
+    effective = reconciliation.resolved
+    fallback_reason = reconciliation.fallback_reason
     # Transcription hardware only. We deliberately do NOT apply
     # effective.transform_model: the Transform/Ollama model is independent of
     # CUDA and reconcile carries the CPU tier's tag in the fallback case purely
@@ -2451,26 +2456,23 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # Surface the session CPU fallback once, after the loop is up. A
     # QSystemTrayIcon balloon needs a visible icon and a running event loop, so
     # we defer it with a single-shot timer rather than firing it inline (#39).
-    if did_fall_back:
+    if fallback_reason is not None:
+        notice = fallback_notice(fallback_reason)
         logger.warning(
-            "Configured GPU (device=%s, model=%s, compute_type=%s) is "
-            "unavailable on this machine — running on CPU "
+            "Configured %s (device=%s, model=%s, compute_type=%s) is "
+            "unavailable on this machine (%s) — running on CPU "
             "(%s/%s/%s) for this session. The config file is unchanged.",
+            "Apple GPU" if fallback_reason == "mlx-unavailable" else "GPU",
             config.model.device,
             config.model.name,
             config.model.compute_type,
+            fallback_reason,
             effective_model,
             effective_device,
             effective_compute_type,
         )
         QTimer.singleShot(
-            2000,
-            lambda: tray.show_notification(
-                "Running on CPU",
-                "Configured GPU (cuda) isn't available — running on CPU this "
-                "session. Your config is unchanged; restore the GPU to use it "
-                "again.",
-            ),
+            2000, lambda: tray.show_notification(notice.title, notice.body)
         )
 
     logger.info("Dictatem daemon started")
