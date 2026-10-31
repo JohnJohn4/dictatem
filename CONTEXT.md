@@ -217,6 +217,24 @@ touches the clipboard at all (it types via `SendInput`), so this concerns only
 the regular-dictation path. See
 [ADR-0023](docs/adr/0023-dictation-is-never-lost-clipboard-fallback.md).
 
+### Clipboard Snapshot
+
+The opaque saved copy of the user's clipboard that the regular-dictation paste
+takes before borrowing the clipboard and writes back afterwards (a
+[clutter-proof](#clutter-proof-clipboard-write) restore). It holds every format
+that could be safely captured, as raw bytes in the clipboard's own order —
+images, file copies, HTML, rich text and plain text — and nothing between `save`
+and `restore` (the paste pipeline, the deferred restore) looks inside it. An
+empty clipboard gives an empty snapshot, which restores to an empty clipboard.
+
+Which formats a snapshot takes is the **Clipboard Capture Plan**, a pure
+decision over the formats on offer (id, name, kind, size): only memory-backed
+formats are captured; handle-based, OS-synthesized, and owner-drawn or
+delayed-render formats are skipped; and the total is held to a fixed size cap.
+Over the cap — or if a format could not be measured in time — only the text is
+kept and a warning names the formats and their sizes, never their content.
+Windows ships full-format snapshots (#243); macOS keeps text only until #244.
+
 ## UI surfaces
 
 ### Overlay Pill

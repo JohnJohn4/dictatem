@@ -24,6 +24,8 @@ if sys.platform != "darwin":
 
 from AppKit import NSPasteboard, NSPasteboardTypeString
 
+from dictatem.paste.clipboard_snapshot import ClipboardSnapshot
+
 
 class MacClipboardIO:
     def open(self) -> None:
@@ -36,13 +38,18 @@ class MacClipboardIO:
         # No handshake to release — see open().
         pass
 
-    def save(self) -> str | None:
+    def save(self) -> ClipboardSnapshot:
+        # Text-only for now: the full-format pasteboard snapshot is #244. The
+        # snapshot is opaque to the pipeline, so this keeps today's behaviour
+        # (non-text content is not preserved on macOS yet; see README).
         pasteboard = NSPasteboard.generalPasteboard()
         value = pasteboard.stringForType_(NSPasteboardTypeString)
-        # None when the pasteboard holds no plain-text representation
-        # (empty, or image/file-only content) — mirroring the Win32
-        # adapter's contract that None means nothing-to-restore.
-        return str(value) if value else None
+        if not value:
+            # Empty, or image/file-only content: nothing to restore.
+            return ClipboardSnapshot.empty()
+        return ClipboardSnapshot(
+            entries=((str(NSPasteboardTypeString), str(value).encode("utf-8")),)
+        )
 
     def set_text(self, text: str) -> None:
         pasteboard = NSPasteboard.generalPasteboard()
@@ -69,13 +76,15 @@ class MacClipboardIO:
                 "NSPasteboard setString:forType: failed; last dictation not copied"
             )
 
-    def restore(self, saved: str | None) -> None:
+    def restore(self, saved: ClipboardSnapshot) -> None:
         pasteboard = NSPasteboard.generalPasteboard()
-        # Always clear: restoring None leaves the clipboard empty, matching
+        # Always clear: an empty snapshot leaves the clipboard empty, matching
         # the Win32 adapter (the user's clipboard was empty before we used it).
         pasteboard.clearContents()
-        if saved is not None:
-            ok = pasteboard.setString_forType_(saved, NSPasteboardTypeString)
+        for _type, data in saved.entries:
+            ok = pasteboard.setString_forType_(
+                data.decode("utf-8"), NSPasteboardTypeString
+            )
             if not ok:
                 logger.warning(
                     "NSPasteboard setString:forType: failed; user's clipboard not restored"
