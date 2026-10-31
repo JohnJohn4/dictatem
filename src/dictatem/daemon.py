@@ -24,6 +24,7 @@ from dictatem.exceptions import (
 # per-event/tick path, so it is imported eagerly rather than lazily under the
 # bridge lock (the heavier classifier types stay TYPE_CHECKING-only below).
 from dictatem.hotkey.classifier import HotkeyEvent
+from dictatem.paste.backspace_units import count_backspace_units
 from dictatem.session import DictationSession
 from dictatem.state import Command, Event, State
 from dictatem.transform.detector import PASTE_ACTION, match_builtin_action
@@ -35,13 +36,14 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from dictatem.audio.buffer import AudioBuffer
-    from dictatem.config import Config
+    from dictatem.config import Config, ConfigLoadReport
     from dictatem.hotkey.classifier import (
         HookDecision,
         HotkeyClassifier,
         Key,
         KeyAction,
     )
+    from dictatem.hotkey.hook_failure import HookFailure
     from dictatem.interfaces import (
         AudioCapture,
         AutostartRegistrar,
@@ -388,6 +390,7 @@ class DaemonCore:
         autostart_registrar: AutostartRegistrar | None = None,
         persist_autostart: Callable[[bool], None] | None = None,
         replacements: list[Replacement] | None = None,
+        config_read_only: bool = False,
     ) -> None:
         self._sm = state_machine
         self._audio_capture = audio_capture
@@ -469,6 +472,22 @@ class DaemonCore:
         # --- Autostart toggle (see ADR-0012) ---
         self._autostart_registrar = autostart_registrar
         self._persist_autostart = persist_autostart
+        # --- Config Load Report (#238) ---
+        # The config file could not be read or parsed: nothing may write it
+        # this session, so the autostart toggle applies for the session only.
+        self._config_read_only = config_read_only
+
+    def notify_config_problems(self, report: ConfigLoadReport) -> None:
+        """Show the one startup notification for a non-empty Config Load Report.
+
+        A valid config shows nothing; the per-problem detail is already logged
+        by ``load_config_with_report``.
+        """
+        from dictatem.config import config_problem_notification
+
+        note = config_problem_notification(report)
+        if note is not None:
+            self._tray.show_notification(*note)
 
     def on_tray_set_autostart(self, enabled: bool) -> None:
         """Apply the tray "Start at login" toggle (see ADR-0012).
@@ -477,6 +496,10 @@ class DaemonCore:
         persists the new ``config.startup.autostart`` flag so it survives a
         restart — keeping the flag the single source of truth. Wrapped so a
         registry hiccup can never crash the daemon.
+
+        While the config is read-only for the session (unreadable file, #238)
+        the toggle applies for this session only: the config writer is never
+        called, and a notification says why the change wasn't saved.
         """
         try:
             if self._autostart_registrar is not None:
@@ -485,7 +508,18 @@ class DaemonCore:
                 apply_autostart(
                     desired=enabled, registrar=self._autostart_registrar
                 )
-            if self._persist_autostart is not None:
+            if self._config_read_only:
+                logger.warning(
+                    "Start at login set to %s for this session only — "
+                    "config.toml is unreadable, so it was not written",
+                    enabled,
+                )
+                self._tray.show_notification(
+                    "Start at login: this session only",
+                    "Your config.toml couldn't be read, so this change applies "
+                    "for this session only and the file was not changed.",
+                )
+            elif self._persist_autostart is not None:
                 self._persist_autostart(enabled)
         except Exception:
             logger.error("Error applying autostart toggle", exc_info=True)
@@ -1118,7 +1152,7 @@ class DaemonCore:
             # Words against text that actually landed (invariant kept by #190).
             self._last_paste = LastPaste(
                 text=normalized,
-                char_count=len(normalized),
+                char_count=count_backspace_units(normalized),
                 target_id=current_target_id,
                 pasted_at_ms=now_ms,
             )
@@ -1662,6 +1696,13 @@ class _PlatformAdapters:
     ) = None
     relaunch: Callable[[], bool] | None = None
     relaunch_failed_hint: str | None = None
+    # Hotkey-hook install failure seam (#245): like bind_permission_reporter,
+    # bound once before the hooks install with a thread-safe "this hook was
+    # refused" callback (Windows: SetWindowsHookExW returned NULL). None = the
+    # platform reports hook failures some other way (macOS: Input Monitoring).
+    bind_hook_failure_reporter: (
+        Callable[[Callable[[HookFailure], None]], None] | None
+    ) = None
 
 
 def _make_sounddevice_capture(config: Config, buffer: AudioBuffer) -> AudioCapture:
@@ -1820,7 +1861,11 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 
     from dictatem.audio.buffer import AudioBuffer
     from dictatem.autostart.reconcile import apply_autostart
-    from dictatem.config import default_config_path, load_config, write_config
+    from dictatem.config import (
+        default_config_path,
+        load_config_with_report,
+        write_config,
+    )
     from dictatem.hotkey.classifier import HotkeyClassifier
     from dictatem.onboarding import (
         mark_usage_guide_seen,
@@ -1907,7 +1952,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # (ADR-0025 / #162), the run the installer triggers as its last step.
     is_first_run = not config_path.exists()
     probe = adapters.probe
-    config = load_config(config_path, probe=probe)
+    config, config_report = load_config_with_report(config_path, probe=probe)
 
     # Reconcile the config's pinned transcription hardware against the machine
     # we're actually on (#39 / ADR-0009). A config baked on a GPU box and then
@@ -2097,7 +2142,13 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         autostart_registrar=autostart_registrar,
         persist_autostart=_persist_autostart,
         replacements=replacements,
+        config_read_only=config_report.read_only,
     )
+    # One startup notification for a non-empty Config Load Report (#238),
+    # deferred like the CPU-fallback one below: a balloon needs a visible icon
+    # and a running event loop.
+    if not config_report.is_empty:
+        QTimer.singleShot(1000, lambda: daemon.notify_config_problems(config_report))
 
     tray_icon.on_start = daemon.on_tray_start_recording
     tray_icon.on_stop = daemon.on_tray_stop_recording
@@ -2245,6 +2296,17 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     if adapters.bind_permission_reporter is not None:
         adapters.bind_permission_reporter(permission_reports.put)
 
+    # Hotkey-hook install failures (#245): the hook thread reports, the tick
+    # drains into one tray notification + hint. Bound BEFORE the hooks install.
+    from dictatem.hotkey.hook_failure import HookFailureReporter
+
+    hook_failures = HookFailureReporter(
+        show_notification=tray.show_notification,
+        set_hotkey_hint=tray_icon.set_hotkey_hint,
+    )
+    if adapters.bind_hook_failure_reporter is not None:
+        adapters.bind_hook_failure_reporter(hook_failures.report)
+
     bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:
         classifier = HotkeyClassifier(
@@ -2367,6 +2429,10 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         if bridge is not None:
             bridge.tick(now)
         _drain_permission_reports()
+        try:
+            hook_failures.drain()
+        except Exception:
+            logger.error("Error surfacing a hotkey hook failure", exc_info=True)
         overlay.update_level(audio_buffer.current_level())
         daemon.check_loading_overlay(now_ms=now)
         daemon.check_model_download()
@@ -2488,6 +2554,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 def _start_windows_daemon() -> None:
     """Build the Windows adapter set (lazy imports) and run the daemon."""
     from dictatem.hardware.nvidia_probe import NvidiaHardwareProbe
+    from dictatem.hotkey.hook_failure import HookFailure, HookKind
     from dictatem.hotkey.wh_keyboard_ll import WHKeyboardLLHook
     from dictatem.hotkey.wh_mouse_ll import WHMouseLLHook
     from dictatem.paste.win32_clipboard import Win32ClipboardIO
@@ -2500,9 +2567,25 @@ def _start_windows_daemon() -> None:
     # stops a lone Win/Alt chord release activating the menu bar / Start menu.
     keystroke = Win32KeystrokeSender()
 
+    # Hook install failures (#245): the daemon binds its thread-safe reporter
+    # before installing the hooks; the holder lets both hooks report through it.
+    hook_failure_reporter: list[Callable[[HookFailure], None]] = []
+
+    def _bind_hook_failure_reporter(report: Callable[[HookFailure], None]) -> None:
+        hook_failure_reporter[:] = [report]
+
+    def _hook_failed(kind: HookKind) -> Callable[[int], None]:
+        def _on_install_failed(error_code: int) -> None:
+            for report in hook_failure_reporter:
+                report(HookFailure(kind, error_code))
+
+        return _on_install_failed
+
     def _install_hook(handler: Callable[[Key, KeyAction, int], bool]) -> object:
         hook = WHKeyboardLLHook(
-            handler, inject_mask=keystroke.send_modifier_release_mask
+            handler,
+            inject_mask=keystroke.send_modifier_release_mask,
+            on_install_failed=_hook_failed(HookKind.KEYBOARD),
         )
         hook.install()
         return hook
@@ -2510,7 +2593,7 @@ def _start_windows_daemon() -> None:
     def _install_mouse_hook(
         handler: Callable[[Key, KeyAction, int], HookDecision],
     ) -> object:
-        hook = WHMouseLLHook(handler)
+        hook = WHMouseLLHook(handler, on_install_failed=_hook_failed(HookKind.MOUSE))
         hook.install()
         return hook
 
@@ -2526,6 +2609,7 @@ def _start_windows_daemon() -> None:
             install_mouse_hook=_install_mouse_hook,
             check_permissions=None,
             relaunch=spawn_restart,
+            bind_hook_failure_reporter=_bind_hook_failure_reporter,
         )
     )
 

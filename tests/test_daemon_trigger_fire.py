@@ -304,6 +304,58 @@ class TestTriggerFireHappyPath:
         assert transform_backend.calls[-1][1] == SUMMARIZE_PROMPT
 
 
+# ── Backspace Units: emoji and accents (#242 / review F-5) ───────────
+
+THUMBS_MEDIUM = chr(0x1F44D) + chr(0x1F3FD)  # thumbs up + skin tone: 1 unit
+FAMILY = chr(0x200D).join(map(chr, (0x1F468, 0x1F469, 0x1F467, 0x1F466)))  # 1 unit
+FLAG_JP = chr(0x1F1EF) + chr(0x1F1F5)  # 1 unit
+DECOMPOSED_CAFE = "cafe" + chr(0x301)  # NFC -> 4 units
+
+
+class TestTriggerFireBackspaceUnits:
+    """Trigger Fire sends one Backspace per user-perceived character of the
+    Last Paste, not per code point, so it never eats text typed before it."""
+
+    def test_emoji_and_accent_dictation_is_erased_by_unit_count(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+    ) -> None:
+        # Pasted: "ok <thumbs> cafe <flag> " = 3 + 1 + 1 + 4 + 1 + 1 + 1 = 12.
+        backend._result = f"ok {THUMBS_MEDIUM} {DECOMPOSED_CAFE} {FLAG_JP}"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = "summarize"
+        transform_backend.queue_result("short")
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+        assert keystroke.backspace_counts == [12]
+
+    def test_transform_output_with_emoji_becomes_correctly_counted_last_paste(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        # The LLM "polishes" in an emoji: typed output "done <family> " = 7 units.
+        backend._result = "summarize"
+        transform_backend.queue_result(f"done {FAMILY}")
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+        # Chained trigger erases exactly that Transform output.
+        backend._result = "summarize"
+        transform_backend.queue_result("tiny")
+        _cycle(core, start_ms=4_000, end_ms=5_000)
+
+        assert keystroke.backspace_counts == [17, 7]
+
+
 # ── Negative paths: trigger does NOT fire ────────────────────────────
 
 

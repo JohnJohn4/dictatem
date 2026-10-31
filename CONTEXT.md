@@ -179,11 +179,22 @@ Transform runs and again at paste time, because the Transform can take up to
 `[transform].model_timeout_s` and focus may drift during it; a mismatch at
 either point discards the fire so backspaces never land in the wrong window.
 
-Replacement is done by sending backspaces equal to the character length of
-the Last Paste (post-normalisation) and pasting the Transform output. The
+Replacement is done by sending one backspace per
+[Backspace Unit](#backspace-unit) of the Last Paste (post-normalisation, which
+includes NFC composition) and pasting the Transform output. The
 Transform output then itself becomes the new [Last Paste](#last-paste),
 which allows trigger words to compose (e.g. running `"summarize"` twice
 further condenses the result).
+
+### Backspace Unit
+
+One user-perceived character of pasted text — an extended grapheme cluster
+(UAX #29), not a code point. A skin-toned emoji, a family ZWJ sequence, a flag,
+a keycap or an accented letter is one Backspace Unit, matching what one
+Backspace deletes in a text field. The [Last Paste](#last-paste) records its
+length in Backspace Units so a [Trigger Fire](#trigger-fire) erases exactly what
+was pasted. Counted by a stdlib-only approximation of UAX #29
+(`dictatem.paste.backspace_units`), not the `regex` package.
 
 ### Vocabulary
 
@@ -313,6 +324,20 @@ Resolving a Tier also yields a tier-appropriate default [Transform](#transform)
 Transform model is not Dictatem's to manage: Ollama is a separate, user-managed
 process Dictatem only talks to — never installs, pulls, or runs on the user's
 behalf (see [ADR-0008](docs/adr/0008-dictatem-does-not-manage-ollama-lifecycle.md)).
+
+## Configuration
+
+### Config Load Report
+
+The list of problems found while loading `config.toml`: an unreadable or
+unparseable file (with the parser's message and position), or a key with the
+wrong type or an invalid value (which falls back to its default). The daemon
+turns a non-empty report into exactly one startup tray notification; the detail
+goes to the log. An unreadable file makes the config **read-only for the
+session**: Dictatem runs on the [Hardware Tier](#hardware-tier) defaults and
+writes nothing, not even the Start-at-login toggle. Unknown keys and sections
+are not problems; they stay info-only in the log. Dictatem never rewrites the
+file to "fix" it (ADR-0009 / ADR-0022).
 
 ## Flagged ambiguities
 
