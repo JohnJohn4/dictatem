@@ -165,8 +165,9 @@ careful users stop. Three smaller problems have the same root cause:
   product.** Dock and accessory behaviour also depends on a runtime
   `TransformProcessType`, not on the bundle that should own it.
 
-On 2026-10-31 the owner decided to pay for an Apple Developer ID. Enrollment is
-pending Apple's approval (#253). The locally generated shell can't carry a
+On 2026-10-31 the owner decided to pay for an Apple Developer ID. The owner is
+enrolling as an **organization**, MATAVEX PTY LTD, and the D-U-N-S number and
+Apple's approval are pending (#253). The locally generated shell can't carry a
 Developer ID signature, because signing uses the owner's private key, which
 must never be on a user's machine. So the signed identity has to be built,
 signed, notarized and stapled once per release in CI, then downloaded and
@@ -397,7 +398,8 @@ If any check fails, stop and fall back in this order:
   autostart registrar, `macapp.plist` and `permissions.mapper`. Tray Restart's
   `launchctl kickstart -k` now restarts the launcher job, and process-group
   cleanup takes the child with it.
-- **Owner.** An individual Developer ID enrollment puts the owner's legal name
-  in the certificate, and that name shows in Gatekeeper and Login Items.
+- **Signer name.** The enrollment is an organization, so the certificate reads
+  `Developer ID Application: MATAVEX PTY LTD (TEAMID)`, and that name shows in
+  Gatekeeper and Login Items. No personal name appears anywhere.
 - **Manual QA.** The TCC, Gatekeeper and launchd behaviour is manual QA on a
   real Mac and is never mocked (`needs-real-mac-qa`).
