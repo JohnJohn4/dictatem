@@ -39,6 +39,9 @@ class Command(enum.Enum):
     FLASH_ERROR = "flash_error"
     START_TAP_TIMER = "start_tap_timer"
     CANCEL_TAP_TIMER = "cancel_tap_timer"
+    # The hotkey was pressed while working: show "did my press register?"
+    # feedback. Records, queues and cancels nothing (#240 / review F-14).
+    BUSY_NUDGE = "busy_nudge"
 
 
 class StateMachine:
@@ -121,6 +124,11 @@ class StateMachine:
         self._state = State.IDLE
         return [Command.FLASH_ERROR]
 
+    def _transcribing_key_down(self, _now_ms: int) -> list[Command]:
+        # Stay put: the press is acknowledged, never acted on. A Trigger Fire
+        # Transform also runs in TRANSCRIBING, so this covers both (#240).
+        return [Command.BUSY_NUDGE]
+
 
 _Handler = Callable[["StateMachine", int], list[Command]]
 
@@ -144,4 +152,5 @@ _HANDLERS: dict[tuple[State, Event], _Handler] = {
     (State.TRANSCRIBING, Event.TRANSCRIPTION_DONE): StateMachine._transcribing_done,
     (State.TRANSCRIBING, Event.ESC): StateMachine._cancel_to_idle,
     (State.TRANSCRIBING, Event.EMPTY_RESULT): StateMachine._transcribing_empty,
+    (State.TRANSCRIBING, Event.KEY_DOWN): StateMachine._transcribing_key_down,
 }

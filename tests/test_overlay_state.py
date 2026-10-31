@@ -356,6 +356,81 @@ class TestLoading:
         assert state.phase == OverlayPhase.FADING_OUT
 
 
+class TestBusyNudge:
+    """A hotkey press while working shows a brief caption, then reverts (#240)."""
+
+    CAPTION = "Still working — Esc cancels"
+
+    def test_no_busy_caption_by_default(self, state: OverlayState) -> None:
+        state.show_transcribing()
+        assert state.current_busy_caption() is None
+
+    @pytest.mark.parametrize(
+        ("enter", "phase"),
+        [
+            (lambda s: s.show_transcribing(), OverlayPhase.TRANSCRIBING),
+            (lambda s: s.show_computing(), OverlayPhase.COMPUTING),
+            (lambda s: s.show_loading("Loading LLM Model"), OverlayPhase.LOADING),
+        ],
+    )
+    def test_caption_shows_over_the_processing_phase_then_reverts(
+        self, state: OverlayState, clock: FakeClock, enter, phase: OverlayPhase
+    ) -> None:
+        enter(state)
+        state.show_busy_nudge()
+        assert state.current_busy_caption() == self.CAPTION
+        assert state.phase == phase  # the phase itself never changes
+
+        clock.advance_ms(1000)
+        state.tick()
+        assert state.current_busy_caption() == self.CAPTION
+
+        clock.advance_ms(600)
+        state.tick()
+        assert state.current_busy_caption() is None
+        assert state.phase == phase
+
+    def test_loading_caption_resumes_after_the_nudge(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_loading("Loading LLM Model")
+        state.show_busy_nudge()
+        clock.advance_ms(1600)
+        assert state.current_loading_text().startswith("Loading LLM Model")
+        assert state.current_busy_caption() is None
+
+    def test_repeated_presses_extend_the_caption(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_transcribing()
+        state.show_busy_nudge()
+        clock.advance_ms(1000)
+        state.show_busy_nudge()
+        clock.advance_ms(1000)
+        assert state.current_busy_caption() == self.CAPTION
+        clock.advance_ms(600)
+        assert state.current_busy_caption() is None
+
+    def test_caption_never_shows_outside_a_processing_phase(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_busy_nudge()  # hidden
+        assert state.current_busy_caption() is None
+        state.show_recording(RecordingMode.TOGGLE)
+        clock.advance_ms(200)
+        state.tick()
+        state.show_busy_nudge()
+        assert state.current_busy_caption() is None
+
+    def test_caption_ends_when_the_pill_hides(
+        self, state: OverlayState
+    ) -> None:
+        state.show_transcribing()
+        state.show_busy_nudge()
+        state.hide()
+        assert state.current_busy_caption() is None
+
+
 class TestFlashError:
     """flash_error() → ERROR_FLASH for ~300ms → FADING_OUT → HIDDEN."""
 

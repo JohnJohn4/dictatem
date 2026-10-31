@@ -130,6 +130,10 @@ class _OverlayAdapter:
         # show_transcribing — this only flips the phase, never repositions.
         self._state.show_computing()
 
+    def show_busy_nudge(self) -> None:
+        # A caption over the already-visible processing pill (#240).
+        self._state.show_busy_nudge()
+
     def show_error(self) -> None:
         self._state.flash_error()
 
@@ -559,6 +563,8 @@ class DaemonCore:
             pass
         elif cmd is Command.CANCEL_TAP_TIMER:
             self._overlay.show(RecordingMode.TOGGLE)
+        elif cmd is Command.BUSY_NUDGE:
+            self._overlay.show_busy_nudge()
 
     def _do_record_start(self) -> None:
         # Starting a recording begins a new Dictation Session (bumps the epoch).
