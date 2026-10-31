@@ -43,22 +43,25 @@ class TranscribeLifecycle:
         self._is_loading = False
         self._is_downloading = False
         self._last_download_ok = False
+        # In-flight transcription tracking (F-7 / #236). An unload requested
+        # while a transcription is running is deferred (``_unload_pending``)
+        # and runs when the last in-flight transcription finishes. The lock
+        # makes "is anything in flight?" + "unload the backend" atomic against
+        # a transcription starting on the worker thread.
+        self._state_lock = threading.Lock()
+        self._in_flight = 0
+        self._unload_pending = False
 
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
-        self._ensure_loaded()
-
+        with self._state_lock:
+            self._in_flight += 1
+            # Using the model supersedes an unload deferred by an earlier,
+            # still-running transcription.
+            self._unload_pending = False
         try:
-            raw = self._backend.transcribe(audio)
-        except GPUOutOfMemoryError:
-            self._backend.empty_cache()
-            try:
-                raw = self._backend.transcribe(audio)
-            except GPUOutOfMemoryError as exc:
-                raise TranscriptionFailedError(
-                    "GPU out of memory after retry"
-                ) from exc
-
-        self._last_activity = self._clock()
+            raw = self._transcribe_resident(audio)
+        finally:
+            self._finish_transcription()
 
         if isinstance(raw, EmptyResult):
             return raw
@@ -89,6 +92,9 @@ class TranscribeLifecycle:
         return self._last_download_ok
 
     def preload(self) -> None:
+        # A load requested after a deferred unload keeps the model resident.
+        with self._state_lock:
+            self._unload_pending = False
         if self._is_loading or self._backend.is_loaded:
             return
         self._is_loading = True
@@ -118,22 +124,38 @@ class TranscribeLifecycle:
         return True
 
     def unload(self) -> None:
-        if not self._backend.is_loaded:
-            return
-        logger.info("Unloading model")
-        self._last_activity = None
-        self._backend.unload_model()
-        logger.info("Model unloaded")
+        """Unload the model now, or — mid-transcription — once it finishes.
+
+        A tray "Unload model" click that lands while a transcription is in
+        flight must not pull the model out from under it (F-7 / #236): the
+        unload is deferred and logged, and runs when the last in-flight
+        transcription returns, unless a new load/transcription supersedes it.
+        """
+        with self._state_lock:
+            if self._in_flight > 0:
+                if not self._unload_pending:
+                    logger.info(
+                        "Unload deferred: %d transcription(s) in flight; "
+                        "unloading when they finish",
+                        self._in_flight,
+                    )
+                self._unload_pending = True
+                return
+            self._unload_now()
 
     def check_idle(self) -> None:
-        if self._last_activity is None:
-            return
-        elapsed = self._clock() - self._last_activity
-        if elapsed >= self._idle_timeout_s:
-            logger.info(
-                "Idle timeout: model unused for %.0fs, unloading", elapsed
-            )
-            self.unload()
+        with self._state_lock:
+            # Time spent transcribing never counts toward the idle deadline:
+            # while a transcription is in flight there is no idle unload, and
+            # the deadline restarts from when it returns (F-7 / #236).
+            if self._in_flight > 0 or self._last_activity is None:
+                return
+            elapsed = self._clock() - self._last_activity
+            if elapsed >= self._idle_timeout_s:
+                logger.info(
+                    "Idle timeout: model unused for %.0fs, unloading", elapsed
+                )
+                self._unload_now()
 
     def on_download_progress(self, callback: Callable[[int, int], None]) -> None:
         self._backend.set_progress_callback(callback)
@@ -179,6 +201,38 @@ class TranscribeLifecycle:
         finally:
             self._last_download_ok = ok
             self._is_downloading = False
+
+    def _transcribe_resident(self, audio: AudioChunk) -> TranscriptionResult:
+        self._ensure_loaded()
+        try:
+            return self._backend.transcribe(audio)
+        except GPUOutOfMemoryError:
+            self._backend.empty_cache()
+            try:
+                return self._backend.transcribe(audio)
+            except GPUOutOfMemoryError as exc:
+                raise TranscriptionFailedError(
+                    "GPU out of memory after retry"
+                ) from exc
+
+    def _finish_transcription(self) -> None:
+        with self._state_lock:
+            self._in_flight -= 1
+            # Idle time is measured from the end of the last activity.
+            self._last_activity = self._clock()
+            if self._in_flight == 0 and self._unload_pending:
+                self._unload_pending = False
+                logger.info("Running deferred unload")
+                self._unload_now()
+
+    def _unload_now(self) -> None:
+        """Unload the backend. Caller holds ``_state_lock``."""
+        if not self._backend.is_loaded:
+            return
+        logger.info("Unloading model")
+        self._last_activity = None
+        self._backend.unload_model()
+        logger.info("Model unloaded")
 
     def _ensure_loaded(self) -> None:
         if self._backend.is_loaded:
