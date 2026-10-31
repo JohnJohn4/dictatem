@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import numpy as np
 import pytest
@@ -182,3 +183,105 @@ class TestThreadSafety:
         # Every appended sample survived exactly once — no loss, no double-count.
         result = buf.flush()
         assert result.shape == (writers * appends_per_writer * len(chunk),)
+
+
+def _reference_tail_rms(audio: np.ndarray, n_samples: int) -> float:
+    """The pre-F-9 behaviour, spelled out over the whole flat recording:
+    RMS of the last ``n_samples`` (clamped to the recording), capped at 1.0;
+    zero or negative requests (and an empty recording) give 0.0."""
+    if len(audio) == 0 or n_samples <= 0:
+        return 0.0
+    tail = audio[-min(n_samples, len(audio)):]
+    return min(float(np.sqrt(np.mean(tail ** 2))), 1.0)
+
+
+class TestTailReadEquivalence:
+    """Level/silence read only the recent tail (F-9, #237) — results must be
+    identical to RMS over the tail of the whole flat recording, whatever the
+    chunk sizes and wherever the window boundary falls relative to them."""
+
+    @pytest.mark.parametrize("seed", range(12))
+    def test_level_and_idle_match_whole_recording_reference(self, seed: int) -> None:
+        rng = np.random.default_rng(seed)
+        sample_rate = 1_000  # small rate keeps windows near chunk sizes
+        window_ms = int(rng.integers(0, 400))
+        floor = float(rng.uniform(0.05, 0.5))
+        buf = AudioBuffer(
+            sample_rate=sample_rate, level_window_ms=window_ms, silence_floor=floor
+        )
+        window = int(sample_rate * window_ms / 1000)
+        parts: list[np.ndarray] = []
+        for _ in range(int(rng.integers(1, 40))):
+            size = int(rng.integers(0, 120))  # includes empty chunks
+            amp = float(rng.choice([0.0, 0.02, 0.3, 1.5]))
+            chunk = (rng.uniform(-1, 1, size) * amp).astype(np.float32)
+            buf.append(chunk)
+            parts.append(chunk)
+            audio = np.concatenate(parts)
+            assert buf.current_level() == _reference_tail_rms(audio, window)
+            for threshold in (0.0, 0.05, 0.1, 0.25, 1.0):
+                required = int(sample_rate * threshold)
+                expected = len(audio) >= required and (
+                    _reference_tail_rms(audio, required) < floor
+                )
+                assert buf.is_idle_for_seconds(threshold) is expected
+
+    def test_window_ending_exactly_on_chunk_boundary(self) -> None:
+        buf = AudioBuffer(sample_rate=1_000, level_window_ms=100)
+        buf.append(np.ones(500, dtype=np.float32))
+        buf.append(np.full(100, 0.5, dtype=np.float32))  # exactly the window
+        assert buf.current_level() == pytest.approx(0.5)
+
+    def test_window_straddling_chunks(self) -> None:
+        buf = AudioBuffer(sample_rate=1_000, level_window_ms=100)
+        buf.append(np.zeros(500, dtype=np.float32))
+        buf.append(np.ones(50, dtype=np.float32))
+        buf.append(np.zeros(50, dtype=np.float32))
+        # 50 ones + 50 zeros in the 100-sample window -> sqrt(0.5)
+        assert buf.current_level() == pytest.approx(np.sqrt(0.5))
+
+    def test_negative_threshold_is_empty_tail_not_whole_buffer(self) -> None:
+        buf = AudioBuffer(sample_rate=1_000, silence_floor=0.01)
+        buf.append(np.ones(500, dtype=np.float32))
+        # required <= 0 -> empty tail -> RMS 0.0 < floor (unchanged rule)
+        assert buf.is_idle_for_seconds(-1.0) is True
+
+    def test_flush_after_tail_reads_returns_full_recording(self) -> None:
+        buf = AudioBuffer(sample_rate=1_000, level_window_ms=100)
+        parts = [np.full(37, i / 10, dtype=np.float32) for i in range(10)]
+        for p in parts:
+            buf.append(p)
+            buf.current_level()
+            buf.is_idle_for_seconds(0.2)
+        np.testing.assert_array_equal(buf.flush(), np.concatenate(parts))
+
+
+class TestTailReadCostDoesNotScale:
+    """Regression guard for F-9: a tick on a max-length (300 s) recording must
+    cost about the same as on a 5 s one. The bound is deliberately generous —
+    the old whole-recording concatenate is tens of times slower at 300 s."""
+
+    @staticmethod
+    def _filled(seconds: int) -> AudioBuffer:
+        buf = AudioBuffer(sample_rate=SAMPLE_RATE)
+        chunk = np.full(512, 0.1, dtype=np.float32)  # typical capture block
+        for _ in range(seconds * SAMPLE_RATE // 512):
+            buf.append(chunk)
+        return buf
+
+    @staticmethod
+    def _time_ticks(buf: AudioBuffer, ticks: int = 50) -> float:
+        start = time.perf_counter()
+        for _ in range(ticks):
+            buf.current_level()
+            buf.is_idle_for_seconds(2.0)
+        return time.perf_counter() - start
+
+    def test_max_length_tick_is_not_much_slower_than_short(self) -> None:
+        short = self._filled(5)
+        long = self._filled(300)
+        self._time_ticks(short, 5)  # warm up
+        self._time_ticks(long, 5)
+        short_t = min(self._time_ticks(short) for _ in range(3))
+        long_t = min(self._time_ticks(long) for _ in range(3))
+        assert long_t < 10 * short_t + 0.05, (short_t, long_t)
