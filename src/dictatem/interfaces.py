@@ -326,7 +326,15 @@ class OverlayRenderer(Protocol):
         ...
 
     def show_error(self) -> None:
-        """Flash the overlay to indicate an error (e.g. empty result)."""
+        """Flash the overlay to indicate a genuine failure (e.g. empty result, a
+        discarded Trigger Fire, or "paste" with nothing to recover)."""
+        ...
+
+    def show_held(self) -> None:
+        """Show the quiet "Saved — say paste" signal: a regular dictation was
+        held in the Most-recent dictation buffer instead of pasted (focus drift,
+        or a failed paste). Its own colour and caption, distinct from the error
+        flash; silent, and never refocuses anything (#239 / ADR-0026)."""
         ...
 
     def hide(self) -> None:

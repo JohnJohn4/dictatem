@@ -135,6 +135,11 @@ class _OverlayAdapter:
     def show_error(self) -> None:
         self._state.flash_error()
 
+    def show_held(self) -> None:
+        # Like show_error: the pill is already visible from transcribing, so this
+        # only flips the phase — no reposition, no activation (#239).
+        self._state.show_held()
+
     def hide(self) -> None:
         self._state.hide()
 
@@ -1014,14 +1019,26 @@ class DaemonCore:
         self.check_transform_result(now_ms=now_ms)
 
     def _flash_error_and_settle(self) -> None:
-        """Quiet error flash + return to idle — the shared tail of ``_do_paste``'s
-        non-happy exits (focus-drift hold, Trigger Fire paste-time discard, and
-        paste failure). There is no sound surface, so the flash is silent, and the
-        overlay is deliberately NOT hidden here (``hide()`` would cut the flash
-        short — it is only for the happy path). Kept in one place so the recovery
-        UX can't drift between these branches.
-        """
+        """Error flash + return to idle — ``_do_paste``'s exit for a genuine
+        failure where nothing is held (a discarded Trigger Fire, or a Trigger
+        Fire whose paste failed: its Transform output is not retained)."""
         self._overlay.show_error()
+        self._settle_after_unpasted()
+
+    def _hold_and_settle(self) -> None:
+        """The quiet "Saved — say paste" Held signal + return to idle (#239 /
+        F-13 / ADR-0026) — ``_do_paste``'s exit when a REGULAR dictation is held
+        in the Most-recent dictation buffer instead of pasted (focus drift, or a
+        failed paste). Not the error flash: nothing was lost. Silent (there is no
+        sound surface) and never refocuses anything."""
+        self._overlay.show_held()
+        self._settle_after_unpasted()
+
+    def _settle_after_unpasted(self) -> None:
+        """The shared tail of ``_do_paste``'s non-happy exits. The overlay is
+        deliberately NOT hidden here (``hide()`` would cut the flash/Held signal
+        short — it is only for the happy path). Kept in one place so the recovery
+        UX can't drift between these branches."""
         self._tray.set_idle()
         self._session.text_to_paste = None
 
@@ -1061,9 +1078,10 @@ class DaemonCore:
                 )
                 self._most_recent_dictation = normalized
                 self._tray.set_has_last_dictation(True)
-                # The quiet "saved — say paste" flash: informational, not pushy —
-                # no sound (there is no sound surface) and no foreground.restore.
-                self._flash_error_and_settle()
+                # The quiet "Saved — say paste" Held signal (#239): informational,
+                # not pushy — no sound (there is no sound surface) and no
+                # foreground.restore.
+                self._hold_and_settle()
                 return
 
             # Trigger Fire paste-time same-target rail (#189 / review F-1). The
@@ -1124,8 +1142,9 @@ class DaemonCore:
                 # win32/mac clipboard). A regular dictation's text is already in
                 # the Most-recent buffer (written above), so it is recoverable by
                 # saying "paste" or via the tray item; a Trigger Fire's Transform
-                # output is not retained (#119), so nothing is held for it. Flash
-                # the error and settle WITHOUT re-raising, so the flash isn't
+                # output is not retained (#119), so nothing is held for it. Show
+                # the Held signal for a dictation (#239) or the error flash for a
+                # Trigger Fire, and settle WITHOUT re-raising, so the signal isn't
                 # immediately hidden by _recover_to_idle, and do not arm Trigger
                 # Words against text that may not have landed. Any OTHER exception
                 # is a genuine bug — let it propagate to check_transcription_result
@@ -1139,7 +1158,10 @@ class DaemonCore:
                     exc_info=True,
                 )
                 self._last_paste = None
-                self._flash_error_and_settle()
+                if replace:
+                    self._flash_error_and_settle()
+                else:
+                    self._hold_and_settle()
                 return
 
             # Last Paste is armed only on a SUCCESSFUL paste — it arms Trigger

@@ -20,7 +20,7 @@ import html
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from dictatem.overlay.state import PILL_BODY_HEX, PILL_HEX, PillColor
+from dictatem.overlay.state import HELD_CAPTION, PILL_BODY_HEX, PILL_HEX, PillColor
 from dictatem.tray.hotkey_hint import format_hotkey, hotkey_keys
 
 if TYPE_CHECKING:
@@ -71,6 +71,7 @@ PILL_HUES = {
     "recording": PILL_HEX[PillColor.ACCENT],
     "transcribing": PILL_HEX[PillColor.PROCESSING],
     "computing": PILL_HEX[PillColor.COMPUTING],
+    "held": PILL_HEX[PillColor.HELD],
     "error": PILL_HEX[PillColor.ERROR],
 }
 
@@ -155,7 +156,16 @@ def _pill_section(theme: GuideTheme) -> str:
         ("recording", "Listening — the bars follow your voice"),
         ("transcribing", "Turning your speech into text"),
         ("computing", "Running a trigger word"),
-        ("error", "Didn't land — see how to recover it below"),
+        (
+            "held",
+            f"<b>{HELD_CAPTION}</b> — your dictation was kept instead of pasted; "
+            "focus where it belongs and say <i>paste</i>",
+        ),
+        (
+            "error",
+            "Something went wrong — nothing was heard, a trigger word was "
+            "cancelled, or there was nothing to paste",
+        ),
     )
     body = "".join(
         f'<tr><td style="background-color:{PILL_BODY}; padding:2px 8px;">'

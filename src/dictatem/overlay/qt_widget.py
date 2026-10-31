@@ -162,11 +162,28 @@ class QtOverlayWidget(QWidget):
             painter.end()
             return
 
+        # A held dictation (#239): the "Saved — say paste" caption in the Held
+        # hue instead of bars — informational, so it reads as words, not as the
+        # error flash. The colour stays HELD through the fade-out too.
+        if self._state.current_color() == PillColor.HELD:
+            painter.setPen(_PHASE_HUES[PillColor.HELD])
+            font = QFont(painter.font())
+            font.setPointSizeF(10.0)
+            font.setWeight(QFont.Weight.DemiBold)
+            painter.setFont(font)
+            painter.drawText(
+                self.rect(),
+                Qt.AlignmentFlag.AlignCenter,
+                self._state.current_held_text(),
+            )
+            painter.end()
+            return
+
         # Phase by COLOUR (#96 / ADR-0026): the waveform itself is drawn in the
         # phase's colour — white while recording, amber while transcribing, iris
-        # while a Transform computes, coral on the error / focus-drift "saved"
-        # flash. Only RECORDING tracks the live mic level; the processing phases
-        # show a low wave travelling across the bars so they read as working.
+        # while a Transform computes, coral on the error flash. Only RECORDING
+        # tracks the live mic level; the processing phases show a low wave
+        # travelling across the bars so they read as working.
         col = _PHASE_HUES[self._state.current_color()]
         live = self._state.phase in (OverlayPhase.RECORDING, OverlayPhase.FADING_IN)
         if live:

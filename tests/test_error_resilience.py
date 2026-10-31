@@ -125,6 +125,7 @@ class TestEmptyResultSuppression:
         _do_ptt_cycle(core)
 
         assert any(c[0] == "show_error" for c in overlay.calls)
+        assert ("show_held",) not in overlay.calls  # a real failure (#239)
         assert keystroke.paste_count == 0
         assert sm.state is State.IDLE
 

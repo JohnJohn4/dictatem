@@ -45,6 +45,10 @@ class FakeOverlayRenderer:
         self.state = "error"
         self.calls.append(("show_error",))
 
+    def show_held(self) -> None:
+        self.state = "held"
+        self.calls.append(("show_held",))
+
     def hide(self) -> None:
         self.visible = False
         self.state = "hidden"
