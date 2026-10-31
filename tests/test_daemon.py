@@ -345,3 +345,9 @@ class TestStarterAdapterSets:
         # Windows has no guided permission UX — the mic permission surfaces
         # in-flow when capture fails.
         assert adapters.check_permissions is None
+        # Tray Restart (#212) relaunches a detached daemon; the generic
+        # Quit-and-start-again copy is the failure hint.
+        from dictatem.process.restart import spawn_restart
+
+        assert adapters.relaunch is spawn_restart
+        assert adapters.relaunch_failed_hint is None

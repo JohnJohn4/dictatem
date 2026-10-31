@@ -298,6 +298,15 @@ class QtTrayIcon:
         """
         self._actions[MenuItem.UPGRADE].setVisible(available)
 
+    def set_restart_available(self, available: bool) -> None:
+        """Show or hide the "Restart" item (#212).
+
+        Hidden where the platform has no relauncher wired, so the item is never
+        a silent no-op. Visibility survives ``update_state``, which only toggles
+        enablement.
+        """
+        self._actions[MenuItem.RESTART].setVisible(available)
+
     def update_state(self, state: TrayState) -> None:
         # The tray glyph is static brand identity (ADR-0006); only menu-item
         # enable/disable tracks TrayState. The icon does not change with state.
