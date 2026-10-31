@@ -45,6 +45,7 @@ DICTATEM_MODULES = [
     "dictatem.hardware.mac_probe",
     "dictatem.hotkey.classifier",
     "dictatem.hotkey.mac_keymap",
+    "dictatem.hotkey.hook_failure",
     "dictatem.audio",
     "dictatem.audio.buffer",
     # The resampler is shared with the Windows WASAPI switch (#184); it must stay

@@ -204,6 +204,20 @@ enabled = true                  # master switch for Trigger Words
 model_name = "gemma4:e2b"       # Ollama model tag; must match `ollama list`
 ```
 
+`[audio].sample_rate` is fixed at `16000` (the transcriber needs 16 kHz). Any
+other value is reported and ignored.
+
+**Config problems are reported, and Dictatem never changes your file.** Every
+value is checked against its type. A whole number is fine for a decimal setting
+like `silence_timeout_s`, but `true` is not a number. A wrong or invalid value
+falls back to that key's default. If `config.toml` has a syntax error, this
+session runs on the defaults Dictatem would pick for your hardware on first run.
+Either way you get one tray notification at startup that says what was wrong,
+and the full detail goes to the log. While the file can't be read, the **Start
+at login** toggle applies for that session only and is not saved. Unknown keys
+are ignored quietly; they show up only in the log. Fix the file with **Open
+config file…**, then use **Restart**.
+
 ### Model loading & memory
 
 Dictatem doesn't hold the model in memory at startup. The load **starts the

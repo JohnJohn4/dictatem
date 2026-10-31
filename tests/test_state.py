@@ -344,6 +344,42 @@ class TestFullCycleRoundTrips:
         assert sm.state is State.IDLE
 
 
+class TestReset:
+    """``reset()`` is the public recovery path back to IDLE (#234)."""
+
+    def test_reset_from_every_state_returns_to_idle(self) -> None:
+        reach: dict[State, list[tuple[Event, int]]] = {
+            State.IDLE: [],
+            State.PRESSED: [(Event.KEY_DOWN, 0)],
+            State.TOGGLE_REC: [(Event.KEY_DOWN, 0), (Event.KEY_UP, 50)],
+            State.PTT_REC: [(Event.KEY_DOWN, 0), (Event.TIMER_EXPIRED, 200)],
+            State.TRANSCRIBING: [
+                (Event.KEY_DOWN, 0),
+                (Event.TIMER_EXPIRED, 200),
+                (Event.KEY_UP, 3000),
+            ],
+        }
+        for target, events in reach.items():
+            sm = StateMachine(tap_threshold_ms=200)
+            for ev, at in events:
+                sm.handle(ev, now_ms=at)
+            assert sm.state is target
+            sm.reset()
+            assert sm.state is State.IDLE
+
+    def test_reset_emits_no_commands_and_next_press_starts_fresh(self) -> None:
+        sm = StateMachine(tap_threshold_ms=200)
+        sm.handle(Event.KEY_DOWN, now_ms=0)
+        assert sm.reset() is None
+        # A stray KEY_UP after reset is ignored (the press was forgotten).
+        assert sm.handle(Event.KEY_UP, now_ms=10_000) == []
+        assert sm.state is State.IDLE
+        # A new press is timed from its own KEY_DOWN, not the forgotten one.
+        sm.handle(Event.KEY_DOWN, now_ms=20_000)
+        sm.handle(Event.KEY_UP, now_ms=20_050)
+        assert sm.state is State.TOGGLE_REC
+
+
 class TestConfigurableThresholds:
     def test_custom_tap_threshold(self) -> None:
         sm = StateMachine(tap_threshold_ms=500)

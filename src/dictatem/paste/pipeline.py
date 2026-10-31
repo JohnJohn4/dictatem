@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+import unicodedata
 from typing import TYPE_CHECKING
 
 from dictatem.exceptions import ClipboardContentionError
@@ -67,8 +68,14 @@ def normalize_pasted_text(text: str) -> str:
     become a space (``\\r\\n`` is one space); every other control character is
     removed, so neither the clipboard paste nor the typed Trigger-Fire path can
     deliver a keystroke-equivalent control code to the target.
+
+    The result is NFC-composed (after the control strip, so a mark separated
+    from its base by a removed control still composes): decomposed accents
+    land as the single characters apps expect, and the Last Paste's Backspace
+    Unit count matches what is on screen (#242).
     """
     text = text.replace("\r\n", " ").translate(_CONTROL_TABLE)
+    text = unicodedata.normalize("NFC", text)
     # faster-whisper prefixes transcribed segments with a space; strip both
     # ends so we don't paste double spaces between consecutive transcriptions.
     return text.strip() + " "

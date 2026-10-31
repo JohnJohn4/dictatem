@@ -41,6 +41,10 @@ class FakeTranscriberBackend:
         self._download_errors: list[Exception] = []
         self._download_gate = threading.Event()
         self._download_gate.set()
+        # A gate so a test can hold transcribe() open mid-flight (F-7 / #236)
+        # and fire an idle or tray unload at the in-flight transcription.
+        self._transcribe_gate = threading.Event()
+        self._transcribe_gate.set()
 
     def load_model(self) -> None:
         self.load_count += 1
@@ -69,6 +73,7 @@ class FakeTranscriberBackend:
 
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
         self.transcribe_calls.append(audio)
+        self._transcribe_gate.wait()
         if self._errors_to_raise:
             raise self._errors_to_raise.pop(0)
         if not self._loaded:
@@ -129,3 +134,15 @@ class FakeTranscriberBackend:
     def release_download(self) -> None:
         """Release a download_to_disk() call parked by block_download()."""
         self._download_gate.set()
+
+    def block_transcribe(self) -> None:
+        """Make transcribe() calls block until release_transcribe() (#236).
+
+        transcribe_calls is appended on entry, so a test can confirm the
+        transcription is in flight while it is parked.
+        """
+        self._transcribe_gate.clear()
+
+    def release_transcribe(self) -> None:
+        """Release a transcribe() call parked by block_transcribe()."""
+        self._transcribe_gate.set()

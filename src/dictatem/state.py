@@ -57,6 +57,16 @@ class StateMachine:
             return []
         return handler(self, now_ms)
 
+    def reset(self) -> None:
+        """Return to IDLE from any state, forgetting any in-progress press.
+
+        The recovery path for callers that abandon a dictation outside the
+        normal event flow (e.g. an error). Emits no commands — the caller has
+        already done its own teardown.
+        """
+        self._state = State.IDLE
+        self._key_down_at = None
+
     # -- IDLE handlers --
 
     def _idle_key_down(self, now_ms: int) -> list[Command]:
