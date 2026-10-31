@@ -64,3 +64,17 @@ as a byproduct of handing back the whole row.
   is byte-for-byte unchanged.
 - Like the rest of the resolver, the reconcile logic is unit tested; the daemon
   wiring and Qt notification are manual-QA only (excluded from pyright/tests).
+- **mlx (Apple-GPU tier, ADR-0013 amendment of 2026-10-31).** The same rule
+  extends to `device = "mlx"` in two layers, still without rewriting the
+  config. At startup, reconcile treats a config pinning `mlx` on a machine
+  where MLX is not usable like pinned-cuda-without-CUDA. That covers Intel,
+  macOS < 14, a missing `apple-gpu` extra, a copied config, and Windows. It
+  returns the whole `Apple-Silicon` CPU row on Apple Silicon, or the `CPU` row
+  elsewhere, with `did_fall_back = True`. A reason (cuda-absent vs
+  mlx-unavailable) lets the notification name the cause. At runtime, if the MLX
+  engine fails to load, a fallback-composing transcriber switches to
+  faster-whisper on the `Apple-Silicon` row for the rest of the session. It
+  re-transcribes the same audio and does not retry MLX until the next launch.
+  Each layer gives one warning log line and one tray notification. The decision
+  above is unchanged: a usable `mlx` config is never second-guessed, and a
+  `cpu` config is never upgraded to `mlx`.
