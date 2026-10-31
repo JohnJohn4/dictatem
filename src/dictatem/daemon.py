@@ -24,6 +24,7 @@ from dictatem.exceptions import (
 # per-event/tick path, so it is imported eagerly rather than lazily under the
 # bridge lock (the heavier classifier types stay TYPE_CHECKING-only below).
 from dictatem.hotkey.classifier import HotkeyEvent
+from dictatem.session import DictationSession
 from dictatem.state import Command, Event, State
 from dictatem.transform.detector import PASTE_ACTION, match_builtin_action
 from dictatem.transform.last_paste import LastPaste
@@ -396,21 +397,22 @@ class DaemonCore:
         self._restore_scheduler = restore_scheduler
         self._silence_timeout_s = silence_timeout_s
         self._max_recording_s = max_recording_s
-        self._last_text: str | None = None
-        # --- Focus-drift anchor (ADR-0026 / #97) ---
-        # The foreground identity (target_id) captured at record-start, compared
-        # against the live foreground at paste time. If focus drifted to another
-        # window/app during the wait (e.g. a long cold model load), a regular
-        # dictation is HELD in the Most-recent buffer rather than mispasted into
-        # the wrong window. A comparison anchor only — never used to move focus.
-        self._record_start_target_id: int | None = None
+        # --- Dictation Session (#234) ---
+        # Everything that belongs to ONE dictation — transcription/Transform
+        # outstanding, the pending replace count, the record-start focus-drift
+        # anchor (ADR-0026 / #97) and the text waiting to paste — plus the epoch.
+        # Record-start begins a session; cancel and recover-to-idle end it. The
+        # daemon-lifetime state below (Last Paste, Most-recent dictation,
+        # warm/preload flags) deliberately stays on the daemon.
+        self._session = DictationSession()
         # --- Most-recent dictation buffer (ADR-0023 / #119) ---
         # The exact payload of the last REGULAR dictation (normalised, with
         # Replacements applied) — the text that was (or would have been) pasted.
-        # Unlike _last_text (the transient pending-paste payload, nulled after
-        # every paste) and Last Paste (needs a successful paste + target_id),
-        # this is kept ACROSS pastes and even when the dictation landed nowhere,
-        # so it carries no target_id and does not arm Trigger Words. It is what
+        # Unlike the session's text_to_paste (the transient pending-paste
+        # payload, nulled after every paste) and Last Paste (needs a successful
+        # paste + target_id), this is kept ACROSS pastes and even when the
+        # dictation landed nowhere, so it carries no target_id and does not arm
+        # Trigger Words. It is what
         # the tray "Copy last dictation" item and the built-in `paste` Trigger
         # Word (#139) recover — the guarantee a dictation is never lost.
         self._most_recent_dictation: str | None = None
@@ -423,7 +425,6 @@ class DaemonCore:
             PASTE_ACTION: self._handle_paste_action,
         }
         self._transcription_queue: queue.Queue[tuple[str, object]] = queue.Queue()
-        self._transcription_active: bool = False
         self._transcription_thread: threading.Thread | None = None
         # --- Trigger Words / Transform state (see CONTEXT.md) ---
         self._transform_lifecycle = transform_lifecycle
@@ -437,9 +438,7 @@ class DaemonCore:
         # "computing" rather than "loading" (#74).
         self._llm_keep_alive_ms = int(llm_keep_alive_s * 1000)
         self._last_paste: LastPaste | None = None
-        self._pending_replace_chars: int = 0
         self._transform_queue: queue.Queue[tuple[str, object]] = queue.Queue()
-        self._transform_active: bool = False
         self._transform_thread: threading.Thread | None = None
         # --- Model-loading overlay state (#74) ---
         # _loading_for_transcribe: a first-tap cold load is showing the "Model
@@ -562,6 +561,8 @@ class DaemonCore:
             self._overlay.show(RecordingMode.TOGGLE)
 
     def _do_record_start(self) -> None:
+        # Starting a recording begins a new Dictation Session (bumps the epoch).
+        self._session.begin()
         try:
             self._audio_capture.start()
         except AudioCaptureError:
@@ -589,7 +590,7 @@ class DaemonCore:
         # comparison token only — Dictatem never moves focus on the dictation path.
         # Captured BEFORE showing the pill so the anchor can never accidentally be
         # the overlay window itself, independent of how the pill is shown.
-        self._record_start_target_id = (
+        self._session.record_start_target_id = (
             self._foreground.capture() if self._foreground is not None else None
         )
         self._overlay.show(RecordingMode.PTT)
@@ -639,7 +640,7 @@ class DaemonCore:
             self._recover_to_idle()
             return
 
-        self._transcription_active = True
+        self._session.transcription_outstanding = True
 
         from dictatem.types import SAMPLE_RATE
 
@@ -688,7 +689,7 @@ class DaemonCore:
 
         # The one-shot latency tip (see ADR-0007) is enqueued AFTER the "ok"
         # result, so by the time it is drained on a later tick the ok result
-        # has already cleared ``_transcription_active``. Handle it here, before
+        # has already cleared ``transcription_outstanding``. Handle it here, before
         # the guard, so it is not silently discarded.
         if kind == "latency_tip":
             self._tray.show_notification(
@@ -698,12 +699,12 @@ class DaemonCore:
             )
             return
 
-        if not self._transcription_active:
+        if not self._session.transcription_outstanding:
             return  # ESC was pressed before result arrived — discard
 
         try:
             if kind == "transcription_failed":
-                self._transcription_active = False
+                self._session.transcription_outstanding = False
                 logger.error("GPU memory exhausted; transcription failed")
                 self._tray.show_notification(
                     "Transcription Failed",
@@ -711,7 +712,7 @@ class DaemonCore:
                 )
                 self._recover_to_idle()
             elif kind == "model_error":
-                self._transcription_active = False
+                self._session.transcription_outstanding = False
                 logger.error("Model unavailable; check log", exc_info=data)  # type: ignore[arg-type]
                 self._tray.show_notification(
                     "Model Unavailable",
@@ -719,7 +720,7 @@ class DaemonCore:
                 )
                 self._recover_to_idle()
             elif kind == "unexpected_error":
-                self._transcription_active = False
+                self._session.transcription_outstanding = False
                 logger.error("Unexpected transcription error: %s", data)
                 self._tray.show_notification(
                     "Transcription Error",
@@ -729,7 +730,7 @@ class DaemonCore:
             else:
                 result = data
                 if isinstance(result, EmptyResult):
-                    self._transcription_active = False
+                    self._session.transcription_outstanding = False
                     logger.info("Transcription produced empty result")
                     commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
                     self._execute_commands(commands, now_ms=now_ms)
@@ -752,7 +753,7 @@ class DaemonCore:
                 # intercepted here and bypasses find/replace entirely (#125).
                 prompt = self._detect_trigger(result)  # type: ignore[arg-type]
                 if prompt is None:
-                    self._transcription_active = False
+                    self._session.transcription_outstanding = False
                     # Regular dictation only: apply deterministic Replacements
                     # (ADR-0024) just before this text becomes the paste payload.
                     text = self._apply_replacements(result)  # type: ignore[arg-type]
@@ -760,7 +761,7 @@ class DaemonCore:
                     # rotating file handler would retain it for ~7 days (S-2 /
                     # #188). Count only, mirroring the Transform path below.
                     logger.info("Transcription complete (%d chars)", len(text))
-                    self._last_text = text
+                    self._session.text_to_paste = text
                     commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
                     self._execute_commands(commands, now_ms=now_ms)
                 else:
@@ -808,7 +809,7 @@ class DaemonCore:
         re-paste lands like a normal dictation (clipboard + Ctrl+V) and so
         becomes the new Last Paste, re-arming Trigger Words at the new spot.
         """
-        self._transcription_active = False
+        self._session.transcription_outstanding = False
         if self._most_recent_dictation is None:
             logger.info("`paste` action: no Most-recent dictation to recover")
             commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
@@ -821,8 +822,8 @@ class DaemonCore:
         # Route the buffer through the normal paste path. replace_chars stays 0
         # so it's a clipboard + Ctrl+V paste (not a typed Trigger-Fire
         # replacement), and _do_paste records the new Last Paste.
-        self._last_text = self._most_recent_dictation
-        self._pending_replace_chars = 0
+        self._session.text_to_paste = self._most_recent_dictation
+        self._session.pending_replace_chars = 0
         commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
         self._execute_commands(commands, now_ms=now_ms)
 
@@ -853,14 +854,14 @@ class DaemonCore:
                 self._last_paste_ttl_s,
             )
             self._last_paste = None
-            self._transcription_active = False
+            self._session.transcription_outstanding = False
             commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
             self._execute_commands(commands, now_ms=now_ms)
             return
 
         captured = self._last_paste
         lifecycle = self._transform_lifecycle
-        self._transform_active = True
+        self._session.transform_outstanding = True
         logger.info(
             "Trigger Fire: starting Transform on %d-char Last Paste",
             captured.char_count,
@@ -897,12 +898,13 @@ class DaemonCore:
         except queue.Empty:
             return
 
-        if not self._transform_active or not self._transcription_active:
+        session = self._session
+        if not session.transform_outstanding or not session.transcription_outstanding:
             # ESC pressed during transform; discard.
             return
 
-        self._transform_active = False
-        self._transcription_active = False
+        self._session.transform_outstanding = False
+        self._session.transcription_outstanding = False
 
         try:
             if kind == "ok":
@@ -912,8 +914,8 @@ class DaemonCore:
                     len(text),
                     replace_chars,
                 )
-                self._last_text = text
-                self._pending_replace_chars = replace_chars
+                self._session.text_to_paste = text
+                self._session.pending_replace_chars = replace_chars
                 # The model just generated, so it is resident: a follow-up
                 # trigger within keep_alive is "computing", not "loading" (#74).
                 self._llm_warm_until_ms = now_ms + self._llm_keep_alive_ms
@@ -987,17 +989,22 @@ class DaemonCore:
         """
         self._overlay.show_error()
         self._tray.set_idle()
-        self._last_text = None
+        self._session.text_to_paste = None
 
     def _do_paste(self, *, now_ms: int = 0) -> None:
-        replace = self._pending_replace_chars
-        self._pending_replace_chars = 0
+        replace = self._session.pending_replace_chars
+        self._session.pending_replace_chars = 0
 
-        if self._last_text and self._clipboard and self._keystroke and self._foreground:
+        if (
+            self._session.text_to_paste
+            and self._clipboard
+            and self._keystroke
+            and self._foreground
+        ):
             from dictatem.paste.focus_drift import focus_drifted
             from dictatem.paste.pipeline import normalize_pasted_text, paste
 
-            normalized = normalize_pasted_text(self._last_text)
+            normalized = normalize_pasted_text(self._session.text_to_paste)
             current_target_id = self._foreground.capture()
 
             # Focus-drift detect-and-hold (ADR-0026 / #97): for a REGULAR
@@ -1009,12 +1016,12 @@ class DaemonCore:
             # record-start, so it takes the separate paste-time rail just below
             # (#189) rather than this record-start comparison.
             if replace == 0 and focus_drifted(
-                self._record_start_target_id, current_target_id
+                self._session.record_start_target_id, current_target_id
             ):
                 logger.info(
                     "Focus drifted between record-start and paste "
                     "(anchor=%s, now=%s); holding %d-char dictation for recovery",
-                    self._record_start_target_id,
+                    self._session.record_start_target_id,
                     current_target_id,
                     len(normalized),
                 )
@@ -1065,7 +1072,7 @@ class DaemonCore:
 
             try:
                 paste(
-                    self._last_text,
+                    self._session.text_to_paste,
                     clipboard=self._clipboard,
                     keystroke=self._keystroke,
                     foreground=self._foreground,
@@ -1112,30 +1119,26 @@ class DaemonCore:
         else:
             logger.warning(
                 "Paste skipped: text=%r, clipboard=%s, keystroke=%s, foreground=%s",
-                bool(self._last_text),
+                bool(self._session.text_to_paste),
                 self._clipboard is not None,
                 self._keystroke is not None,
                 self._foreground is not None,
             )
         self._overlay.hide()
         self._tray.set_idle()
-        self._last_text = None
+        self._session.text_to_paste = None
 
     def _do_cancel(self) -> None:
-        self._transcription_active = False
-        self._transform_active = False
-        self._pending_replace_chars = 0
+        # Ending the session clears every per-dictation field — including the
+        # record-start anchor, so it can never be consulted stale (#97).
+        self._session.end()
         self._last_paste = None
-        # The anchor is only valid between record-start and its matching paste;
-        # clear it on an aborted dictation so it can never be consulted stale (#97).
-        self._record_start_target_id = None
         try:
             self._audio_capture.stop()
         except Exception:
             logger.exception("Error stopping audio capture during cancel")
         self._overlay.hide()
         self._tray.set_idle()
-        self._last_text = None
 
     def on_tray_preload(self) -> None:
         try:
@@ -1252,7 +1255,7 @@ class DaemonCore:
         try:
             if self._loading_for_transcribe and self._lifecycle.is_loaded:
                 self._loading_for_transcribe = False
-                if self._transcription_active:
+                if self._session.transcription_outstanding:
                     self._overlay.show_transcribing()
             if (
                 self._preload_pill_active
@@ -1327,19 +1330,15 @@ class DaemonCore:
             self.on_hotkey_event(Event.KEY_UP, now_ms=1000)
 
     def _recover_to_idle(self) -> None:
-        self._transcription_active = False
-        self._transform_active = False
-        self._pending_replace_chars = 0
+        self._session.end()  # clears per-dictation fields, incl. the #97 anchor
         self._last_paste = None
-        self._record_start_target_id = None  # stale-anchor guard (#97), see _do_cancel
-        self._sm._state = State.IDLE
+        self._sm.reset()
         try:
             self._audio_capture.stop()
         except Exception:
             logger.exception("Error stopping audio capture during recovery")
         self._overlay.hide()
         self._tray.set_idle()
-        self._last_text = None
 
 
 class _AbortCommandChain(Exception):
