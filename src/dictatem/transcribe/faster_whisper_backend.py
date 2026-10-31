@@ -119,6 +119,9 @@ class FasterWhisperBackend:
         # the transcribe call is byte-for-byte unchanged.
         self._vocabulary = vocabulary or []
         self._recognition_hint: dict[str, str] = {}
+        # Whether the installed faster-whisper takes ``hotwords``; detected at
+        # load time and reused by the confirm pass's command bias (#249).
+        self._supports_hotwords = False
         self._model: object | None = None
         self._progress_callback: Callable[[int, int], None] | None = None
 
@@ -138,9 +141,9 @@ class FasterWhisperBackend:
         )
         # Detect the capability on the actual model instance, then bake the
         # hint kwargs so every transcribe call reuses them.
-        supports = backend_supports_hotwords(self._model.transcribe)  # type: ignore[union-attr]
+        self._supports_hotwords = backend_supports_hotwords(self._model.transcribe)  # type: ignore[union-attr]
         self._recognition_hint = select_recognition_hint(
-            self._vocabulary, supports_hotwords=supports
+            self._vocabulary, supports_hotwords=self._supports_hotwords
         )
         if self._vocabulary:
             hint_kind = next(iter(self._recognition_hint), "none")
@@ -168,6 +171,24 @@ class FasterWhisperBackend:
         download_model(self._model_name)
 
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
+        return self._run(audio, vad_filter=self._vad_filter, hint=self._recognition_hint)
+
+    def transcribe_command(
+        self, audio: AudioChunk, trigger_words: Sequence[str]
+    ) -> TranscriptionResult:
+        """The Borderline confirm pass (#249): command-biased, VAD off.
+
+        The bias replaces the Vocabulary hint for this one call; VAD is off so
+        a clipped onset isn't trimmed further (review §6.3).
+        """
+        from dictatem.transcribe.vocabulary import select_command_bias
+
+        hint = select_command_bias(trigger_words, supports_hotwords=self._supports_hotwords)
+        return self._run(audio, vad_filter=False, hint=hint)
+
+    def _run(
+        self, audio: AudioChunk, *, vad_filter: bool, hint: dict[str, str]
+    ) -> TranscriptionResult:
         if self._model is None:
             return EmptyResult()
 
@@ -175,8 +196,8 @@ class FasterWhisperBackend:
             segments, info = self._model.transcribe(  # type: ignore[union-attr]
                 audio,
                 language=self._language,
-                vad_filter=self._vad_filter,
-                **self._recognition_hint,
+                vad_filter=vad_filter,
+                **hint,
             )
             # ``segments`` is a lazy generator — decoding happens while it is
             # consumed, so an OOM still surfaces inside this ``try``.

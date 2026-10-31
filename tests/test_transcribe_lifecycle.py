@@ -665,3 +665,65 @@ class TestLoadFailureClassification:
         wait_until(lambda: not lc.is_loading)
 
         assert backend.is_loaded is False
+
+
+class TestCommandTranscription:
+    """The one-off command-biased, VAD-off confirm pass (#249).
+
+    Same load and error semantics as the regular transcribe; only the backend
+    call differs (it carries the Trigger Words to bias toward).
+    """
+
+    def test_trigger_words_reach_the_backend_and_the_result_passes_through(
+        self,
+    ) -> None:
+        backend = FakeTranscriberBackend(result="some of us")
+        backend.command_result = "Summarise."
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+
+        result = lc.transcribe_command(AUDIO, ["summarize", "paste"])
+
+        assert result == Transcript("Summarise.")
+        assert backend.command_calls == [(AUDIO, ("summarize", "paste"))]
+        assert backend.transcribe_calls == []
+
+    def test_loads_the_model_on_demand(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        lc.transcribe_command(AUDIO, ["paste"])
+        assert backend.load_count == 1
+
+    def test_load_failure_is_classified_like_transcribe(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.queue_load_error(
+            RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+        )
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+
+        with pytest.raises(ModelLoadError) as info:
+            lc.transcribe_command(AUDIO, ["paste"])
+
+        assert info.value.diagnosis is not None
+        assert info.value.diagnosis.reason is LoadFailureReason.CUDA_MISSING
+
+    def test_empty_text_is_suppressed(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.command_result = " . "
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        assert lc.transcribe_command(AUDIO, ["paste"]) == EmptyResult()
+
+    def test_double_oom_raises_transcription_failed(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.queue_error(GPUOutOfMemoryError("oom"))
+        backend.queue_error(GPUOutOfMemoryError("oom"))
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        with pytest.raises(TranscriptionFailedError):
+            lc.transcribe_command(AUDIO, ["paste"])
+
+    def test_single_oom_is_retried(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.command_result = "paste"
+        backend.queue_error(GPUOutOfMemoryError("oom"))
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        assert lc.transcribe_command(AUDIO, ["paste"]) == Transcript("paste")
+        assert backend.empty_cache_count == 1

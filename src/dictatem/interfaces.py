@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from dictatem.paste.clipboard_snapshot import ClipboardSnapshot
     from dictatem.types import (
@@ -211,6 +211,17 @@ class TranscriberBackend(Protocol):
 
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
         """Transcribe an audio chunk and return the result."""
+        ...
+
+    def transcribe_command(
+        self, audio: AudioChunk, trigger_words: Sequence[str]
+    ) -> TranscriptionResult:
+        """One-off command-biased, VAD-off transcription (the confirm pass, #249).
+
+        Biased toward *trigger_words* for this call only (the persistent
+        Vocabulary hint is not applied), with VAD disabled so a clipped onset
+        isn't trimmed further.
+        """
         ...
 
     def empty_cache(self) -> None:

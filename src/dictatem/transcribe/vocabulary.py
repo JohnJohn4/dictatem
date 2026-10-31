@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +89,26 @@ def select_recognition_hint(
     if supports_hotwords:
         return {"hotwords": joined}
     return {"initial_prompt": joined}
+
+
+def select_command_bias(
+    trigger_words: Iterable[str], *, supports_hotwords: bool
+) -> dict[str, str]:
+    """The one-off command bias for a Borderline confirm pass (#249). PURE.
+
+    A sentence-like ``initial_prompt`` naming each Trigger Word as its own
+    one-word sentence (``"Summarize. Paste."``) — the shape a heard command
+    takes — plus ``hotwords`` when the backend supports it. Used for the
+    confirm pass only; regular dictation and the persistent Vocabulary hint
+    are never biased by it. An empty lexicon yields ``{}``.
+    """
+    words = [w.strip() for w in trigger_words if w.strip()]
+    if not words:
+        return {}
+    hint = {"initial_prompt": " ".join(f"{w[0].upper()}{w[1:]}." for w in words)}
+    if supports_hotwords:
+        hint["hotwords"] = " ".join(words)
+    return hint
 
 
 def load_vocabulary(path: Path) -> list[str]:

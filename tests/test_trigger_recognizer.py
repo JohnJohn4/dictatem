@@ -337,6 +337,111 @@ class TestFuzzyEscapeHatch:
         assert _prompt(_fuzzy_decide("polish", fuzzy_matching=False)) == POLISH
 
 
+# --- Confirm pass (#249) ---------------------------------------------------
+
+UNSURE = SegmentConfidence(avg_logprob=-1.8, no_speech_prob=0.05)
+
+
+def _borderline(
+    rec: TriggerWordRecognizer,
+    text: str,
+    confidence: SegmentConfidence | None = CONFIDENT,
+) -> Borderline:
+    utt = Utterance(text=text, speech_duration_s=0.8, confidence=confidence)
+    decision = rec.decide(utt, transforms_armed=True)
+    assert isinstance(decision, Borderline), text
+    return decision
+
+
+def _confirm(
+    rec: TriggerWordRecognizer,
+    borderline: Borderline,
+    heard: str,
+    confidence: SegmentConfidence | None = CONFIDENT,
+) -> object:
+    utt = Utterance(text=heard, speech_duration_s=0.8, confidence=confidence)
+    return rec.confirm(borderline, utt, transforms_armed=True)
+
+
+class TestConfirm:
+    """A Borderline gets one command-biased listen; it fires only a candidate."""
+
+    def test_some_of_us_then_summarise_fires_summarize(self) -> None:
+        rec = TriggerWordRecognizer(DEFAULT_ALIASES)
+        first = _borderline(rec, "some of us")
+        assert _prompt(_confirm(rec, first, "Summarise.")) == SUMMARIZE
+
+    def test_a_different_alias_of_the_candidate_action_fires(self) -> None:
+        # Candidates are compared by action, not by the alias that scored.
+        rec = TriggerWordRecognizer(DEFAULT_ALIASES)
+        first = _borderline(rec, "some of us")
+        assert _prompt(_confirm(rec, first, "summarize")) == SUMMARIZE
+        assert _prompt(_confirm(rec, first, "summerise")) == SUMMARIZE
+
+    def test_exact_match_for_a_different_action_stays_borderline(self) -> None:
+        rec = TriggerWordRecognizer(DEFAULT_ALIASES)
+        first = _borderline(rec, "some of us")
+        assert _confirm(rec, first, "paste") == first
+        assert _confirm(rec, first, "polish") == first
+
+    def test_strong_confident_match_for_a_different_action_stays_borderline(
+        self,
+    ) -> None:
+        rec = TriggerWordRecognizer(DEFAULT_ALIASES)
+        first = _borderline(rec, "some of us")
+        assert _confirm(rec, first, "haste") == first
+
+    @pytest.mark.parametrize("heard", ["some of us", "hello there", "summarize this"])
+    def test_no_better_hearing_stays_borderline(self, heard: str) -> None:
+        rec = TriggerWordRecognizer(DEFAULT_ALIASES)
+        first = _borderline(rec, "some of us")
+        assert _confirm(rec, first, heard) == first
+
+    def test_unconfident_strong_confirm_stays_borderline(self) -> None:
+        rec = TriggerWordRecognizer(DEFAULT_ALIASES)
+        first = _borderline(rec, "haste", confidence=UNSURE)
+        assert _confirm(rec, first, "Haste.", confidence=UNSURE) == first
+
+    def test_unconfident_strong_then_confident_confirm_fires(self) -> None:
+        rec = TriggerWordRecognizer(DEFAULT_ALIASES)
+        first = _borderline(rec, "haste", confidence=UNSURE)
+        assert _fires_paste(_confirm(rec, first, "Paste."))
+
+    def test_cross_action_tie_resolves_to_the_confirmed_candidate(self) -> None:
+        rec = TriggerWordRecognizer({"rewrite": "rewrite body", "rewrote": "rewrote body"})
+        first = _borderline(rec, "rewrute")
+        assert len(first.candidates) == 2
+        assert _prompt(_confirm(rec, first, "Rewrote.")) == "rewrote body"
+
+    def test_paste_alias_confirms_a_paste_candidate(self) -> None:
+        rec = TriggerWordRecognizer(DEFAULT_ALIASES, paste_aliases=["glue"])
+        first = _borderline(rec, "haste", confidence=UNSURE)
+        assert _fires_paste(_confirm(rec, first, "Glue."))
+
+
+class TestTriggerWords:
+    """The lexicon the confirm pass's command bias names (#249)."""
+
+    def test_armed_lists_builtins_paste_aliases_and_transform_aliases(self) -> None:
+        rec = TriggerWordRecognizer(DEFAULT_ALIASES, paste_aliases=["glue"])
+        assert rec.trigger_words(transforms_armed=True) == [
+            "glue",
+            "paste",
+            "summarize",
+            "summarise",
+            "polish",
+            "cleanup",
+        ]
+
+    def test_unarmed_lists_only_the_builtins(self) -> None:
+        rec = TriggerWordRecognizer(DEFAULT_ALIASES, paste_aliases=["glue"])
+        assert rec.trigger_words(transforms_armed=False) == ["glue", "paste"]
+
+    def test_shadowed_prompt_file_alias_is_not_listed_twice(self) -> None:
+        rec = TriggerWordRecognizer({"paste": "x", "polish": POLISH})
+        assert rec.trigger_words(transforms_armed=True) == ["paste", "polish"]
+
+
 class TestPasteAliases:
     """User-declared aliases for the built-in `paste` action (#250)."""
 

@@ -137,7 +137,9 @@ class Borderline:
     A weak fuzzy match, a strong match the model was unconfident about, or a
     tie between different actions. ``candidates`` are the near-miss targets,
     best first, one per action; ``band`` is the best candidate's score band.
-    The daemon pastes nothing and flashes "say again" (ADR-0028).
+    The daemon runs one command-biased confirm pass (:meth:`TriggerWordRecognizer.
+    confirm`, #249); if that doesn't confirm a candidate it pastes nothing and
+    flashes "say again" (ADR-0028).
     """
 
     candidates: tuple[TriggerTarget, ...]
@@ -212,6 +214,37 @@ class TriggerWordRecognizer:
         if self._fuzzy_matching:
             return self._decide_fuzzy(utterance, transforms_armed=transforms_armed)
         return Dictation()
+
+    def confirm(
+        self, borderline: Borderline, utterance: Utterance, *, transforms_armed: bool
+    ) -> Fire | Borderline:
+        """Judge the command-biased confirm pass of a Borderline (#249).
+
+        Fires only when the confirm pass is an exact or strong-confident match
+        for the *same action* as one of the Borderline's candidates (any Alias
+        of it — candidates are compared by action, not by the Alias that
+        scored). Anything else — a match for a different action, another
+        Borderline, plain dictation — returns *borderline* unchanged, so the
+        daemon flashes say-again as before.
+        """
+        decision = self.decide(utterance, transforms_armed=transforms_armed)
+        if isinstance(decision, Fire) and _action_of(decision.target) in {
+            _action_of(c) for c in borderline.candidates
+        }:
+            return decision
+        return borderline
+
+    def trigger_words(self, *, transforms_armed: bool) -> list[str]:
+        """The Aliases the confirm pass biases toward (#249).
+
+        Built-in words and ``paste`` aliases always; Prompt File Aliases only
+        when Transforms are armed (an unarmed Transform can't be a candidate),
+        minus any shadowed by a built-in.
+        """
+        words = sorted(self._builtin_aliases)
+        if transforms_armed:
+            words += [a for a in self._transforms if a not in self._builtin_aliases]
+        return words
 
     def _decide_fuzzy(self, utterance: Utterance, *, transforms_armed: bool) -> TriggerDecision:
         """The fuzzy tier (#247): short utterances that *sound like* an Alias.
