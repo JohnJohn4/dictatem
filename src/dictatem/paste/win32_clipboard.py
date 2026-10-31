@@ -1,20 +1,62 @@
-"""Win32 clipboard adapter — requires pywin32."""
+"""Win32 clipboard adapter — requires pywin32.
+
+``save``/``restore`` round-trip a full-format Clipboard Snapshot (#243): every
+format ``EnumClipboardFormats`` offers is classified
+(``win32_clipboard_formats``), sized, run through the pure Clipboard Capture
+Plan (``clipboard_snapshot``), and the planned ones are copied out as raw
+HGLOBAL bytes. Restore writes the bytes back in the same order through fresh
+``GlobalAlloc`` blocks — never through pywin32's ``SetClipboardData(fmt,
+bytes)``, which mistakes digit-like bytes such as ``b"12345"`` for a handle.
+"""
 
 from __future__ import annotations
 
+import ctypes
 import logging
+import time
 from contextlib import contextmanager
+from ctypes import wintypes
 from typing import TYPE_CHECKING
 
 import pywintypes  # type: ignore[import-untyped]
 import win32clipboard  # type: ignore[import-untyped]
 
 from dictatem.paste.clipboard_markers import apply_exclusion_markers
+from dictatem.paste.clipboard_snapshot import (
+    SNAPSHOT_SIZE_CAP_BYTES,
+    ClipboardSnapshot,
+    FormatKind,
+    OfferedFormat,
+    plan_capture,
+)
+from dictatem.paste.win32_clipboard_formats import (
+    STANDARD_FORMAT_NAMES,
+    classify_win32_formats,
+    is_text_format,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Hashable, Iterator
 
 logger = logging.getLogger(__name__)
+
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+_kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+_kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+_kernel32.GlobalFree.restype = wintypes.HGLOBAL
+_kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+_kernel32.GlobalLock.restype = ctypes.c_void_p
+_kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+_kernel32.GlobalUnlock.restype = wintypes.BOOL
+_kernel32.GlobalSize.argtypes = [wintypes.HGLOBAL]
+_kernel32.GlobalSize.restype = ctypes.c_size_t
+_GMEM_MOVEABLE = 0x0002
+
+# Sizing a format makes a delayed-render owner (e.g. Excel) render it, which can
+# be slow. Past this budget the remaining non-text formats go unmeasured, and the
+# Capture Plan falls back to text-only rather than stall the paste.
+_PROBE_BUDGET_S = 0.5
 
 
 @contextmanager
@@ -42,7 +84,68 @@ def _contention_as_oserror() -> Iterator[None]:
         raise OSError(f"win32 clipboard contention: {exc}") from exc
 
 
+def _format_name(fid: int) -> str:
+    name = STANDARD_FORMAT_NAMES.get(fid)
+    if name is not None:
+        return name
+    try:
+        return str(win32clipboard.GetClipboardFormatName(fid))
+    except pywintypes.error:
+        return f"format {fid}"
+
+
+def _enumerate_formats() -> list[int]:
+    ids: list[int] = []
+    fid = 0
+    while fid := win32clipboard.EnumClipboardFormats(fid):
+        ids.append(fid)
+    return ids
+
+
+def _global_handle(fid: int) -> int | None:
+    """The format's HGLOBAL, or None if it has none to read."""
+    try:
+        handle = int(win32clipboard.GetClipboardDataHandle(fid))
+    except pywintypes.error:
+        return None  # e.g. a delayed-render owner that failed to render
+    return handle or None
+
+
+def _read_global(handle: int, size: int) -> bytes | None:
+    ptr = _kernel32.GlobalLock(handle)
+    if not ptr:
+        return None
+    try:
+        return ctypes.string_at(ptr, size)
+    finally:
+        _kernel32.GlobalUnlock(handle)
+
+
+def _write_global(fid: int, data: bytes) -> None:
+    """``SetClipboardData`` *data* as a fresh HGLOBAL (clipboard must be open)."""
+    handle = _kernel32.GlobalAlloc(_GMEM_MOVEABLE, max(len(data), 1))
+    if not handle:
+        msg = f"GlobalAlloc failed for {len(data)} bytes"
+        raise MemoryError(msg)
+    ptr = _kernel32.GlobalLock(handle)
+    if not ptr:
+        _kernel32.GlobalFree(handle)
+        msg = "GlobalLock failed"
+        raise MemoryError(msg)
+    ctypes.memmove(ptr, data, len(data))
+    _kernel32.GlobalUnlock(handle)
+    try:
+        win32clipboard.SetClipboardData(fid, handle)
+    except pywintypes.error:
+        # The system takes ownership of the block only on success.
+        _kernel32.GlobalFree(handle)
+        raise
+
+
 class Win32ClipboardIO:
+    def __init__(self, *, snapshot_cap_bytes: int = SNAPSHOT_SIZE_CAP_BYTES) -> None:
+        self._snapshot_cap_bytes = snapshot_cap_bytes
+
     def open(self) -> None:
         with _contention_as_oserror():
             win32clipboard.OpenClipboard()
@@ -51,16 +154,47 @@ class Win32ClipboardIO:
         with _contention_as_oserror():
             win32clipboard.CloseClipboard()
 
-    def save(self) -> str | None:
+    def save(self) -> ClipboardSnapshot:
         with _contention_as_oserror():
             win32clipboard.OpenClipboard()
             try:
-                data = win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT)
-                return str(data) if data else None
-            except TypeError:
-                return None
+                return self._capture()
             finally:
                 win32clipboard.CloseClipboard()
+
+    def _capture(self) -> ClipboardSnapshot:
+        # Clipboard is open. Classify -> size -> plan -> copy the planned bytes.
+        deadline = time.monotonic() + _PROBE_BUDGET_S
+        offered: list[OfferedFormat] = []
+        blocks: dict[Hashable, tuple[int, int]] = {}
+        ids = _enumerate_formats()
+        names = {fid: _format_name(fid) for fid in ids}
+        for fid, base_kind in classify_win32_formats(ids, names=names):
+            kind = base_kind
+            size: int | None = None
+            if kind is FormatKind.MEMORY and (is_text_format(fid) or time.monotonic() < deadline):
+                handle = _global_handle(fid)
+                size = int(_kernel32.GlobalSize(handle)) if handle else 0
+                if handle and size:
+                    blocks[fid] = (handle, size)
+                else:
+                    # No memory block behind it after all: not capturable.
+                    kind, size = FormatKind.HANDLE, None
+            offered.append(OfferedFormat(fid, names[fid], kind, size, is_text_format(fid)))
+
+        plan = plan_capture(offered, cap_bytes=self._snapshot_cap_bytes)
+        if plan.warning:
+            logger.warning(plan.warning)
+
+        entries: list[tuple[Hashable, bytes]] = []
+        for fmt in plan.capture:
+            handle, size = blocks[fmt.format_id]
+            data = _read_global(handle, size)
+            if data is None:
+                logger.warning("Could not read clipboard format %s; not preserved", fmt.name)
+                continue
+            entries.append((fmt.format_id, data))
+        return ClipboardSnapshot(entries=tuple(entries))
 
     def copy(self, text: str) -> None:
         # A normal, persistent copy for the tray "Copy last dictation" item: it
@@ -86,13 +220,25 @@ class Win32ClipboardIO:
         # (ADR-0023 / #138). The caller already holds the clipboard open.
         self._apply_exclusion_markers()
 
-    def restore(self, saved: str | None) -> None:
+    def restore(self, saved: ClipboardSnapshot) -> None:
         with _contention_as_oserror():
             win32clipboard.OpenClipboard()
             try:
                 win32clipboard.EmptyClipboard()
-                if saved is not None:
-                    win32clipboard.SetClipboardData(win32clipboard.CF_UNICODETEXT, saved)
+                for fid, data in saved.entries:
+                    # This adapter's own snapshots only ever hold int format ids.
+                    fmt = int(fid)  # type: ignore[call-overload]
+                    try:
+                        _write_global(fmt, data)
+                    except (pywintypes.error, MemoryError):
+                        # One bad format must not cost the user the rest.
+                        logger.warning(
+                            "Could not restore clipboard format %s (%d bytes)",
+                            _format_name(fmt),
+                            len(data),
+                            exc_info=True,
+                        )
+                if not saved.is_empty:
                     # Mark the restore too: re-writing the user's original would
                     # otherwise leave a duplicate entry in Win+V — the second half
                     # of the clutter the markers fix (ADR-0023 / #138).

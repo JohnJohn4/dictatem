@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 
 class FakeTransformBackend:
     def __init__(self, result: str = "fake transform output") -> None:
@@ -13,9 +15,14 @@ class FakeTransformBackend:
         self.availability_checks: int = 0
         self._warm_result: bool = True
         self._available: bool = True
+        # A gate so a test can hold transform() open mid-flight (F-6 / #235)
+        # and cancel the Trigger Fire while its Transform is still running.
+        self._transform_gate = threading.Event()
+        self._transform_gate.set()
 
     def transform(self, text: str, system_prompt: str) -> str:
         self.calls.append((text, system_prompt))
+        self._transform_gate.wait()
         if self._errors:
             raise self._errors.pop(0)
         if self._results:
@@ -47,3 +54,15 @@ class FakeTransformBackend:
     def queue_error(self, error: Exception) -> None:
         """Queue an exception to raise on the next transform() call."""
         self._errors.append(error)
+
+    def block_transform(self) -> None:
+        """Make transform() calls block until release_transform() (#235).
+
+        calls is appended on entry, so a test can confirm the Transform is in
+        flight while it is parked.
+        """
+        self._transform_gate.clear()
+
+    def release_transform(self) -> None:
+        """Release a transform() call parked by block_transform()."""
+        self._transform_gate.set()

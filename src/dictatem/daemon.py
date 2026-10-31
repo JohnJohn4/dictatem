@@ -432,7 +432,12 @@ class DaemonCore:
         self._builtin_action_handlers: dict[str, Callable[..., None]] = {
             PASTE_ACTION: self._handle_paste_action,
         }
-        self._transcription_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        # Worker results are tagged with the Dictation Session epoch they were
+        # started under: ``(epoch, kind, data)``. The drain drops any result from
+        # an older epoch — a cancelled dictation's late result (F-6 / #235).
+        self._transcription_queue: queue.Queue[tuple[int, str, object]] = (
+            queue.Queue()
+        )
         self._transcription_thread: threading.Thread | None = None
         # --- Trigger Words / Transform state (see CONTEXT.md) ---
         self._transform_lifecycle = transform_lifecycle
@@ -446,7 +451,7 @@ class DaemonCore:
         # "computing" rather than "loading" (#74).
         self._llm_keep_alive_ms = int(llm_keep_alive_s * 1000)
         self._last_paste: LastPaste | None = None
-        self._transform_queue: queue.Queue[tuple[str, object]] = queue.Queue()
+        self._transform_queue: queue.Queue[tuple[int, str, object]] = queue.Queue()
         self._transform_thread: threading.Thread | None = None
         # --- Model-loading overlay state (#74) ---
         # _loading_for_transcribe: a first-tap cold load is showing the "Model
@@ -680,34 +685,32 @@ class DaemonCore:
             return
 
         self._session.transcription_outstanding = True
+        # The worker's result is tagged with this epoch, so a cancel (which
+        # bumps it) makes the result stale before it can land (F-6 / #235).
+        epoch = self._session.epoch
 
         from dictatem.types import SAMPLE_RATE
 
+        audio_duration_s = len(audio) / SAMPLE_RATE  # type: ignore[arg-type]
+        # The latency sample is opened here and closed in the drain — both on
+        # the GUI thread — and only for a current-epoch result, so a cancelled
+        # run (whose worker still finishes, ADR-0016) can neither fire nor skew
+        # the "transcriptions are slow" tip, even when it overlaps a new run.
+        if self._latency_monitor is not None:
+            self._latency_monitor.begin()
+
         def _worker(captured_audio: object) -> None:
-            # Only one transcription runs at a time (the state machine gates
-            # it), so the worker thread can safely drive the LatencyMonitor.
-            audio_duration_s = len(captured_audio) / SAMPLE_RATE  # type: ignore[arg-type]
-            if self._latency_monitor is not None:
-                self._latency_monitor.begin()
+            q = self._transcription_queue
             try:
                 result = self._lifecycle.transcribe(captured_audio)  # type: ignore[arg-type]
             except TranscriptionFailedError:
-                self._transcription_queue.put(("transcription_failed", None))
+                q.put((epoch, "transcription_failed", None))
             except ModelLoadError as exc:
-                self._transcription_queue.put(("model_error", exc))
+                q.put((epoch, "model_error", exc))
             except Exception as exc:
-                self._transcription_queue.put(("unexpected_error", exc))
+                q.put((epoch, "unexpected_error", exc))
             else:
-                self._transcription_queue.put(("ok", result))
-                # One-shot "transcriptions are slow" tip (see ADR-0007):
-                # surface ONE smaller-model hint when slowness is consistent.
-                # Notifications must run on the Qt GUI thread, so route the
-                # tip through the result queue rather than calling the tray
-                # from this worker thread.
-                if self._latency_monitor is not None and (
-                    self._latency_monitor.end(audio_duration_s)
-                ):
-                    self._transcription_queue.put(("latency_tip", None))
+                q.put((epoch, "ok", (result, audio_duration_s)))
 
         t = threading.Thread(
             target=_worker, args=(audio,), daemon=True, name="transcribe-worker"
@@ -721,26 +724,15 @@ class DaemonCore:
         Called on every 50 ms tick so the Qt event loop stays responsive
         while faster-whisper runs on the worker thread.
         """
-        try:
-            kind, data = self._transcription_queue.get_nowait()
-        except queue.Empty:
+        item = self._next_current_result(self._transcription_queue, "transcription")
+        if item is None:
             return
-
-        # The one-shot latency tip (see ADR-0007) is enqueued AFTER the "ok"
-        # result, so by the time it is drained on a later tick the ok result
-        # has already cleared ``transcription_outstanding``. Handle it here, before
-        # the guard, so it is not silently discarded.
-        if kind == "latency_tip":
-            self._tray.show_notification(
-                "Dictatem",
-                "Transcriptions are slow — switching to a smaller model may "
-                "help. See the README.",
-            )
-            return
+        kind, data = item
 
         if not self._session.transcription_outstanding:
-            return  # ESC was pressed before result arrived — discard
+            return  # belt-and-braces: nothing is awaiting this result
 
+        latency_tip = False
         try:
             if kind == "transcription_failed":
                 self._session.transcription_outstanding = False
@@ -752,11 +744,19 @@ class DaemonCore:
                 self._recover_to_idle()
             elif kind == "model_error":
                 self._session.transcription_outstanding = False
-                logger.error("Model unavailable; check log", exc_info=data)  # type: ignore[arg-type]
-                self._tray.show_notification(
-                    "Model Unavailable",
-                    "Model unavailable; check log",
+                # The lifecycle attaches the pure classifier's diagnosis (#241).
+                diagnosis = getattr(data, "diagnosis", None)
+                reason = diagnosis.reason.name if diagnosis is not None else "UNKNOWN"
+                logger.error(
+                    "Model load failed (reason=%s)", reason, exc_info=data  # type: ignore[arg-type]
                 )
+                if diagnosis is not None:
+                    self._tray.show_notification(diagnosis.title, diagnosis.message)
+                else:
+                    self._tray.show_notification(
+                        "Model Unavailable",
+                        "Model unavailable; check log",
+                    )
                 self._recover_to_idle()
             elif kind == "unexpected_error":
                 self._session.transcription_outstanding = False
@@ -767,7 +767,12 @@ class DaemonCore:
                 )
                 self._recover_to_idle()
             else:
-                result = data
+                result, audio_duration_s = data  # type: ignore[misc]
+                # One-shot "transcriptions are slow" tip (see ADR-0007): close
+                # the latency sample opened in _do_transcribe. The tip itself
+                # is shown in ``finally`` so it never precedes the paste.
+                if self._latency_monitor is not None:
+                    latency_tip = self._latency_monitor.end(audio_duration_s)
                 if isinstance(result, EmptyResult):
                     self._session.transcription_outstanding = False
                     logger.info("Transcription produced empty result")
@@ -808,6 +813,41 @@ class DaemonCore:
         except Exception:
             logger.error("Unhandled error processing transcription result", exc_info=True)
             self._recover_to_idle()
+        finally:
+            if latency_tip:
+                self._tray.show_notification(
+                    "Dictatem",
+                    "Transcriptions are slow — switching to a smaller model may "
+                    "help. See the README.",
+                )
+
+    def _next_current_result(
+        self, q: queue.Queue[tuple[int, str, object]], source: str
+    ) -> tuple[str, object] | None:
+        """Pop the next result from *q* that belongs to the current session.
+
+        A result tagged with an older epoch comes from a cancelled dictation
+        whose worker ran to completion in the background (ADR-0016). It is
+        dropped with no side effects — no paste, notification, state-machine
+        event, or latency sample (F-6 / #235) — and the drain moves on, so a
+        stale result never delays the current one by a tick. Only the source
+        and result *kind* are logged, never content (S-2 / #188).
+        """
+        while True:
+            try:
+                epoch, kind, data = q.get_nowait()
+            except queue.Empty:
+                return None
+            if epoch == self._session.epoch:
+                return kind, data
+            logger.info(
+                "Dropping stale %s result (%s) from a cancelled dictation "
+                "(epoch %d, current %d)",
+                source,
+                kind,
+                epoch,
+                self._session.epoch,
+            )
 
     def _apply_replacements(self, text: str) -> str:
         """Apply deterministic Replacements to regular-dictation *text* (#125).
@@ -901,6 +941,9 @@ class DaemonCore:
         captured = self._last_paste
         lifecycle = self._transform_lifecycle
         self._session.transform_outstanding = True
+        # Same epoch as the transcription that fired it; a cancel mid-Transform
+        # bumps the session, so the late output is dropped at drain (#235).
+        epoch = self._session.epoch
         logger.info(
             "Trigger Fire: starting Transform on %d-char Last Paste",
             captured.char_count,
@@ -915,14 +958,15 @@ class DaemonCore:
             self._overlay.show_loading("Loading LLM Model")
 
         def _worker() -> None:
+            q = self._transform_queue
             try:
                 out = lifecycle.transform(captured.text, prompt)
             except TransformFailedError as exc:
-                self._transform_queue.put(("transform_failed", exc))
+                q.put((epoch, "transform_failed", exc))
             except Exception as exc:
-                self._transform_queue.put(("transform_unexpected", exc))
+                q.put((epoch, "transform_unexpected", exc))
             else:
-                self._transform_queue.put(("ok", (out, captured.char_count)))
+                q.put((epoch, "ok", (out, captured.char_count)))
 
         t = threading.Thread(
             target=_worker, daemon=True, name="transform-worker"
@@ -932,15 +976,14 @@ class DaemonCore:
 
     def check_transform_result(self, *, now_ms: int = 0) -> None:
         """Drain the transform result queue and feed the SM the deferred event."""
-        try:
-            kind, data = self._transform_queue.get_nowait()
-        except queue.Empty:
+        item = self._next_current_result(self._transform_queue, "transform")
+        if item is None:
             return
+        kind, data = item
 
         session = self._session
         if not session.transform_outstanding or not session.transcription_outstanding:
-            # ESC pressed during transform; discard.
-            return
+            return  # belt-and-braces: nothing is awaiting this result
 
         self._session.transform_outstanding = False
         self._session.transcription_outstanding = False
@@ -2072,6 +2115,9 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     )
     lifecycle = TranscribeLifecycle(
         backend=backend,
+        model_name=effective_model,
+        device=effective_device,
+        compute_type=effective_compute_type,
         idle_timeout_s=config.model.idle_unload_minutes * 60,
         min_transcription_chars=config.model.min_transcription_chars,
     )

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from dictatem.paste.clipboard_snapshot import ClipboardSnapshot
     from dictatem.types import (
         AudioChunk,
         HardwareProfile,
@@ -37,16 +38,25 @@ class ClipboardIO(Protocol):
         """Release exclusive clipboard access."""
         ...
 
-    def save(self) -> str | None:
-        """Save the current clipboard text content. Returns None if empty."""
+    def save(self) -> ClipboardSnapshot:
+        """Capture the current clipboard as an opaque Clipboard Snapshot.
+
+        Every format the Clipboard Capture Plan deems safely capturable (text,
+        images, file drops, HTML/RTF …), within its size cap; over the cap only
+        text. An empty clipboard gives an empty snapshot. Callers pass the
+        snapshot back to :meth:`restore` untouched (#243).
+        """
         ...
 
     def set_text(self, text: str) -> None:
         """Place *text* on the clipboard."""
         ...
 
-    def restore(self, saved: str | None) -> None:
-        """Restore previously saved clipboard content.
+    def restore(self, saved: ClipboardSnapshot) -> None:
+        """Write a snapshot from :meth:`save` back, every format in order.
+
+        A clipboard-history-excluded write (ADR-0023); an empty snapshot leaves
+        the clipboard empty.
 
         Like :meth:`open`, raises ``OSError`` on contention — the deferred restore
         races the target's paste handler, and the pipeline swallows it (#145/#23).

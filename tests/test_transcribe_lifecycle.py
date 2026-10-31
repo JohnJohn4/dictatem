@@ -8,8 +8,13 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pytest
 
-from dictatem.exceptions import GPUOutOfMemoryError, TranscriptionFailedError
+from dictatem.exceptions import (
+    GPUOutOfMemoryError,
+    ModelLoadError,
+    TranscriptionFailedError,
+)
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
+from dictatem.transcribe.load_failure import LoadFailureReason
 from dictatem.types import EmptyResult
 from tests.fakes import FakeTranscriberBackend
 from tests.support import wait_until
@@ -575,3 +580,67 @@ class TestUnloadDuringTranscription:
         assert len(errors) == 1
         assert backend.is_loaded is False
         assert backend.unload_count == 1
+
+
+class TestLoadFailureClassification:
+    """A load failure is wrapped in a classified ModelLoadError (#241)."""
+
+    def _lifecycle(self, backend: FakeTranscriberBackend) -> TranscribeLifecycle:
+        return TranscribeLifecycle(
+            backend=backend,
+            clock=lambda: 0.0,
+            model_name="large-v3-turbo",
+            device="cuda",
+            compute_type="float16",
+        )
+
+    def test_load_error_is_wrapped_with_cause_and_diagnosis(self) -> None:
+        backend = FakeTranscriberBackend()
+        original = RuntimeError(
+            "Library cublas64_12.dll is not found or cannot be loaded"
+        )
+        backend.queue_load_error(original)
+        lc = self._lifecycle(backend)
+
+        with pytest.raises(ModelLoadError) as info:
+            lc.transcribe(AUDIO)
+
+        assert info.value.__cause__ is original
+        assert info.value.diagnosis is not None
+        assert info.value.diagnosis.reason is LoadFailureReason.CUDA_MISSING
+
+    def test_configured_values_reach_the_message(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.queue_load_error(
+            ValueError("Invalid model size 'large-v9', expected one of: tiny")
+        )
+        lc = TranscribeLifecycle(
+            backend=backend, clock=lambda: 0.0, model_name="large-v9"
+        )
+
+        with pytest.raises(ModelLoadError) as info:
+            lc.transcribe(AUDIO)
+
+        assert info.value.diagnosis is not None
+        assert "large-v9" in info.value.diagnosis.message
+
+    def test_failed_load_is_retried_on_next_transcribe(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.queue_load_error(RuntimeError("CUDA failed with error out of memory"))
+        lc = self._lifecycle(backend)
+
+        with pytest.raises(ModelLoadError):
+            lc.transcribe(AUDIO)
+        lc.transcribe(AUDIO)
+
+        assert backend.is_loaded is True
+
+    def test_background_load_failure_stays_log_only(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.queue_load_error(RuntimeError("Library cudnn64_9.dll is not found"))
+        lc = self._lifecycle(backend)
+
+        lc.preload()  # best-effort: must not raise
+        wait_until(lambda: not lc.is_loading)
+
+        assert backend.is_loaded is False

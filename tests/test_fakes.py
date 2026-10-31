@@ -43,7 +43,7 @@ class TestFakeClipboardIO:
         saved = clip.save()
         clip.set_text("overwritten")
         clip.restore(saved)
-        assert clip.save() == "hello"
+        assert clip.text == "hello"
 
     def test_records_calls(self) -> None:
         clip = FakeClipboardIO()
