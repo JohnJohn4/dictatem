@@ -80,6 +80,9 @@ packages = ["src/dictatem"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "real_engine: runs a real transcription engine; opt-in via DICTATEM_REAL_ENGINES=1 (see tests/test_transcriber_contract.py)",
+]
 
 [tool.ruff]
 src = ["src", "tests"]

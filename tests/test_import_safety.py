@@ -52,6 +52,7 @@ DICTATEM_MODULES = [
     "dictatem.audio.resampler",
     "dictatem.transcribe",
     "dictatem.transcribe.lifecycle",
+    "dictatem.transcribe.backend_selection",
     "dictatem.overlay.state",
     "dictatem.tray",
     "dictatem.tray.state",

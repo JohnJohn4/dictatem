@@ -1825,7 +1825,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     from dictatem.overlay.qt_widget import QtOverlayWidget
     from dictatem.overlay.state import OverlayState
     from dictatem.state import StateMachine
-    from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
+    from dictatem.transcribe.backend_selection import build_transcriber, select_backend
     from dictatem.transcribe.latency_monitor import LatencyMonitor
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
     from dictatem.transcribe.replacements import (
@@ -1922,9 +1922,19 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # effective.transform_model: the Transform/Ollama model is independent of
     # CUDA and reconcile carries the CPU tier's tag in the fallback case purely
     # as a side effect of returning the whole row (see ADR-0009).
-    effective_model = effective.model
-    effective_device = effective.device
-    effective_compute_type = effective.compute_type
+    # Pick the transcription engine for the effective device (#229): cuda/cpu
+    # run faster-whisper, mlx is the Apple-GPU engine (#224), and an unknown
+    # device string warns and runs the CPU row for this session.
+    selection = select_backend(
+        device=effective.device,
+        model=effective.model,
+        compute_type=effective.compute_type,
+    )
+    if selection.warning is not None:
+        logger.warning("%s", selection.warning)
+    effective_model = selection.model
+    effective_device = selection.device
+    effective_compute_type = selection.compute_type
 
     logging.getLogger().setLevel(
         getattr(logging, config.logging.level.upper(), logging.INFO)
@@ -1996,10 +2006,8 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     vocabulary = load_vocabulary(dictatem_dir / "vocabulary.md")
     replacements = load_replacements(dictatem_dir / "replacements.md")
 
-    backend = FasterWhisperBackend(
-        model_name=effective_model,
-        compute_type=effective_compute_type,
-        device=effective_device,
+    backend = build_transcriber(
+        selection,
         language=config.model.language,
         vad_filter=config.model.vad_filter,
         vocabulary=vocabulary,
