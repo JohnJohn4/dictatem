@@ -6,7 +6,8 @@ It wraps a *primary* backend (the Apple-GPU MLX backend in production) and a
 itself a :class:`~dictatem.interfaces.TranscriberBackend`.
 
 If the primary fails to load (a Metal or import error, corrupt weights, missing
-weights while offline, an unknown model name), or fails while transcribing, the
+weights while offline, an unknown model name), or fails while transcribing
+(either a regular pass or the confirm pass's ``transcribe_command``), the
 composite:
 
 - logs one warning naming the cause,
@@ -33,7 +34,7 @@ import threading
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from dictatem.hardware.resolver import RuntimeFallbackReason
     from dictatem.interfaces import TranscriberBackend
@@ -88,6 +89,18 @@ class FallbackTranscriber:
                 # just spoke is never lost to an engine failure.
                 self._fallback_backend().load_model()
         return self._fallback_backend().transcribe(audio)
+
+    def transcribe_command(
+        self, audio: AudioChunk, trigger_words: Sequence[str]
+    ) -> TranscriptionResult:
+        """The confirm pass (#249), with the same fall-back-and-retry as transcribe."""
+        if not self._fell_back:
+            try:
+                return self._primary.transcribe_command(audio, trigger_words)
+            except Exception as exc:
+                self._latch(exc, "mlx-transcribe-failed")
+                self._fallback_backend().load_model()
+        return self._fallback_backend().transcribe_command(audio, trigger_words)
 
     def unload_model(self) -> None:
         backend = self._built_backend()

@@ -26,14 +26,16 @@ import numpy as np
 
 from dictatem.transcribe.mlx_models import (
     keep_speech,
+    mlx_command_bias,
     mlx_recognition_hint,
     mlx_repo_for,
     normalise_mlx_compute_type,
+    transcript_from_mlx_result,
 )
-from dictatem.types import EmptyResult
+from dictatem.types import EmptyResult, Transcript
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from dictatem.types import AudioChunk, TranscriptionResult
 
@@ -104,7 +106,24 @@ class MlxBackend:
         _local_snapshot(mlx_repo_for(self._model_name))
 
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
-        return self._on_worker(lambda: self._transcribe(audio))
+        return self._on_worker(
+            lambda: self._transcribe(
+                audio, vad_filter=self._vad_filter, hint=self._recognition_hint
+            )
+        )
+
+    def transcribe_command(
+        self, audio: AudioChunk, trigger_words: Sequence[str]
+    ) -> TranscriptionResult:
+        """The Borderline confirm pass (#249): command-biased, VAD off.
+
+        mlx-whisper has no ``hotwords``, so the bias is the same sentence-like
+        ``initial_prompt`` faster-whisper gets, replacing the Vocabulary hint
+        for this one call. VAD off means the Silero pre-trim is skipped, so a
+        clipped onset isn't trimmed further.
+        """
+        hint = mlx_command_bias(trigger_words)
+        return self._on_worker(lambda: self._transcribe(audio, vad_filter=False, hint=hint))
 
     def empty_cache(self) -> None:
         self._on_worker(self._clear_mlx_cache)
@@ -163,11 +182,13 @@ class MlxBackend:
 
         mx.clear_cache()
 
-    def _transcribe(self, audio: AudioChunk) -> TranscriptionResult:
+    def _transcribe(
+        self, audio: AudioChunk, *, vad_filter: bool, hint: dict[str, str]
+    ) -> TranscriptionResult:
         if not self._loaded or self._model_path is None:
             return EmptyResult()
         samples = np.asarray(audio, dtype=np.float32)
-        if self._vad_filter:
+        if vad_filter:
             # mlx-whisper has no VAD: pre-trim with the Silero VAD bundled in
             # faster-whisper (always installed as the fallback engine), the
             # same silence-hallucination guard as the CPU path.
@@ -175,8 +196,9 @@ class MlxBackend:
 
             samples = keep_speech(samples, get_speech_timestamps(samples))
             if samples.size == 0:
-                # Same as faster-whisper's vad_filter on silence: empty text.
-                return ""
+                # Same as faster-whisper's vad_filter on silence: an empty
+                # Transcript (no segments, so unknown confidence; no speech).
+                return Transcript("", confidence=None, speech_duration_s=0.0)
 
         import mlx_whisper
 
@@ -185,7 +207,7 @@ class MlxBackend:
             "language": self._language,
             "fp16": self._fp16,
             "verbose": None,
-            **self._recognition_hint,
+            **hint,
         }
         result = mlx_whisper.transcribe(samples, **kwargs)
-        return str(result.get("text", ""))
+        return transcript_from_mlx_result(result, speech_samples=int(samples.size))

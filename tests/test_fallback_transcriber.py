@@ -17,6 +17,7 @@ import pytest
 from dictatem.exceptions import ModelLoadError
 from dictatem.transcribe.fallback import FallbackTranscriber
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
+from dictatem.types import Transcript
 from tests.fakes import FakeTranscriberBackend
 
 AUDIO = np.arange(16000, dtype=np.float32)
@@ -31,7 +32,7 @@ def test_primary_load_failure_transcribes_the_same_audio_on_the_fallback() -> No
     composite.load_model()
     result = composite.transcribe(AUDIO)
 
-    assert result == "from cpu"
+    assert result == Transcript("from cpu")
     assert composite.is_loaded is True
     assert len(fallback.transcribe_calls) == 1
     assert fallback.transcribe_calls[0] is AUDIO
@@ -99,7 +100,7 @@ def test_fallback_factory_is_not_invoked_on_the_happy_path() -> None:
 
     composite.download_to_disk()
     composite.load_model()
-    assert composite.transcribe(AUDIO) == "from mlx"
+    assert composite.transcribe(AUDIO) == Transcript("from mlx")
     composite.unload_model()
 
     assert factory.built == []
@@ -149,7 +150,7 @@ def test_a_transcribe_time_failure_reruns_the_same_audio_on_the_fallback() -> No
     )
     composite.load_model()
 
-    assert composite.transcribe(AUDIO) == "from cpu"
+    assert composite.transcribe(AUDIO) == Transcript("from cpu")
     assert factory.built[0].transcribe_calls[0] is AUDIO
     assert primary.is_loaded is False  # the failed engine's memory is released
     assert calls == ["mlx-transcribe-failed"]
@@ -189,7 +190,7 @@ def test_a_raising_callback_does_not_lose_the_dictation() -> None:
     )
 
     composite.load_model()
-    assert composite.transcribe(AUDIO) == "from cpu"
+    assert composite.transcribe(AUDIO) == Transcript("from cpu")
 
 
 def test_progress_callback_reaches_the_fallback_built_later() -> None:
@@ -257,5 +258,90 @@ def test_a_raising_factory_surfaces_as_todays_transcription_failure_via_lifecycl
         clock=lambda: 0.0,
     )
 
-    with pytest.raises(ImportError):
+    # Today's failure since the load-failure classifier (#225): the lifecycle
+    # wraps the raw error in an (UNKNOWN-diagnosis) ModelLoadError.
+    with pytest.raises(ModelLoadError) as excinfo:
         lifecycle.transcribe(AUDIO)
+    assert isinstance(excinfo.value.__cause__, ImportError)
+
+
+# --- The confirm pass (#249): transcribe_command falls back the same way ---
+
+TRIGGER_WORDS = ("summarize", "paste")
+
+
+def test_transcribe_command_delegates_to_the_primary_on_the_happy_path() -> None:
+    primary = FakeTranscriberBackend(result="from mlx")
+    factory = _CountingFactory()
+    composite = FallbackTranscriber(primary=primary, fallback_factory=factory)
+    composite.load_model()
+
+    assert composite.transcribe_command(AUDIO, TRIGGER_WORDS) == Transcript("from mlx")
+    assert primary.command_calls == [(AUDIO, TRIGGER_WORDS)]
+    assert factory.built == []
+    assert composite.fell_back is False
+
+
+def test_transcribe_command_after_a_load_failure_runs_on_the_fallback() -> None:
+    primary = _failing_primary()
+    factory = _CountingFactory()
+    composite = FallbackTranscriber(primary=primary, fallback_factory=factory)
+    composite.load_model()
+
+    assert composite.transcribe_command(AUDIO, TRIGGER_WORDS) == Transcript("from cpu")
+    assert primary.command_calls == []
+    assert factory.built[0].command_calls == [(AUDIO, TRIGGER_WORDS)]
+
+
+def test_a_command_pass_failure_reruns_the_same_audio_and_words_on_the_fallback() -> None:
+    primary = FakeTranscriberBackend(result="from mlx")
+    primary.queue_error(RuntimeError("[metal] command buffer failed"))
+    factory = _CountingFactory()
+    reasons: list[str] = []
+    composite = FallbackTranscriber(
+        primary=primary, fallback_factory=factory, on_fallback=reasons.append
+    )
+    composite.load_model()
+
+    assert composite.transcribe_command(AUDIO, TRIGGER_WORDS) == Transcript("from cpu")
+    fallback = factory.built[0]
+    assert len(fallback.command_calls) == 1
+    audio, words = fallback.command_calls[0]
+    assert audio is AUDIO
+    assert words == TRIGGER_WORDS
+    assert primary.is_loaded is False  # the failed engine's memory is released
+    assert reasons == ["mlx-transcribe-failed"]
+
+    # Latched for the session: regular dictation now runs on the fallback too.
+    assert composite.transcribe(AUDIO) == Transcript("from cpu")
+    assert primary.transcribe_calls == []
+
+
+def test_a_transcribe_failure_latches_the_command_pass_onto_the_fallback() -> None:
+    primary = FakeTranscriberBackend(result="from mlx")
+    primary.queue_error(RuntimeError("[metal] command buffer failed"))
+    factory = _CountingFactory()
+    composite = FallbackTranscriber(primary=primary, fallback_factory=factory)
+    composite.load_model()
+    composite.transcribe(AUDIO)
+
+    composite.transcribe_command(AUDIO, TRIGGER_WORDS)
+
+    assert primary.command_calls == []
+    assert factory.built[0].command_calls == [(AUDIO, TRIGGER_WORDS)]
+
+
+def test_a_raising_factory_on_the_command_pass_surfaces_and_stays_latched() -> None:
+    primary = FakeTranscriberBackend(result="from mlx")
+    primary.queue_error(RuntimeError("[metal] command buffer failed"))
+    factory = _RaisingFactory()
+    composite = FallbackTranscriber(primary=primary, fallback_factory=factory)
+    composite.load_model()
+
+    with pytest.raises(ImportError, match="faster_whisper missing"):
+        composite.transcribe_command(AUDIO, TRIGGER_WORDS)
+    with pytest.raises(ImportError, match="faster_whisper missing"):
+        composite.transcribe_command(AUDIO, TRIGGER_WORDS)
+
+    assert len(primary.command_calls) == 1
+    assert composite.fell_back is True

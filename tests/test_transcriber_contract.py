@@ -1,7 +1,9 @@
 """Transcription contract suite — every ``TranscriberBackend`` must pass it (#229).
 
 One parametrised suite asserts the ``TranscriberBackend`` contract through the
-protocol alone (never by inspecting how an engine is called). It always runs
+protocol alone (never by inspecting how an engine is called): both ``transcribe``
+and the confirm pass's ``transcribe_command`` (#249) return a
+:class:`~dictatem.types.Transcript` when loaded and ``EmptyResult`` when not. It always runs
 against :class:`~tests.fakes.FakeTranscriberBackend` in default CI.
 
 Real engines run only on opt-in, never in default CI: they need the engine
@@ -39,13 +41,16 @@ import pytest
 
 from dictatem.interfaces import TranscriberBackend
 from dictatem.transcribe.fallback import FallbackTranscriber
-from dictatem.types import EmptyResult
+from dictatem.types import EmptyResult, Transcript
 from tests.fakes import FakeTranscriberBackend
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 REAL_ENGINES_ENV = "DICTATEM_REAL_ENGINES"
+
+# The lexicon a confirm pass (#249) is biased toward.
+TRIGGER_WORDS = ("summarize", "paste")
 
 # One second of silence at 16 kHz — the shape every backend is fed.
 AUDIO = np.zeros(16000, dtype=np.float32)
@@ -131,15 +136,52 @@ def test_load_then_transcribe_returns_text(backend: TranscriberBackend) -> None:
     backend.load_model()
     assert backend.is_loaded is True
     result = backend.transcribe(AUDIO)
-    # Text, not the suppressed sentinel. Silence may legitimately transcribe
-    # to "" on a real engine, so the contract is the type, not the content.
-    assert isinstance(result, str)
+    # A Transcript, not the suppressed sentinel. Silence may legitimately
+    # transcribe to "" on a real engine, so the contract is the type, not the
+    # content.
+    _assert_is_transcript(result)
+
+
+def _assert_is_transcript(result: object) -> None:
+    """The #246 result shape: text, plus confidence/duration or ``None``."""
+    assert isinstance(result, Transcript)
+    assert isinstance(result.text, str)
+    if result.speech_duration_s is not None:
+        assert result.speech_duration_s >= 0.0
+    if result.confidence is not None:
+        assert result.confidence.avg_logprob <= 0.0
+        assert 0.0 <= result.confidence.no_speech_prob <= 1.0
+
+
+def test_load_then_transcribe_command_returns_a_transcript(
+    backend: TranscriberBackend,
+) -> None:
+    backend.load_model()
+    _assert_is_transcript(backend.transcribe_command(AUDIO, TRIGGER_WORDS))
+    # The one-off confirm pass leaves the backend loaded for regular dictation.
+    assert backend.is_loaded is True
+    _assert_is_transcript(backend.transcribe(AUDIO))
+
+
+def test_transcribe_command_with_an_empty_lexicon_still_transcribes(
+    backend: TranscriberBackend,
+) -> None:
+    backend.load_model()
+    _assert_is_transcript(backend.transcribe_command(AUDIO, ()))
+
+
+def test_transcribe_command_while_unloaded_returns_the_empty_result(
+    backend: TranscriberBackend,
+) -> None:
+    assert backend.transcribe_command(AUDIO, TRIGGER_WORDS) == EmptyResult()
+    assert backend.is_loaded is False
 
 
 def test_transcribe_while_unloaded_returns_the_empty_result(
     backend: TranscriberBackend,
 ) -> None:
     assert backend.transcribe(AUDIO) == EmptyResult()
+    assert backend.transcribe_command(AUDIO, TRIGGER_WORDS) == EmptyResult()
     assert backend.is_loaded is False
 
 
@@ -147,7 +189,7 @@ def test_load_is_idempotent(backend: TranscriberBackend) -> None:
     backend.load_model()
     backend.load_model()
     assert backend.is_loaded is True
-    assert isinstance(backend.transcribe(AUDIO), str)
+    _assert_is_transcript(backend.transcribe(AUDIO))
 
 
 def test_unload_flips_is_loaded(backend: TranscriberBackend) -> None:
@@ -155,6 +197,7 @@ def test_unload_flips_is_loaded(backend: TranscriberBackend) -> None:
     backend.unload_model()
     assert backend.is_loaded is False
     assert backend.transcribe(AUDIO) == EmptyResult()
+    assert backend.transcribe_command(AUDIO, TRIGGER_WORDS) == EmptyResult()
 
 
 def test_reload_after_unload(backend: TranscriberBackend) -> None:
@@ -162,7 +205,7 @@ def test_reload_after_unload(backend: TranscriberBackend) -> None:
     backend.unload_model()
     backend.load_model()
     assert backend.is_loaded is True
-    assert isinstance(backend.transcribe(AUDIO), str)
+    _assert_is_transcript(backend.transcribe(AUDIO))
 
 
 def test_empty_cache_is_safe_and_keeps_load_state(backend: TranscriberBackend) -> None:
