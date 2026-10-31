@@ -82,3 +82,16 @@ URL *is* the trust story rather than a published digest.
   one-liner names a concrete tag and is bumped per release.
 - The same script shape serves both OSes (`.ps1` / `.sh`); the macOS engine and
   permissions story (separate ADRs) plug into the same provisioning flow.
+
+## Note (2026-10-31): posture narrowed for macOS by ADR-0014's App Launcher amendment
+
+On macOS, "no downloaded, signed bundle" narrows to **"no bundled runtime"**.
+Exactly one small Developer-ID-signed, notarized artifact, the App Launcher
+`Dictatem.app`, is downloaded by `install.sh` at the pinned tag. It is the
+Permission Identity only. Python, PySide6 and the speech engine are still
+installed by `uv tool install` and never bundled. "Checksums are circular"
+still holds for the piped script. For the downloaded bundle, the authenticity
+anchor is a designated-requirement check pinned to Dictatem's Team ID, and the
+checksum only guards integrity. See
+[ADR-0014's 2026-10-31 amendment](0014-macos-permissions-and-app-identity-shell.md#amendment-2026-10-31-227252-a-signed-app-launcher-becomes-the-permission-identity)
+(#227). Windows is unchanged.
