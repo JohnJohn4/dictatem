@@ -2190,19 +2190,24 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     prompts_dir = Path.home() / ".dictatem" / "prompts"
     bootstrap_prompts(prompts_dir, default_prompts_dir())
     prompt_aliases = load_prompts_dir(prompts_dir)
-    # A user Prompt File that reuses a built-in action name (`paste`) is
-    # shadowed by the built-in — its Transform can never fire (ADR-0023 / #139).
-    # Warn so the collision is visible rather than silently dead.
-    shadowed = shadowed_builtin_aliases(prompt_aliases)
+    # A user Prompt File that reuses a built-in action name (`paste`) or one of
+    # the user's `[trigger_words].paste_aliases` (#250) is shadowed by the
+    # built-in — its Transform can never fire (ADR-0023 / #139). Warn so the
+    # collision is visible rather than silently dead.
+    paste_aliases = config.trigger_words.paste_aliases
+    shadowed = shadowed_builtin_aliases(prompt_aliases, paste_aliases=paste_aliases)
     if shadowed:
         logger.warning(
             "Prompt File alias(es) %s are shadowed by the built-in `paste` "
-            "action and will never fire as a Transform — rename them in %s",
+            "action (or a [trigger_words].paste_aliases entry) and will never "
+            "fire as a Transform — rename them in %s",
             ", ".join(shadowed),
             prompts_dir,
         )
     trigger_recognizer = TriggerWordRecognizer(
-        prompt_aliases, fuzzy_matching=config.trigger_words.fuzzy_matching
+        prompt_aliases,
+        paste_aliases=paste_aliases,
+        fuzzy_matching=config.trigger_words.fuzzy_matching,
     )
 
     overlay_state = OverlayState(
@@ -2389,12 +2394,16 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     trigger_words = sorted(prompt_aliases)
     tray_icon.set_usage_guide_html(
         usage_guide_html(
-            config.hotkey.modifiers, platform=sys.platform, trigger_words=trigger_words
+            config.hotkey.modifiers,
+            platform=sys.platform,
+            trigger_words=trigger_words,
+            paste_aliases=paste_aliases,
         ),
         dark_html=usage_guide_html(
             config.hotkey.modifiers,
             platform=sys.platform,
             trigger_words=trigger_words,
+            paste_aliases=paste_aliases,
             dark=True,
         ),
     )

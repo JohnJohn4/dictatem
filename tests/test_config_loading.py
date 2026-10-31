@@ -6,6 +6,8 @@ import logging
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -688,3 +690,49 @@ class TestTriggerWordsSection:
         cfg.startup.autostart = False
         write_config(cfg, path)
         assert load_config(path).trigger_words.fuzzy_matching is False
+
+    # --- paste_aliases (#250) ---
+
+    def test_paste_aliases_default_empty(self, tmp_path: Path) -> None:
+        assert load_config(tmp_path / "config.toml").trigger_words.paste_aliases == ()
+
+    def test_paste_aliases_normalised_like_prompt_file_aliases(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text(
+            '[trigger_words]\npaste_aliases = ["Haste.", " insert ", "", "...", "haste"]\n'
+        )
+        assert load_config(path).trigger_words.paste_aliases == ("haste", "insert")
+
+    @pytest.mark.parametrize("value", ['"haste"', "[1, 2]", '["haste", 3]', "true"])
+    def test_invalid_paste_aliases_logged_fall_back_and_file_untouched(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture, value: str
+    ) -> None:
+        path = tmp_path / "config.toml"
+        original = f"[trigger_words]\npaste_aliases = {value}\n"
+        path.write_text(original)
+        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert cfg.trigger_words.paste_aliases == ()
+        assert any(
+            "paste_aliases" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        )
+        assert path.read_text() == original
+
+    def test_first_run_file_shows_paste_aliases_commented(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        load_config(path)
+        lines = path.read_text().splitlines()
+        assert any(
+            line.startswith("#") and "paste_aliases" in line for line in lines
+        )
+        assert not any(line.startswith("paste_aliases") for line in lines)
+        assert load_config(path).trigger_words.paste_aliases == ()
+
+    def test_paste_aliases_survive_an_app_rewrite(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text('[trigger_words]\npaste_aliases = ["haste"]\n')
+        cfg = load_config(path)
+        cfg.startup.autostart = False
+        write_config(cfg, path)
+        assert load_config(path).trigger_words.paste_aliases == ("haste",)
