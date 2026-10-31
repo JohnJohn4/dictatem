@@ -79,6 +79,28 @@ class TestTriggerWordsSection:
         assert "polish" in html
         assert "filler" in html
 
+    def test_lists_configured_paste_aliases(self) -> None:
+        # #250: the live [trigger_words].paste_aliases are shown with the
+        # trigger words, labelled as words that also mean `paste`.
+        html = usage_guide_html(
+            ("win", "alt"), platform="win32", trigger_words=["fix"],
+            paste_aliases=["haste", "a<b"],
+        )
+        assert "also mean <i>paste</i>" in html
+        assert "haste" in html
+        assert "a&lt;b" in html
+
+    def test_paste_aliases_shown_even_with_no_trigger_words(self) -> None:
+        html = usage_guide_html(
+            ("win", "alt"), platform="win32", trigger_words=[], paste_aliases=["haste"]
+        )
+        assert "haste" in html
+        assert "also mean <i>paste</i>" in html
+
+    def test_no_paste_alias_row_when_none_configured(self) -> None:
+        html = usage_guide_html(("win", "alt"), platform="win32", trigger_words=["fix"])
+        assert "also mean <i>paste</i>" not in html
+
 
 class TestRecoverySection:
     def test_explains_paste_recovery(self) -> None:

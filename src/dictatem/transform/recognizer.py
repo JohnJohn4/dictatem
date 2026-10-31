@@ -127,12 +127,19 @@ TriggerDecision = Dictation | Fire
 class TriggerWordRecognizer:
     """Decides Dictation vs Fire for an utterance. Built once at startup.
 
-    *fuzzy_matching* (``[trigger_words].fuzzy_matching``, default on) enables
-    the fuzzy tier; off restores exact-only matching.
+    *paste_aliases* (``[trigger_words].paste_aliases``, #250) are the user's
+    own words for the built-in ``paste`` action: they fire it exactly and
+    fuzzily just like ``paste`` itself and shadow same-named Prompt File
+    aliases. *fuzzy_matching* (``[trigger_words].fuzzy_matching``, default on)
+    enables the fuzzy tier; off restores exact-only matching.
     """
 
     def __init__(
-        self, prompt_aliases: Mapping[str, str], *, fuzzy_matching: bool = True
+        self,
+        prompt_aliases: Mapping[str, str],
+        *,
+        paste_aliases: Iterable[str] = (),
+        fuzzy_matching: bool = True,
     ) -> None:
         # Re-normalise the supplied aliases so callers can pass the surface
         # form they expect (e.g. "summarize", "Summarize.") without each
@@ -140,19 +147,28 @@ class TriggerWordRecognizer:
         self._transforms: dict[str, str] = {
             _normalise(k): v for k, v in prompt_aliases.items() if _normalise(k)
         }
+        # User aliases for the built-in `paste` action ([trigger_words].
+        # paste_aliases, #250): alias -> built-in action word.
+        self._builtin_aliases: dict[str, str] = {w: w for w in BUILTIN_ACTION_WORDS}
+        for alias in paste_aliases:
+            if _normalise(alias):
+                self._builtin_aliases.setdefault(_normalise(alias), PASTE_ACTION)
         self._fuzzy_matching = fuzzy_matching
         # Every exact Alias (built-ins + Prompt File Aliases, armed or not):
         # an utterance that *starts* with one and goes on ("summarize this",
         # "paste it") is always Dictation — the documented contract.
-        self._exact_aliases = frozenset(BUILTIN_ACTION_WORDS | self._transforms.keys())
-        # Fuzzy lexicon: (alias, phonetic key, target). Shadowed Prompt File
-        # aliases are left out (the built-in wins) and so are Aliases too
-        # short for fuzzy tolerance (exact-only).
-        builtins = [(w, BuiltinAction(w)) for w in sorted(BUILTIN_ACTION_WORDS)]
+        self._exact_aliases = frozenset(self._builtin_aliases.keys() | self._transforms.keys())
+        # Fuzzy lexicon: (alias, phonetic key, target). Prompt File aliases
+        # shadowed by a built-in or a `paste` alias are left out (the built-in
+        # wins) and so are Aliases too short for fuzzy tolerance (exact-only).
+        builtins = [
+            (alias, BuiltinAction(action))
+            for alias, action in sorted(self._builtin_aliases.items())
+        ]
         transforms = [
             (alias, TransformTarget(alias=alias, prompt=prompt))
             for alias, prompt in self._transforms.items()
-            if alias not in BUILTIN_ACTION_WORDS
+            if alias not in self._builtin_aliases
         ]
         self._fuzzy_lexicon: list[tuple[str, str, TriggerTarget]] = [
             (alias, phonetic_key(alias), target)
@@ -166,8 +182,8 @@ class TriggerWordRecognizer:
             # Built-in actions first: they shadow a same-named Prompt File
             # alias and fire whether or not Transforms are armed — they are
             # the recovery path (ADR-0023 / #139).
-            if key in BUILTIN_ACTION_WORDS:
-                return Fire(BuiltinAction(key))
+            if key in self._builtin_aliases:
+                return Fire(BuiltinAction(self._builtin_aliases[key]))
             if transforms_armed and key in self._transforms:
                 return Fire(TransformTarget(alias=key, prompt=self._transforms[key]))
         if self._fuzzy_matching:
@@ -214,14 +230,18 @@ class TriggerWordRecognizer:
         return Fire(best_target, via=MatchVia.FUZZY)
 
 
-def shadowed_builtin_aliases(aliases: Iterable[str]) -> list[str]:
-    """Return the *aliases* that collide with a built-in action word.
+def shadowed_builtin_aliases(
+    aliases: Iterable[str], *, paste_aliases: Iterable[str] = ()
+) -> list[str]:
+    """Return the *aliases* that collide with a built-in action word or alias.
 
     A user Prompt File alias that normalises to a built-in action (e.g.
-    ``paste``) is **shadowed** — built-in matching runs first — so its
-    Transform can never fire. The daemon warns on load (#139).
+    ``paste``) or to one of the user's *paste_aliases* (#250) is **shadowed**
+    — built-in matching runs first — so its Transform can never fire. The
+    daemon warns on load (#139).
     """
-    return sorted({a for a in aliases if _normalise(a) in BUILTIN_ACTION_WORDS})
+    builtin = BUILTIN_ACTION_WORDS | {_normalise(a) for a in paste_aliases if _normalise(a)}
+    return sorted({a for a in aliases if _normalise(a) in builtin})
 
 
 def _action_of(target: TriggerTarget) -> str:

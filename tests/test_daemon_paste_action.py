@@ -67,6 +67,7 @@ def _make_core(
     transform_backend: FakeTransformBackend,
     transform_enabled: bool = True,
     aliases: dict[str, str] | None = None,
+    paste_aliases: tuple[str, ...] = (),
 ) -> DaemonCore:
     return DaemonCore(
         state_machine=StateMachine(tap_threshold_ms=200),
@@ -78,7 +79,9 @@ def _make_core(
         keystroke=keystroke,
         foreground=FakeForegroundTracker(target_id=42),
         transform_lifecycle=TransformLifecycle(backend=transform_backend),
-        trigger_recognizer=TriggerWordRecognizer(aliases if aliases is not None else ALIASES),
+        trigger_recognizer=TriggerWordRecognizer(
+            aliases if aliases is not None else ALIASES, paste_aliases=paste_aliases
+        ),
         transform_enabled=transform_enabled,
         last_paste_ttl_s=300.0,
     )
@@ -215,6 +218,27 @@ class TestDecoupledFromTransform:
         backend._result = "paste"
         _cycle(core, start_ms=2_000, end_ms=3_000)
         assert _set_texts(clipboard) == ["no transform here ", "no transform here "]
+
+    def test_a_configured_paste_alias_re_pastes_with_transform_disabled(
+        self,
+        backend: FakeTranscriberBackend,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        overlay: FakeOverlayRenderer,
+        transform_backend: FakeTransformBackend,
+    ) -> None:
+        # [trigger_words].paste_aliases (#250): the user's own word for `paste`.
+        core = _make_core(
+            backend=backend, clipboard=clipboard, keystroke=keystroke,
+            overlay=overlay, transform_backend=transform_backend,
+            transform_enabled=False, paste_aliases=("glue",),
+        )
+        backend._result = "no transform here"
+        _cycle(core, start_ms=0, end_ms=1_000)
+        backend._result = "Glue."
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+        assert _set_texts(clipboard) == ["no transform here ", "no transform here "]
+        assert transform_backend.calls == []
 
     def test_works_with_no_prior_last_paste_and_arms_it(
         self,

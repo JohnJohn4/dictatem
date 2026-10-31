@@ -190,7 +190,9 @@ def _pill_section(theme: GuideTheme) -> str:
     )
 
 
-def _trigger_words_section(theme: GuideTheme, trigger_words: Sequence[str]) -> str:
+def _trigger_words_section(
+    theme: GuideTheme, trigger_words: Sequence[str], paste_aliases: Sequence[str]
+) -> str:
     section = (
         _h(theme, "Trigger words")
         + _p(
@@ -222,6 +224,12 @@ def _trigger_words_section(theme: GuideTheme, trigger_words: Sequence[str]) -> s
             + ".",
             muted=True,
         )
+    if paste_aliases:
+        # [trigger_words].paste_aliases (#250): the user's own words for the
+        # built-in `paste` action.
+        section += _p(
+            theme, "Words that also mean <i>paste</i>:", muted=True
+        ) + _chips(theme, paste_aliases)
     return section
 
 
@@ -321,6 +329,7 @@ def usage_guide_html(
     *,
     platform: str,
     trigger_words: Sequence[str] = (),
+    paste_aliases: Sequence[str] = (),
     dark: bool = False,
 ) -> str:
     """Build the full Usage Guide document as an HTML string.
@@ -329,7 +338,9 @@ def usage_guide_html(
     (Windows ``Win+Alt`` / macOS ``⌥⌘``); see ``format_hotkey``. *trigger_words*
     is the user's configured aliases (the daemon's alias map keys) — listed in
     the trigger-words section, or replaced by an empty-state pointer when none
-    are configured. *dark* selects the :data:`DARK` palette to match the OS.
+    are configured. *paste_aliases* is the live ``[trigger_words].paste_aliases``
+    (#250), listed beside them when non-empty. *dark* selects the
+    :data:`DARK` palette to match the OS.
     """
     theme = DARK if dark else LIGHT
     combo = format_hotkey(modifiers, platform=platform)
@@ -337,7 +348,7 @@ def usage_guide_html(
     sections = [
         _dictating_section(theme, combo, keys),
         _pill_section(theme),
-        _trigger_words_section(theme, trigger_words),
+        _trigger_words_section(theme, trigger_words, paste_aliases),
         _recovery_section(theme),
         _first_use_section(theme),
         _changing_hotkey_section(theme, modifiers, platform),

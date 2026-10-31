@@ -128,6 +128,18 @@ exactly only, add this to `config.toml`:
 fuzzy_matching = false
 ```
 
+If your voice consistently produces the same mishearing of **"paste"**, map it
+straight to the built-in `paste` action with `paste_aliases`. They work like
+"paste" itself: with Trigger Words (Ollama) off, with no recent paste, and with
+the same mishearing tolerance. A `paste` alias wins over a prompt file with the
+same alias (Dictatem logs a warning at startup). Your `paste` aliases are listed
+in **How to use Dictatem…**.
+
+```toml
+[trigger_words]
+paste_aliases = ["haste", "taste"]
+```
+
 ### Tray / menu-bar menu
 
 Right-click the icon for: **Start/Stop Recording**, **Copy last dictation**,
@@ -216,6 +228,7 @@ model_name = "gemma4:e2b"       # Ollama model tag; must match `ollama list`
 
 [trigger_words]                 # shown commented-out in the first-run file
 fuzzy_matching = true           # false = trigger words must be heard exactly
+paste_aliases = []              # extra words that mean `paste`, e.g. ["haste"]
 ```
 
 `[audio].sample_rate` is fixed at `16000` (the transcriber needs 16 kHz). Any
