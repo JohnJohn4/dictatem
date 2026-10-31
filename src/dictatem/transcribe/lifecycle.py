@@ -17,7 +17,7 @@ from dictatem.transcribe.load_failure import classify_model_load_failure
 from dictatem.types import EmptyResult
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from dictatem.interfaces import TranscriberBackend
     from dictatem.types import AudioChunk, TranscriptionResult
@@ -66,13 +66,31 @@ class TranscribeLifecycle:
         self._unload_pending = False
 
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
+        return self._run_transcription(lambda: self._backend.transcribe(audio))
+
+    def transcribe_command(
+        self, audio: AudioChunk, trigger_words: Sequence[str]
+    ) -> TranscriptionResult:
+        """The one-off command-biased, VAD-off confirm pass (#249).
+
+        Same load, OOM-retry, in-flight and empty-suppression semantics as
+        :meth:`transcribe`; only the backend call differs.
+        """
+        words = tuple(trigger_words)
+        return self._run_transcription(
+            lambda: self._backend.transcribe_command(audio, words)
+        )
+
+    def _run_transcription(
+        self, call: Callable[[], TranscriptionResult]
+    ) -> TranscriptionResult:
         with self._state_lock:
             self._in_flight += 1
             # Using the model supersedes an unload deferred by an earlier,
             # still-running transcription.
             self._unload_pending = False
         try:
-            raw = self._transcribe_resident(audio)
+            raw = self._transcribe_resident(call)
         finally:
             self._finish_transcription()
 
@@ -217,14 +235,16 @@ class TranscribeLifecycle:
             self._last_download_ok = ok
             self._is_downloading = False
 
-    def _transcribe_resident(self, audio: AudioChunk) -> TranscriptionResult:
+    def _transcribe_resident(
+        self, call: Callable[[], TranscriptionResult]
+    ) -> TranscriptionResult:
         self._ensure_loaded()
         try:
-            return self._backend.transcribe(audio)
+            return call()
         except GPUOutOfMemoryError:
             self._backend.empty_cache()
             try:
-                return self._backend.transcribe(audio)
+                return call()
             except GPUOutOfMemoryError as exc:
                 raise TranscriptionFailedError(
                     "GPU out of memory after retry"

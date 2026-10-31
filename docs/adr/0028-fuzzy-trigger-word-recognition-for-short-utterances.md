@@ -56,6 +56,30 @@ dictation such as "Summer." is swallowed; the Usage Guide and README tell the
 user to say it inside a longer phrase. A command-biased confirm pass (#249) runs
 before the flash, so most Borderlines resolve without a repeat.
 
+**A Borderline gets one command-biased confirm pass (#249).** Before the
+say-again flash, the daemon re-transcribes the same short audio once with a
+one-off command bias: a sentence-like `initial_prompt` naming the lexicon's
+Trigger Words ("Summarize. Paste.") plus `hotwords` where the installed
+faster-whisper supports them. The recognizer fires only if that pass is an
+exact or strong-confident match for the *same action* as one of the Borderline
+candidates (any Alias of it). A match for a different action, another
+Borderline, dictation, or an error all end in say-again, as before. The pill
+stays "transcribing" and Esc discards the pass like any in-flight
+transcription. The persistent Vocabulary hint is not applied to this pass, and
+regular dictation is never biased.
+
+- **Two passes, not global biasing.** Biasing only the confirm pass keeps the
+  lexicon's real words ("paste", "polish", "summarize") from leaking into
+  regular dictation. The cost is a second decode, but only on the rare
+  Borderline and only of a ≤ 2.5 s clip.
+- **The confirm pass bypasses VAD (review §6.3).** The question was whether
+  first-pass VAD clips a quick command's onset ("summarise" → "some of us"). We
+  keep first-pass VAD unchanged, since it guards dictation against silence
+  hallucinations, and run the confirm pass with `vad_filter=False` so a clipped
+  onset can't be trimmed again. The confirm utterance is judged against the
+  first pass's post-VAD speech duration, because the VAD-off pass reports the
+  whole recording.
+
 Thresholds are module constants, not config, and tests assert decisions only,
 so they stay tunable.
 
@@ -70,6 +94,9 @@ so they stay tunable.
 - **Bias every transcription toward the lexicon** (`hotwords`/`initial_prompt`).
   Nudges all regular dictation toward "paste"/"polish"/"summarize", which are
   real words. Rejected; spec #226 adds a targeted confirm pass instead (#249).
+- **Turn VAD off for every short recording.** Would answer §6.3 for the first
+  pass too, but gives up VAD's protection against silence hallucinations on
+  every brief dictation. Rejected in favour of a VAD-off confirm pass only.
 - **Let users add mishearings as Aliases.** Doesn't scale, and `paste` had no
   Alias mechanism. Kept as a complement (`paste_aliases`, #250), not the fix.
 

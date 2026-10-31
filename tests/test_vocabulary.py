@@ -18,6 +18,7 @@ from dictatem.transcribe.vocabulary import (
     backend_supports_hotwords,
     bootstrap_vocabulary,
     parse_vocabulary,
+    select_command_bias,
     select_recognition_hint,
 )
 
@@ -96,6 +97,28 @@ class TestSelectRecognitionHint:
         assert select_recognition_hint(["kubectl"], supports_hotwords=True) == {
             "hotwords": "kubectl"
         }
+
+
+class TestSelectCommandBias:
+    """The one-off command bias for a Borderline confirm pass (#249)."""
+
+    def test_empty_lexicon_yields_no_hint(self) -> None:
+        assert select_command_bias([], supports_hotwords=True) == {}
+        assert select_command_bias([], supports_hotwords=False) == {}
+
+    def test_sentence_like_prompt_plus_hotwords_when_supported(self) -> None:
+        hint = select_command_bias(["summarize", "paste"], supports_hotwords=True)
+        assert hint == {
+            "initial_prompt": "Summarize. Paste.",
+            "hotwords": "summarize paste",
+        }
+
+    def test_prompt_only_when_hotwords_unsupported(self) -> None:
+        hint = select_command_bias(["summarize", "paste"], supports_hotwords=False)
+        assert hint == {"initial_prompt": "Summarize. Paste."}
+
+    def test_blank_words_are_ignored(self) -> None:
+        assert select_command_bias(["", "  "], supports_hotwords=True) == {}
 
 
 class _FakeBackendWithHotwords:

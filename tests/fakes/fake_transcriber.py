@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from dictatem.types import AudioChunk, EmptyResult, Transcript, TranscriptionResult
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
 
 class FakeTranscriberBackend:
@@ -34,6 +34,14 @@ class FakeTranscriberBackend:
         self.unload_count: int = 0
         self.empty_cache_count: int = 0
         self.transcribe_calls: list[AudioChunk] = []
+        # The command-biased confirm pass (#249): each call's audio and the
+        # Trigger Words it was biased toward. ``command_result`` scripts its
+        # result (str or Transcript); ``None`` reuses ``_result``, so by default
+        # a confirm pass hears what the first pass heard.
+        self.command_calls: list[tuple[AudioChunk, tuple[str, ...]]] = []
+        self.command_result: TranscriptionResult | str | None = None
+        self._command_gate = threading.Event()
+        self._command_gate.set()
         self._errors_to_raise: list[Exception] = []
         self._load_errors: list[Exception] = []
         self._progress_callback: Callable[[int, int], None] | None = None
@@ -85,6 +93,21 @@ class FakeTranscriberBackend:
         if isinstance(self._result, str):
             return Transcript(self._result)
         return self._result
+
+    def transcribe_command(
+        self, audio: AudioChunk, trigger_words: Sequence[str]
+    ) -> TranscriptionResult:
+        self.command_calls.append((audio, tuple(trigger_words)))
+        self._transcribe_gate.wait()
+        self._command_gate.wait()
+        if self._errors_to_raise:
+            raise self._errors_to_raise.pop(0)
+        if not self._loaded:
+            return EmptyResult()
+        result = self._result if self.command_result is None else self.command_result
+        if isinstance(result, str):
+            return Transcript(result)
+        return result
 
     def empty_cache(self) -> None:
         self.empty_cache_count += 1
@@ -152,3 +175,11 @@ class FakeTranscriberBackend:
     def release_transcribe(self) -> None:
         """Release a transcribe() call parked by block_transcribe()."""
         self._transcribe_gate.set()
+
+    def block_command(self) -> None:
+        """Hold only transcribe_command() (the confirm pass, #249) open."""
+        self._command_gate.clear()
+
+    def release_command(self) -> None:
+        """Release a transcribe_command() call parked by block_command()."""
+        self._command_gate.set()

@@ -33,7 +33,6 @@ from dictatem.transform.recognizer import (
     Borderline,
     BuiltinAction,
     Fire,
-    TransformTarget,
     TriggerTarget,
     TriggerWordRecognizer,
     Utterance,
@@ -747,7 +746,9 @@ class DaemonCore:
             except Exception as exc:
                 q.put((epoch, "unexpected_error", exc))
             else:
-                q.put((epoch, "ok", (result, audio_duration_s)))
+                # The audio rides along so a Borderline can be re-listened to
+                # by the confirm pass (#249).
+                q.put((epoch, "ok", (result, audio_duration_s, captured_audio)))
 
         t = threading.Thread(
             target=_worker, args=(audio,), daemon=True, name="transcribe-worker"
@@ -802,8 +803,10 @@ class DaemonCore:
                     "An unexpected error occurred during transcription; check log",
                 )
                 self._recover_to_idle()
+            elif kind in ("confirm_ok", "confirm_failed"):
+                self._finish_confirm_pass(kind, data, now_ms=now_ms)
             else:
-                result, audio_duration_s = data  # type: ignore[misc]
+                result, audio_duration_s, audio = data  # type: ignore[misc]
                 # One-shot "transcriptions are slow" tip (see ADR-0007): close
                 # the latency sample opened in _do_transcribe. The tip itself
                 # is shown in ``finally`` so it never precedes the paste.
@@ -840,19 +843,10 @@ class DaemonCore:
                     utterance, transforms_armed=self._transforms_armed()
                 )
                 if isinstance(decision, Borderline):
-                    self._handle_borderline(decision, utterance, now_ms=now_ms)
+                    self._handle_borderline(decision, utterance, audio)
                     return
-                if isinstance(decision, Fire) and isinstance(
-                    decision.target, BuiltinAction
-                ):
-                    self._builtin_action_handlers[decision.target.name](
-                        now_ms=now_ms
-                    )
-                    return
-                if isinstance(decision, Fire) and isinstance(
-                    decision.target, TransformTarget
-                ):
-                    self._handle_trigger_fire(decision.target.prompt, now_ms=now_ms)
+                if isinstance(decision, Fire):
+                    self._route_fire(decision, now_ms=now_ms)
                 else:
                     self._session.transcription_outstanding = False
                     # Regular dictation only: apply deterministic Replacements
@@ -952,16 +946,24 @@ class DaemonCore:
             confidence,
         )
 
-    def _handle_borderline(
-        self, decision: Borderline, utterance: Utterance, *, now_ms: int
-    ) -> None:
-        """Close to a Trigger Word but not sure: paste nothing, say again (#248).
+    def _route_fire(self, decision: Fire, *, now_ms: int) -> None:
+        """Run a fired Trigger Word: a built-in action or a Trigger Fire."""
+        if isinstance(decision.target, BuiltinAction):
+            self._builtin_action_handlers[decision.target.name](now_ms=now_ms)
+        else:
+            self._handle_trigger_fire(decision.target.prompt, now_ms=now_ms)
 
-        Closes the transcription leg with the distinct say-again flash. Nothing
-        is pasted or typed, and the Most-recent dictation and Last Paste are
-        left untouched, so an exact "paste" afterwards still recovers the right
-        text (ADR-0023 / ADR-0028). Logs the outcome kind, candidate action
-        names, score band and confidence — never the heard text (S-2 / #188).
+    def _handle_borderline(
+        self, decision: Borderline, utterance: Utterance, audio: object
+    ) -> None:
+        """Close to a Trigger Word but not sure: listen once more (#248, #249).
+
+        Logs the outcome kind, candidate action names, score band and
+        confidence — never the heard text (S-2 / #188) — then re-transcribes
+        the same audio once on a worker: the command-biased, VAD-off confirm
+        pass. The transcription leg stays open (pill "transcribing", Esc
+        cancels it like any in-flight transcription); its result lands in
+        :meth:`_finish_confirm_pass`.
         """
         conf = utterance.confidence
         confidence = (
@@ -975,6 +977,66 @@ class DaemonCore:
             decision.band.value,
             confidence,
         )
+        trigger_words = self._trigger_recognizer.trigger_words(
+            transforms_armed=self._transforms_armed()
+        )
+        lifecycle = self._lifecycle
+        epoch = self._session.epoch
+
+        def _worker() -> None:
+            q = self._transcription_queue
+            try:
+                result = lifecycle.transcribe_command(audio, trigger_words)  # type: ignore[arg-type]
+            except Exception as exc:
+                q.put((epoch, "confirm_failed", type(exc).__name__))
+            else:
+                q.put((epoch, "confirm_ok", (decision, utterance, result)))
+
+        t = threading.Thread(target=_worker, daemon=True, name="confirm-worker")
+        self._transcription_thread = t
+        t.start()
+
+    def _finish_confirm_pass(self, kind: str, data: object, *, now_ms: int) -> None:
+        """Judge the confirm pass: fire a confirmed candidate, else say again.
+
+        Only the outcome kind and action name are logged, never text (#249).
+        """
+        if kind == "confirm_failed":
+            logger.warning("Trigger Word confirm pass failed (%s); say again", data)
+            self._say_again(now_ms=now_ms)
+            return
+        borderline, first, result = data  # type: ignore[misc]
+        if isinstance(result, EmptyResult):
+            logger.info("Trigger Word confirm pass: empty; say again")
+            self._say_again(now_ms=now_ms)
+            return
+        # The confirm pass runs with VAD off, so its own duration is the whole
+        # recording; the first pass's (post-VAD) speech duration is the honest
+        # measure of how long the user spoke.
+        utterance = Utterance(
+            text=result.text,
+            speech_duration_s=first.speech_duration_s,
+            confidence=result.confidence,
+        )
+        decision = self._trigger_recognizer.confirm(
+            borderline, utterance, transforms_armed=self._transforms_armed()
+        )
+        if isinstance(decision, Fire):
+            logger.info(
+                "Trigger Word confirm pass: confirmed %s", _target_name(decision.target)
+            )
+            self._route_fire(decision, now_ms=now_ms)
+            return
+        logger.info("Trigger Word confirm pass: not confirmed; say again")
+        self._say_again(now_ms=now_ms)
+
+    def _say_again(self, *, now_ms: int) -> None:
+        """Close the leg with the say-again flash (#248).
+
+        Nothing is pasted or typed, and the Most-recent dictation and Last
+        Paste are left untouched, so an exact "paste" afterwards still recovers
+        the right text (ADR-0023 / ADR-0028).
+        """
         self._session.transcription_outstanding = False
         commands = self._sm.handle(Event.BORDERLINE, now_ms=now_ms)
         self._execute_commands(commands, now_ms=now_ms)
@@ -1153,12 +1215,17 @@ class DaemonCore:
 
         Only for use in tests — production code uses the 50 ms tick timer.
         """
-        if self._transcription_thread is not None:
-            self._transcription_thread.join(timeout=5.0)
-        # Mirror the production tick: flip the loading pill to transcribing once
-        # the model is resident, before the result is processed (#74).
-        self.check_loading_overlay(now_ms=now_ms)
-        self.check_transcription_result(now_ms=now_ms)
+        # A Borderline's confirm pass (#249) starts a second worker while the
+        # first result is processed, so follow the threads until none is new.
+        joined: threading.Thread | None = None
+        while self._transcription_thread is not joined:
+            joined = self._transcription_thread
+            if joined is not None:
+                joined.join(timeout=5.0)
+            # Mirror the production tick: flip the loading pill to transcribing
+            # once the model is resident, before the result is processed (#74).
+            self.check_loading_overlay(now_ms=now_ms)
+            self.check_transcription_result(now_ms=now_ms)
         if self._transform_thread is not None:
             self._transform_thread.join(timeout=5.0)
         self.check_transform_result(now_ms=now_ms)
