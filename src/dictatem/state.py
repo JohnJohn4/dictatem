@@ -29,7 +29,6 @@ class Event(enum.Enum):
     MAX_DURATION = "max_duration"
     TRANSCRIPTION_DONE = "transcription_done"
     EMPTY_RESULT = "empty_result"
-    OOM = "oom"
 
 
 class Command(enum.Enum):
@@ -40,8 +39,6 @@ class Command(enum.Enum):
     FLASH_ERROR = "flash_error"
     START_TAP_TIMER = "start_tap_timer"
     CANCEL_TAP_TIMER = "cancel_tap_timer"
-    RETRY_TRANSCRIPTION = "retry_transcription"
-    NOTIFY_ERROR = "notify_error"
 
 
 class StateMachine:
@@ -49,7 +46,6 @@ class StateMachine:
         self._state = State.IDLE
         self._tap_threshold_ms = tap_threshold_ms
         self._key_down_at: int | None = None
-        self._oom_retried: bool = False
 
     @property
     def state(self) -> State:
@@ -76,7 +72,6 @@ class StateMachine:
             self._state = State.TOGGLE_REC
             return [Command.CANCEL_TAP_TIMER]
         self._state = State.TRANSCRIBING
-        self._oom_retried = False
         return [Command.RECORD_STOP_AND_TRANSCRIBE]
 
     def _pressed_timer_expired(self, _now_ms: int) -> list[Command]:
@@ -98,14 +93,12 @@ class StateMachine:
 
     def _toggle_key_down(self, _now_ms: int) -> list[Command]:
         self._state = State.TRANSCRIBING
-        self._oom_retried = False
         return [Command.RECORD_STOP_AND_TRANSCRIBE]
 
     # -- PTT_REC handlers --
 
     def _ptt_key_up(self, _now_ms: int) -> list[Command]:
         self._state = State.TRANSCRIBING
-        self._oom_retried = False
         return [Command.RECORD_STOP_AND_TRANSCRIBE]
 
     # -- TRANSCRIBING handlers --
@@ -117,14 +110,6 @@ class StateMachine:
     def _transcribing_empty(self, _now_ms: int) -> list[Command]:
         self._state = State.IDLE
         return [Command.FLASH_ERROR]
-
-    def _transcribing_oom(self, _now_ms: int) -> list[Command]:
-        if not self._oom_retried:
-            self._oom_retried = True
-            return [Command.RETRY_TRANSCRIPTION]
-        self._state = State.IDLE
-        self._oom_retried = False
-        return [Command.NOTIFY_ERROR]
 
 
 _Handler = Callable[["StateMachine", int], list[Command]]
@@ -149,5 +134,4 @@ _HANDLERS: dict[tuple[State, Event], _Handler] = {
     (State.TRANSCRIBING, Event.TRANSCRIPTION_DONE): StateMachine._transcribing_done,
     (State.TRANSCRIBING, Event.ESC): StateMachine._cancel_to_idle,
     (State.TRANSCRIBING, Event.EMPTY_RESULT): StateMachine._transcribing_empty,
-    (State.TRANSCRIBING, Event.OOM): StateMachine._transcribing_oom,
 }

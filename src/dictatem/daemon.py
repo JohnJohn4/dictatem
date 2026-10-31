@@ -554,13 +554,6 @@ class DaemonCore:
         elif cmd is Command.FLASH_ERROR:
             self._overlay.show_error()
             self._tray.set_idle()
-        elif cmd is Command.NOTIFY_ERROR:
-            self._tray.show_notification(
-                "Transcription Failed",
-                "GPU memory exhausted; transcription failed.",
-            )
-        elif cmd is Command.RETRY_TRANSCRIPTION:
-            self._do_transcribe(now_ms=now_ms)
         elif cmd is Command.START_TAP_TIMER:
             pass
         elif cmd is Command.CANCEL_TAP_TIMER:
