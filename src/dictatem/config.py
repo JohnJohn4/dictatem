@@ -29,6 +29,9 @@ VALID_MODIFIER_NAMES = frozenset({
     "meta", "win", "alt", "ctrl", "shift", "mouse4", "mouse5", "middle",
 })
 
+# The only supported [audio].sample_rate (#238 / F-12).
+SAMPLE_RATE_HZ = 16_000
+
 VALID_LOG_LEVELS = frozenset({
     "debug", "info", "warning", "error", "critical",
 })
@@ -100,13 +103,14 @@ class LoggingConfig:
 
 @dataclass
 class BehaviourConfig:
-    silence_timeout_s: int = 60
-    max_recording_seconds: int = 300
+    # Decimal settings: a whole number (``= 3``) is accepted as well as ``3.0``.
+    silence_timeout_s: float = 60.0
+    max_recording_seconds: float = 300.0
     # One shared patience for model readiness (#74): the hard timeout for the
     # Ollama Transform request AND the threshold past which transcription shows
     # the "Model Loading" pill. A single knob keeps transcription and the LLM
     # consistent. Replaces the old [transform].timeout_s (default 30 -> 120).
-    model_timeout_s: int = 120
+    model_timeout_s: float = 120.0
 
 
 @dataclass
@@ -156,29 +160,115 @@ def default_config_path() -> Path:
     return Path.home() / ".dictatem" / "config.toml"
 
 
+@dataclass(frozen=True)
+class ConfigProblem:
+    """One problem found while loading config.toml (see Config Load Report).
+
+    *key* names the offending setting as ``[section].key`` (or ``[section]`` for
+    a whole section), or is empty for a file-level problem such as a TOML
+    syntax error. *message* is the human-readable detail that goes to the log.
+    """
+
+    key: str
+    message: str
+
+
+@dataclass
+class ConfigLoadReport:
+    """Everything that went wrong in one config load (CONTEXT.md).
+
+    Pure data: :func:`load_config_with_report` fills it and the daemon turns a
+    non-empty report into exactly one startup tray notification. *read_only*
+    marks a file that could not be read or parsed: nothing may write to it this
+    session, not even the Start-at-login toggle. Unknown keys and sections are
+    deliberately NOT problems — they stay info-only in the log.
+    """
+
+    problems: list[ConfigProblem] = field(default_factory=list)
+    read_only: bool = False
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.problems
+
+
+_OPEN_CONFIG_HINT = (
+    "Your config.toml was not changed — fix it via “Open config file…” "
+    "in the tray menu, then Restart."
+)
+
+
+def config_problem_notification(report: ConfigLoadReport) -> tuple[str, str] | None:
+    """The ``(title, body)`` of the one startup notification for *report*.
+
+    ``None`` for an empty report — a valid config shows nothing. The summary
+    names what was wrong; the full per-problem detail is already in the log.
+    """
+    if report.is_empty:
+        return None
+    if report.read_only:
+        detail = report.problems[0].message
+        return (
+            "Dictatem couldn't read config.toml",
+            f"{detail}. Running on the defaults for this machine this session. "
+            + _OPEN_CONFIG_HINT,
+        )
+    keys = [p.key for p in report.problems]
+    shown = ", ".join(keys[:3]) + (f" and {len(keys) - 3} more" if len(keys) > 3 else "")
+    noun = "setting" if len(keys) == 1 else "settings"
+    return (
+        "Dictatem config problem",
+        f"Invalid {noun} ignored, using the default instead: {shown}. "
+        + _OPEN_CONFIG_HINT,
+    )
+
+
 def load_config(path: Path, probe: HardwareProbe | None = None) -> Config:
+    """Load configuration from *path*; see :func:`load_config_with_report`."""
+    cfg, _report = load_config_with_report(path, probe=probe)
+    return cfg
+
+
+def load_config_with_report(
+    path: Path, probe: HardwareProbe | None = None
+) -> tuple[Config, ConfigLoadReport]:
     """Load configuration from *path*, falling back to defaults for missing/invalid values.
 
     If the file does not exist this is a *first run*: when a *probe* is given,
     the machine is probed once, the Hardware Tier resolved, and concrete values
     (including ``device``) are baked into the written config (see ADR-0007).
     Without a probe, a plain default config is written. An existing file is
-    read unchanged and the probe is never consulted.
+    read unchanged and the probe is never consulted — except when it cannot be
+    read or parsed: then the session runs on the Hardware Tier defaults this
+    machine would get on a first run (probe and resolve), the file is never
+    written, and the report is marked read-only (#238).
+
+    Every problem (unreadable file, wrong-type or invalid value) is logged and
+    collected in the returned :class:`ConfigLoadReport`.
     """
+    report = ConfigLoadReport()
     if not path.exists():
         cfg = _bake_first_run_config(probe) if probe is not None else Config()
         write_config(cfg, path)
-        return cfg
+        return cfg, report
 
     try:
         raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError as exc:
-        logger.warning("Failed to parse %s: %s — using defaults", path, exc)
-        return Config()
+    except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError) as exc:
+        logger.warning(
+            "Could not read %s: %s — running on this machine's Hardware Tier "
+            "defaults for this session; the file was not changed",
+            path,
+            exc,
+        )
+        report.problems.append(ConfigProblem(key="", message=str(exc)))
+        report.read_only = True
+        cfg = _bake_first_run_config(probe) if probe is not None else Config()
+        return cfg, report
 
-    cfg = _build_config(raw)
+    cfg = _build_config(raw, report)
     _warn_if_transform_not_local(cfg.transform)
-    return cfg
+    return cfg, report
 
 
 def is_loopback_url(url: object) -> bool:
@@ -257,7 +347,7 @@ def write_config(cfg: Config, path: Path) -> None:
     path.write_text(_serialize_toml(cfg), encoding="utf-8")
 
 
-def _build_config(raw: dict[str, Any]) -> Config:
+def _build_config(raw: dict[str, Any], report: ConfigLoadReport) -> Config:
     """Construct a Config from a parsed TOML dict, validating as we go."""
     kwargs: dict[str, Any] = {}
 
@@ -270,6 +360,10 @@ def _build_config(raw: dict[str, Any]) -> Config:
             logger.warning(
                 "Section [%s] is not a table — using defaults", section_name
             )
+            report.problems.append(ConfigProblem(
+                key=f"[{section_name}]",
+                message=f"[{section_name}] is not a table — using defaults",
+            ))
             continue
 
         cls = _SECTION_CLASSES[section_name]
@@ -284,52 +378,84 @@ def _build_config(raw: dict[str, Any]) -> Config:
         for f in fields(cls):
             if f.name not in section_data:
                 continue
-            value = section_data[f.name]
-            if f.name == "modifiers" and isinstance(value, list):
-                value = tuple(value)
             default_val = getattr(default_instance, f.name)
-            section_kwargs[f.name] = _validate_field(
-                section_name, f.name, value, default_val
+            value, problem = _check_field(
+                section_name, f.name, f.type, section_data[f.name], default_val
             )
+            if problem is not None:
+                logger.warning("%s", problem.message)
+                report.problems.append(problem)
+            section_kwargs[f.name] = value
 
         kwargs[section_name] = cls(**section_kwargs)
 
     return Config(**kwargs)
 
 
-def _validate_field(
-    section: str, key: str, value: Any, default: Any
-) -> Any:
-    """Return *value* if valid, otherwise log a warning and return *default*."""
-    positive_fields = _POSITIVE_INT_FIELDS.get(section, set())
+def _coerce_type(annotation: object, value: Any) -> tuple[bool, Any]:
+    """Check *value* against a dataclass field's declared type.
 
-    # Validate [hotkey].modifiers: all names must be known and result non-empty.
-    if section == "hotkey" and key == "modifiers" and isinstance(value, tuple):
-        valid_names = tuple(n for n in value if n in VALID_MODIFIER_NAMES)
-        if not valid_names or len(valid_names) != len(value):
-            logger.warning(
-                "Invalid value for [%s].%s: %r — using default %r",
-                section, key, value, default,
-            )
-            return default
-        return value
+    Returns ``(ok, coerced)``. *annotation* is the field's annotation string
+    (``from __future__ import annotations``). ``bool`` is rejected where an
+    ``int`` belongs even though Python treats it as one; an ``int`` is accepted
+    (as a float) where a ``float`` belongs; a tuple field takes a TOML array of
+    its element type.
+    """
+    if annotation == "bool":
+        return isinstance(value, bool), value
+    if annotation == "int":
+        return isinstance(value, int) and not isinstance(value, bool), value
+    if annotation == "float":
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return True, float(value)
+        return False, value
+    if annotation in ("str", "str | None"):
+        return isinstance(value, str), value
+    if annotation == "tuple[str, ...]":
+        if isinstance(value, list) and all(isinstance(v, str) for v in value):
+            return True, tuple(value)
+        return False, value
+    msg = f"No config type check for annotation {annotation!r}"
+    raise TypeError(msg)
 
-    invalid = (
-        (key in positive_fields and isinstance(value, int) and value <= 0)
-        or (section == "overlay" and key == "position"
-            and value not in VALID_OVERLAY_POSITIONS)
-        or (section == "logging" and key == "level"
-            and (not isinstance(value, str) or value.lower() not in VALID_LOG_LEVELS))
-    )
 
-    if invalid:
-        logger.warning(
-            "Invalid value for [%s].%s: %r — using default %r",
-            section, key, value, default,
+def _check_field(
+    section: str, key: str, annotation: object, value: Any, default: Any
+) -> tuple[Any, ConfigProblem | None]:
+    """Return ``(value, None)`` if valid, else ``(default, problem)``."""
+    name = f"[{section}].{key}"
+    ok, value = _coerce_type(annotation, value)
+    if not ok:
+        return default, ConfigProblem(
+            key=name,
+            message=(
+                f"Wrong type for {name}: {value!r} (expected {annotation}) — "
+                f"using default {default!r}"
+            ),
         )
-        return default
+    if not _value_is_valid(section, key, value):
+        return default, ConfigProblem(
+            key=name,
+            message=f"Invalid value for {name}: {value!r} — using default {default!r}",
+        )
+    return value, None
 
-    return value
+
+def _value_is_valid(section: str, key: str, value: Any) -> bool:
+    """Range/enum checks on a value already known to have the right type."""
+    if key in _POSITIVE_INT_FIELDS.get(section, set()) and value <= 0:
+        return False
+    if section == "audio" and key == "sample_rate":
+        # Fixed (F-12): the transcriber and the duration maths assume 16 kHz,
+        # so any other rate would silently produce garbage.
+        return value == SAMPLE_RATE_HZ
+    if section == "hotkey" and key == "modifiers":
+        return bool(value) and all(n in VALID_MODIFIER_NAMES for n in value)
+    if section == "overlay" and key == "position":
+        return value in VALID_OVERLAY_POSITIONS
+    if section == "logging" and key == "level":
+        return value.lower() in VALID_LOG_LEVELS
+    return True
 
 
 def _serialize_toml(cfg: Config) -> str:
@@ -351,8 +477,8 @@ def _toml_value(value: Any) -> str:
     """Format a Python value as a TOML literal."""
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
+    if isinstance(value, (int, float)):
+        return repr(value)
     if isinstance(value, str):
         return f'"{value}"'
     if isinstance(value, (list, tuple)):
