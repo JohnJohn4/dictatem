@@ -121,6 +121,25 @@ class TransformConfig:
     last_paste_ttl_s: int = 300
 
 
+@dataclass
+class TriggerWordsConfig:
+    # Hand-edited (ADR-0022): written commented-out while it holds the
+    # defaults, so it is discoverable but never pinned by the app.
+    # False restores exact-only Trigger Word matching (#247 / ADR-0028).
+    fuzzy_matching: bool = True
+
+
+# Sections shown commented-out in a written config while they equal their
+# defaults; written live once the user changes them, so an app rewrite (e.g.
+# the Start-at-login toggle) never reverts a hand edit.
+_COMMENTED_WHEN_DEFAULT: dict[str, str] = {
+    "trigger_words": (
+        "# Trigger Words tolerate small mishearings of a short command\n"
+        '# ("haste" -> paste). Uncomment and set false for exact-only matching.'
+    ),
+}
+
+
 _SECTION_CLASSES: dict[str, type[Any]] = {
     "hotkey": HotkeyConfig,
     "model": ModelConfig,
@@ -131,6 +150,7 @@ _SECTION_CLASSES: dict[str, type[Any]] = {
     "logging": LoggingConfig,
     "behaviour": BehaviourConfig,
     "transform": TransformConfig,
+    "trigger_words": TriggerWordsConfig,
 }
 
 
@@ -147,6 +167,7 @@ class Config:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     behaviour: BehaviourConfig = field(default_factory=BehaviourConfig)
     transform: TransformConfig = field(default_factory=TransformConfig)
+    trigger_words: TriggerWordsConfig = field(default_factory=TriggerWordsConfig)
 
 
 def default_config_path() -> Path:
@@ -473,12 +494,17 @@ def _serialize_toml(cfg: Config) -> str:
     lines: list[str] = []
     for section_name in _SECTION_CLASSES:
         section_obj = getattr(cfg, section_name)
-        lines.append(f"[{section_name}]")
+        note = _COMMENTED_WHEN_DEFAULT.get(section_name)
+        commented = note is not None and section_obj == type(section_obj)()
+        prefix = "# " if commented else ""
+        if note is not None:
+            lines.append(note)
+        lines.append(f"{prefix}[{section_name}]")
         for f in fields(type(section_obj)):
             value = getattr(section_obj, f.name)
             if value is None:
                 continue
-            lines.append(f"{f.name} = {_toml_value(value)}")
+            lines.append(f"{prefix}{f.name} = {_toml_value(value)}")
         lines.append("")
     return "\n".join(lines)
 

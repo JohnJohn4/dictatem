@@ -304,6 +304,111 @@ class TestTriggerFireHappyPath:
         assert transform_backend.calls[-1][1] == SUMMARIZE_PROMPT
 
 
+class TestFuzzyTriggerFire:
+    """A lone near-miss of an Alias ("summerize") runs the Trigger Fire on
+    the Last Paste, through the same gates and rails as an exact one (#247)."""
+
+    def test_lone_summerize_runs_the_trigger_fire(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+        clipboard: FakeClipboardIO,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = "Summerize."
+        transform_backend.queue_result("short")
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+        assert transform_backend.calls == [("the verbose text ", SUMMARIZE_PROMPT)]
+        assert keystroke.backspace_counts == [17]
+        assert keystroke.typed_texts == ["short "]
+        assert _set_texts(clipboard) == ["the verbose text "]
+
+    def test_without_a_last_paste_it_is_dictation(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        clipboard: FakeClipboardIO,
+    ) -> None:
+        backend._result = "summerize"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        assert transform_backend.calls == []
+        assert _set_texts(clipboard) == ["summerize "]
+
+    def test_target_change_aborts_a_fuzzy_fire(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+        foreground._target_id = 999
+
+        backend._result = "summerize"
+        transform_backend.queue_result("should not be used")
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+        assert transform_backend.calls == []
+        assert keystroke.total_backspaces == 0
+
+    def test_ttl_expiry_aborts_a_fuzzy_fire(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = "summerize"
+        transform_backend.queue_result("never used")
+        _cycle(core, start_ms=300_500, end_ms=301_500)
+
+        assert transform_backend.calls == []
+        assert keystroke.total_backspaces == 0
+
+    def test_focus_drift_during_generation_discards_a_fuzzy_fire(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = "summerize"
+        transform_backend.queue_result("CONDENSED")
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=2_000)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=2_200)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=3_000)
+        if core._transcription_thread is not None:
+            core._transcription_thread.join(timeout=5.0)
+        core.check_transcription_result(now_ms=3_000)
+        assert transform_backend.calls == [("the verbose text ", SUMMARIZE_PROMPT)]
+
+        # Focus moves while the LLM is generating: the paste-time rail
+        # re-checks the target and discards the result.
+        foreground.set_target(999)
+        if core._transform_thread is not None:
+            core._transform_thread.join(timeout=5.0)
+        core.check_transform_result(now_ms=3_200)
+
+        assert keystroke.total_backspaces == 0
+        assert keystroke.typed_texts == []
+
+
 # ── Backspace Units: emoji and accents (#242 / review F-5) ───────────
 
 THUMBS_MEDIUM = chr(0x1F44D) + chr(0x1F3FD)  # thumbs up + skin tone: 1 unit

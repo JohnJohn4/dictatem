@@ -113,6 +113,28 @@ def test_trigger_fire_operand_not_logged(
     _assert_secret_absent(caplog)
 
 
+def test_fuzzy_fires_do_not_log_the_heard_text(
+    core: DaemonCore,
+    backend: FakeTranscriberBackend,
+    transform_backend: FakeTransformBackend,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # #247: a fuzzy match neither logs the secret operand nor what was heard.
+    with caplog.at_level(logging.DEBUG, logger="dictatem"):
+        _cycle(core, start_ms=0, end_ms=1_000)
+        backend._result = "Summerize."
+        transform_backend.queue_result("CONDENSED")
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+        backend._result = "Haste."
+        _cycle(core, start_ms=4_000, end_ms=5_000)
+    assert transform_backend.calls  # the fuzzy Trigger Fire did run
+    _assert_secret_absent(caplog)
+    for record in caplog.records:
+        rendered = _FORMATTER.format(record).lower()
+        assert "summerize" not in rendered
+        assert "haste" not in rendered
+
+
 def test_short_utterance_diagnostics_logged_without_text(
     core: DaemonCore,
     backend: FakeTranscriberBackend,

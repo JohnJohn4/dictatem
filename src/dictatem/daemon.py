@@ -2201,7 +2201,9 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             ", ".join(shadowed),
             prompts_dir,
         )
-    trigger_recognizer = TriggerWordRecognizer(prompt_aliases)
+    trigger_recognizer = TriggerWordRecognizer(
+        prompt_aliases, fuzzy_matching=config.trigger_words.fuzzy_matching
+    )
 
     overlay_state = OverlayState(
         clock=time.monotonic,
