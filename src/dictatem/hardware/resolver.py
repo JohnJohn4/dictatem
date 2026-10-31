@@ -15,12 +15,18 @@ GPU-high      CUDA, >= 6 GB          large-v3-turbo   cuda     float16
 GPU-mid       CUDA, 3-6 GB           small            cuda     int8_float16
 GPU-low       CUDA, < 3 GB           base             cuda     int8_float16
 GPU-unknown   CUDA, VRAM unknown     small            cuda     int8_float16
-Apple-Silicon arm64 Mac (no CUDA)     small            cpu      int8
+Apple-GPU     MLX, >= 12 GB          large-v3-turbo   mlx      float16
+Apple-GPU-low MLX, < 12 GB/unknown   small            mlx      float16
+Apple-Silicon arm64 Mac, no MLX      small            cpu      int8
 CPU           no CUDA                base             cpu      int8
 ============  =====================  ===============  =======  ==============
 
-Apple-Silicon CPUs run ``small`` int8 fast enough for push-to-talk, a clear
-accuracy step up from ``base``; a Metal/MLX tier remains an ADR-0013 follow-up.
+"MLX usable" means Apple Silicon, macOS 14+ and the mlx-whisper engine
+installed (spec #224, ADR-0013 amendment). The 12 GB unified-memory split keeps
+``large-v3-turbo`` (~1.6 GB) off 8 GB Macs, where it would compete with the
+Transform model; unknown memory gets the conservative ``Apple-GPU-low`` row.
+Apple-Silicon CPUs without MLX run ``small`` int8 fast enough for push-to-talk,
+a clear accuracy step up from ``base``.
 
 ``base`` is the smallest auto-selected model; ``tiny`` is never auto-selected.
 Models stay multilingual (no ``.en`` suffix). All tiers default to the small
@@ -42,6 +48,8 @@ if TYPE_CHECKING:
 # VRAM thresholds in MB. Tunable, not contractual (see issue #36 / ADR-0007).
 VRAM_HIGH_MB = 6 * 1024  # >= this -> GPU-high
 VRAM_MID_MB = 3 * 1024  # >= this (and < HIGH) -> GPU-mid
+# Unified-memory split for the MLX tiers in MB (#233). Tunable, not contractual.
+UNIFIED_MEMORY_HIGH_MB = 12 * 1024  # >= this -> Apple-GPU, else Apple-GPU-low
 
 # The default Transform (Ollama) tag for every tier. `gemma4:e2b` is small enough
 # to run on CPU-only laptops and to co-reside with any Whisper tier on modest
@@ -78,6 +86,20 @@ _TIER_TABLE: dict[str, ResolvedHardware] = {
         model="small",
         device="cuda",
         compute_type="int8_float16",
+        transform_model=_TRANSFORM_MODEL,
+    ),
+    "Apple-GPU": ResolvedHardware(
+        tier="Apple-GPU",
+        model="large-v3-turbo",
+        device="mlx",
+        compute_type="float16",
+        transform_model=_TRANSFORM_MODEL,
+    ),
+    "Apple-GPU-low": ResolvedHardware(
+        tier="Apple-GPU-low",
+        model="small",
+        device="mlx",
+        compute_type="float16",
         transform_model=_TRANSFORM_MODEL,
     ),
     "Apple-Silicon": ResolvedHardware(
@@ -222,6 +244,13 @@ class HardwareTierResolver:
     def _classify(profile: HardwareProfile) -> str:
         """Return the tier name for *profile*. Pure, total over all profiles."""
         if not profile.cuda_available:
+            if profile.mlx_available:
+                memory = profile.unified_memory_mb
+                if memory is not None and memory >= UNIFIED_MEMORY_HIGH_MB:
+                    return "Apple-GPU"
+                # Below the split, or unknown: the small model leaves headroom
+                # for the Transform model sharing the same unified memory.
+                return "Apple-GPU-low"
             return "Apple-Silicon" if profile.apple_silicon else "CPU"
         vram = profile.total_vram_mb
         if vram is None:

@@ -2582,8 +2582,9 @@ def _start_macos_daemon() -> None:
     global hotkey (#56),
     NSPasteboard/CGEvent/NSWorkspace paste (#59), the CGPreflight permission
     check (#57), and the LaunchAgent autostart registrar (#61) — manual-QA
-    only, like their win32 counterparts. MacHardwareProbe reports no CUDA, so
-    first run bakes the CPU tier into the config.
+    only, like their win32 counterparts. MacHardwareProbe reports no CUDA plus
+    MLX availability and unified memory, so first run bakes an Apple-GPU,
+    Apple-Silicon or CPU tier into the config (#233).
 
     This body executes on the headless macOS CI leg (TestStarterAdapterSets):
     everything here must stay construction-only — no native call happens until
