@@ -113,7 +113,6 @@ class TestControlCharacterStripping:
         out = normalize_pasted_text(f"x{controls}y")
         assert out.startswith("x")
         assert out.endswith("y ")
-        assert out.strip(" ") == out.strip(" ").replace(" ", " ")
         assert all(c == " " or c.isprintable() for c in out)
 
     def test_plain_unicode_text_untouched(self) -> None:
