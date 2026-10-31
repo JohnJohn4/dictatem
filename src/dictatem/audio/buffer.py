@@ -28,10 +28,11 @@ class AudioBuffer:
         self._total_samples: int = 0
         # The capture backend's callback thread appends while the Qt tick thread
         # reads level/idle. The lock guards only the list + counter mutations;
-        # readers snapshot under it (cheap — O(#chunks)) then run the O(total)
-        # numpy work lock-FREE, so the realtime append() never blocks on a copy
-        # of the whole recording. Safe because a chunk is never mutated once
-        # appended, so a snapshot's arrays stay valid after the lock is dropped.
+        # readers snapshot just the tail chunks they need under it (cheap —
+        # O(tail chunks)) then run the numpy work lock-FREE, so the realtime
+        # append() never blocks on a copy. Flush still concatenates it all.
+        # Safe because a chunk is never mutated once appended, so a snapshot's
+        # arrays stay valid after the lock is dropped.
         self._lock = threading.Lock()
 
     def append(self, chunk: AudioChunk) -> None:
@@ -54,35 +55,44 @@ class AudioBuffer:
             return self._total_samples / self._sample_rate
 
     def current_level(self) -> float:
-        chunks, total = self._snapshot()
-        if total == 0:
-            return 0.0
-        tail = self._tail(chunks, total, self._level_window_samples)
-        return self._rms_normalized(tail)
+        chunks, _total = self._snapshot_tail(self._level_window_samples)
+        return self._rms_normalized(self._tail(chunks, self._level_window_samples))
 
     def is_idle_for_seconds(self, threshold: float) -> bool:
-        chunks, total = self._snapshot()
         required_samples = int(self._sample_rate * threshold)
+        chunks, total = self._snapshot_tail(required_samples)
         if total < required_samples:
             return False
-        tail = self._tail(chunks, total, required_samples)
+        tail = self._tail(chunks, required_samples)
         return self._rms_normalized(tail) < self._silence_floor
 
-    def _snapshot(self) -> tuple[list[AudioChunk], int]:
-        # Copy the chunk refs + sample count under the lock so the O(total)
-        # concatenate in _tail can run lock-free (see __init__).
+    def _snapshot_tail(self, n_samples: int) -> tuple[list[AudioChunk], int]:
+        # Copy, under the lock, only the refs of the newest chunks that cover
+        # the last n_samples (plus the total count) — O(tail chunks), not
+        # O(recording), so a 50 ms tick costs the same at 5 s or 5 min (F-9).
+        # The concatenate in _tail then runs lock-free (see __init__).
         with self._lock:
-            return list(self._chunks), self._total_samples
+            total = self._total_samples
+            if n_samples <= 0:
+                return [], total
+            picked: list[AudioChunk] = []
+            covered = 0
+            for chunk in reversed(self._chunks):
+                if covered >= n_samples:
+                    break
+                picked.append(chunk)
+                covered += len(chunk)
+        picked.reverse()
+        return picked, total
 
     @staticmethod
-    def _tail(chunks: list[AudioChunk], total: int, n_samples: int) -> AudioChunk:
+    def _tail(chunks: list[AudioChunk], n_samples: int) -> AudioChunk:
         # n_samples <= 0 must return empty — combined[-0:] is combined[0:], i.e.
         # the WHOLE buffer, which would compute RMS over the entire recording.
-        if total == 0 or n_samples <= 0:
+        if not chunks or n_samples <= 0:
             return np.array([], dtype=np.float32)
-        n_samples = min(n_samples, total)
         combined = np.concatenate(chunks)
-        return combined[-n_samples:]
+        return combined[-min(n_samples, len(combined)):]
 
     @staticmethod
     def _rms_normalized(samples: AudioChunk) -> float:
