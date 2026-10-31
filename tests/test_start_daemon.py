@@ -100,6 +100,16 @@ class TestOverlayAdapter:
 
         assert state.phase == OverlayPhase.ERROR_FLASH
 
+    def test_show_held_sets_held_phase(self) -> None:
+        state = OverlayState(clock=_Clock())
+        widget = _FakeWidget()
+        adapter = _OverlayAdapter(state=state, widget=widget)
+
+        adapter.show(RecordingMode.PTT)
+        adapter.show_held()
+
+        assert state.phase == OverlayPhase.HELD
+
     def test_hide_sets_fading_out(self) -> None:
         state = OverlayState(clock=_Clock())
         widget = _FakeWidget()

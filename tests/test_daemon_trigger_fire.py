@@ -547,8 +547,10 @@ class TestTriggerFirePasteTimeRail:
         assert keystroke.total_backspaces == 0
         assert keystroke.typed_texts == []
         assert keystroke.paste_count == 1  # only the original dictation pasted
-        # Discarded with the error flash.
+        # Discarded with the error flash — a genuine failure, nothing is held, so
+        # NOT the "Saved — say paste" Held signal (#239).
         assert any(c[0] == "show_error" for c in overlay.calls)
+        assert ("show_held",) not in overlay.calls
         # Last Paste is left UNCHANGED (still the original dictation @ target 42).
         assert core._last_paste is not None
         assert core._last_paste.text == "the verbose text "

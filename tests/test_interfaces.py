@@ -85,6 +85,7 @@ class TestProtocolSignatures:
         assert callable(getattr(interfaces.OverlayRenderer, "show_transcribing", None))
         assert callable(getattr(interfaces.OverlayRenderer, "show_computing", None))
         assert callable(getattr(interfaces.OverlayRenderer, "show_error", None))
+        assert callable(getattr(interfaces.OverlayRenderer, "show_held", None))
         assert callable(getattr(interfaces.OverlayRenderer, "hide", None))
 
     def test_tray_renderer_methods(self) -> None:

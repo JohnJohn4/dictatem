@@ -101,9 +101,10 @@ class TestDriftHold:
     def test_drift_hold_shows_quiet_flash(self) -> None:
         rig = _make_rig()
         _hold_cycle(rig, start_ms=0, end_ms=1_000, drift_to=99)
-        # The "saved — say paste" flash reuses the overlay error flash, which
-        # carries NO sound (there is no sound surface in Dictatem).
-        assert ("show_error",) in rig.overlay.calls
+        # The quiet "Saved — say paste" Held signal (#239), NOT the error flash.
+        # It carries NO sound (there is no sound surface in Dictatem).
+        assert ("show_held",) in rig.overlay.calls
+        assert ("show_error",) not in rig.overlay.calls
 
     def test_drift_hold_never_restores_focus(self) -> None:
         rig = _make_rig()

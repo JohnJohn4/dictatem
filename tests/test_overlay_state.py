@@ -499,6 +499,79 @@ class TestFlashError:
         assert state.phase == OverlayPhase.FADING_OUT
 
 
+class TestHeld:
+    """show_held() — the quiet "Saved — say paste" signal for a held dictation
+    (#239 / F-13 / ADR-0026): its own colour and caption, held ~1.5 s so the
+    caption can be read, then the normal fade-out."""
+
+    def _held_after_transcribing(self, state: OverlayState, clock: FakeClock) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.show_transcribing()
+        state.show_held()
+
+    def test_show_held_enters_held_phase(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._held_after_transcribing(state, clock)
+        assert state.phase == OverlayPhase.HELD
+
+    def test_held_has_its_own_colour_not_error(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._held_after_transcribing(state, clock)
+        assert state.current_color() == PillColor.HELD
+        assert PillColor.HELD != PillColor.ERROR
+
+    def test_held_hue_is_distinct_from_every_other_phase(self) -> None:
+        from dictatem.overlay.state import PILL_HEX
+
+        others = {PILL_HEX[c] for c in PillColor if c is not PillColor.HELD}
+        assert PILL_HEX[PillColor.HELD] not in others
+
+    def test_held_caption(self, state: OverlayState, clock: FakeClock) -> None:
+        self._held_after_transcribing(state, clock)
+        assert state.current_held_text() == "Saved — say paste"
+
+    def test_opacity_full_while_held(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._held_after_transcribing(state, clock)
+        clock.advance_ms(1_000)
+        state.tick()
+        assert state.current_opacity() == 1.0
+
+    def test_still_held_before_1500ms(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._held_after_transcribing(state, clock)
+        clock.advance_ms(1_499)
+        state.tick()
+        assert state.phase == OverlayPhase.HELD
+
+    def test_fades_out_after_1500ms_keeping_held_colour(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._held_after_transcribing(state, clock)
+        clock.advance_ms(1_500)
+        state.tick()
+        assert state.phase == OverlayPhase.FADING_OUT
+        assert state.current_color() == PillColor.HELD
+        clock.advance_ms(401)  # the 400 ms fade (+1 ms for float clock rounding)
+        state.tick()
+        assert state.phase == OverlayPhase.HIDDEN
+
+    def test_held_lasts_longer_than_error_flash(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        # A readable caption, unlike the 300 ms error blink.
+        self._held_after_transcribing(state, clock)
+        clock.advance_ms(300)
+        state.tick()
+        assert state.phase == OverlayPhase.HELD
+
+
 class TestImportSafety:
     def test_overlay_state_has_no_pyside6_imports(self) -> None:
         before = set(sys.modules.keys())

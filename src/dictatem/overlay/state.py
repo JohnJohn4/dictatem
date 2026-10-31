@@ -21,6 +21,7 @@ class OverlayPhase(enum.Enum):
     TRANSCRIBING = "transcribing"
     COMPUTING = "computing"
     ERROR_FLASH = "error_flash"
+    HELD = "held"  # the quiet "Saved — say paste" signal (#239)
     FADING_OUT = "fading_out"
 
 
@@ -35,7 +36,8 @@ class PillColor(enum.Enum):
     ACCENT = "accent"  # recording: the live waveform's colour
     PROCESSING = "processing"  # transcribing
     COMPUTING = "computing"  # a Transform/Trigger Fire generating (distinct hue)
-    ERROR = "error"  # the error / focus-drift "saved" flash
+    ERROR = "error"  # a genuine failure (empty result, discarded Trigger Fire, ...)
+    HELD = "held"  # a dictation held for recovery: "Saved — say paste" (#239)
 
 
 # The actual hue for each semantic PillColor, as hex. Pure so the Usage Guide's
@@ -47,8 +49,14 @@ PILL_HEX: dict[PillColor, str] = {
     PillColor.ACCENT: "#F4F6FA",  # recording
     PillColor.PROCESSING: "#F2B544",  # transcribing — amber
     PillColor.COMPUTING: "#9C8CFF",  # computing — iris
-    PillColor.ERROR: "#F07167",  # error / focus-drift "saved" flash — coral
+    PillColor.ERROR: "#F07167",  # genuine failure — coral
+    PillColor.HELD: "#4FD1A5",  # held for recovery — mint (#239)
 }
+
+# The Held pill's caption (#239 / F-13 / ADR-0026): a regular dictation was kept
+# in the Most-recent dictation buffer instead of pasted (focus drift, or a failed
+# paste), and saying "paste" lands it. Shared with the Usage Guide legend.
+HELD_CAPTION: str = "Saved — say paste"
 
 
 class Point(NamedTuple):
@@ -110,6 +118,8 @@ class OverlayState:
         self._fade_out_s = fade_out_ms / 1000.0
         self._bar_weights = _BAR_WEIGHTS[:bar_count]
         self._flash_duration_s = 0.300
+        # Long enough to read the Held caption, short enough to stay unobtrusive.
+        self._held_duration_s = 1.500
         self._phase = OverlayPhase.HIDDEN
         # The current phase colour (#96). Set on each show_*/flash transition and
         # held through the following fade-out, so the pill fades the colour it was
@@ -183,6 +193,21 @@ class OverlayState:
         self._phase = OverlayPhase.ERROR_FLASH
         self._transition_start = self._clock()
 
+    def show_held(self) -> None:
+        """The quiet "Saved — say paste" signal (#239 / F-13 / ADR-0026).
+
+        Shown when a regular dictation is held in the Most-recent dictation
+        buffer rather than pasted. Its own hue and caption — not the error flash —
+        held ~1.5 s, then the normal fade-out. Silent; never refocuses anything.
+        """
+        self._color = PillColor.HELD
+        self._phase = OverlayPhase.HELD
+        self._transition_start = self._clock()
+
+    def current_held_text(self) -> str:
+        """The caption the pill shows while HELD."""
+        return HELD_CAPTION
+
     def hide(self) -> None:
         self._busy_until = 0.0
         self._phase = OverlayPhase.FADING_OUT
@@ -195,6 +220,10 @@ class OverlayState:
                 self._phase = OverlayPhase.RECORDING
         elif self._phase == OverlayPhase.ERROR_FLASH:
             if now - self._transition_start >= self._flash_duration_s:
+                self._phase = OverlayPhase.FADING_OUT
+                self._transition_start = now
+        elif self._phase == OverlayPhase.HELD:
+            if now - self._transition_start >= self._held_duration_s:
                 self._phase = OverlayPhase.FADING_OUT
                 self._transition_start = now
         elif (
@@ -215,6 +244,7 @@ class OverlayState:
             OverlayPhase.TRANSCRIBING,
             OverlayPhase.COMPUTING,
             OverlayPhase.ERROR_FLASH,
+            OverlayPhase.HELD,
         ):
             return 1.0
         if self._phase == OverlayPhase.FADING_OUT:
@@ -227,10 +257,11 @@ class OverlayState:
         """The pill's phase colour — the Status Dot's replacement (#96).
 
         Carries recording phase: accent while recording, a distinct processing
-        hue while transcribing, a distinct hue while a Transform computes, and
-        the error/focus-drift flash colour. Held through the fade-out so the pill
-        fades the colour it was last showing. While LOADING the pill shows a text
-        caption instead (see :meth:`current_loading_text`), so this is unused then.
+        hue while transcribing, a distinct hue while a Transform computes, the
+        error flash colour, and the Held ("Saved — say paste") colour. Held
+        through the fade-out so the pill fades the colour it was last showing.
+        While LOADING the pill shows a text caption instead (see
+        :meth:`current_loading_text`), so this is unused then.
         """
         return self._color
 

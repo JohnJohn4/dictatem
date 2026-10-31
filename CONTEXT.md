@@ -277,6 +277,15 @@ colour while recording, a distinct processing colour while transcribing, and a
 generating). (This replaces the former [Status Dot](#status-dot); see
 [ADR-0026](docs/adr/0026-focus-drift-holds-the-dictation-overlay-shows-phase-by-colour.md).)
 
+When a regular dictation is **held** in the [Most-recent
+dictation](#most-recent-dictation) buffer instead of pasted — the focus-drift
+hold, or a paste that failed — the pill shows its own quiet **"Saved — say
+paste"** signal: a distinct Held colour with that caption, for about a second and
+a half, silent and never refocusing anything. It is *not* the error flash; the
+error flash is kept for genuine failures where nothing is held (an empty result,
+a discarded [Trigger Fire](#trigger-fire), "paste" with nothing to recover, a
+transcription error).
+
 While a model is still loading or downloading — the first dictation's Whisper
 load, the first [Trigger Word](#trigger-word)'s LLM load, a tray **Preload**, or
 the one-time first-run model **download** — the pill instead shows a text caption
