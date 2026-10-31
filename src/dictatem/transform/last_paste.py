@@ -11,9 +11,11 @@ class LastPaste:
 
     See ``CONTEXT.md#last-paste``.
 
-    ``char_count`` is the length of the *post-normalisation* string actually
-    sent to the focused window (i.e. what ``paste.pipeline._normalize``
-    produced), so backspace counts line up with what's on screen.
+    ``char_count`` is the length, in Backspace Units (user-perceived
+    characters, see ``paste.backspace_units``), of the *post-normalisation*
+    string actually sent to the focused window (what
+    ``paste.pipeline.normalize_pasted_text`` produced), so the Trigger Fire
+    backspace count lines up with what's on screen (#242).
     """
 
     text: str
