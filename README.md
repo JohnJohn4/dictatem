@@ -247,8 +247,9 @@ overlay flashes a message telling you which step is missing.
 ## Updating
 
 - **Windows** — right-click the tray icon → **Check for Updates…**. Dictatem
-  compares against the latest GitHub release and, if newer, re-runs the installer
-  for you (safe while running — it stops the old daemon first).
+  compares against the latest GitHub release and, if newer, asks before
+  re-running the installer for you (safe while running — it stops the old daemon
+  first).
 - **macOS** — re-run the [install one-liner](#macos); it refreshes the tool, the
   `.app`, and the start-at-login entry together. *(An in-app updater is not yet
   available on macOS — [#193](https://github.com/JohnJohn4/dictatem/issues/193).)*
