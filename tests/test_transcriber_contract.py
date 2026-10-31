@@ -15,7 +15,10 @@ on first run)::
 (PowerShell: ``$env:DICTATEM_REAL_ENGINES = "1"`` first.) Without the flag the
 real-engine params are skipped.
 
-Adding a backend (MLX #231, the fallback composite #232) is one entry in
+The MLX backend (``tiny``, ~75 MB) runs the same way on an Apple-Silicon Mac
+with the apple-gpu extra (``uv sync --extra apple-gpu``); elsewhere it skips.
+
+Adding a backend (e.g. the fallback composite #232) is one entry in
 ``BACKENDS``: a ``pytest.param`` whose value is a zero-argument factory
 returning a fresh, unloaded backend. Mark real engines with ``_real_engine()``.
 """
@@ -23,6 +26,8 @@ returning a fresh, unloaded backend. Mark real engines with ``_real_engine()``.
 from __future__ import annotations
 
 import os
+import platform
+import sys
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -58,9 +63,29 @@ def _faster_whisper_tiny() -> TranscriberBackend:
     return FasterWhisperBackend(model_name="tiny", device="cpu", compute_type="int8")
 
 
+def _mlx_tiny() -> TranscriberBackend:
+    from dictatem.transcribe.mlx_backend import MlxBackend
+
+    return MlxBackend(model_name="tiny", compute_type="float16")
+
+
+# MLX runs only on an Apple-Silicon Mac with the apple-gpu extra (#231). GitHub
+# macOS runners can't be relied on for Metal, so this is real-Mac QA only.
+_APPLE_SILICON = sys.platform == "darwin" and platform.machine() == "arm64"
+
 BACKENDS = [
     pytest.param(FakeTranscriberBackend, id="fake"),
     pytest.param(_faster_whisper_tiny, id="faster-whisper", marks=_real_engine()),
+    pytest.param(
+        _mlx_tiny,
+        id="mlx",
+        marks=[
+            *_real_engine(),
+            pytest.mark.skipif(
+                not _APPLE_SILICON, reason="MLX needs an Apple-Silicon Mac (darwin/arm64)"
+            ),
+        ],
+    ),
 ]
 
 

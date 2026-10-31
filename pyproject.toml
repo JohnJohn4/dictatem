@@ -132,5 +132,7 @@ exclude = [
     "src/dictatem/permissions/mac_tcc.py",
     "src/dictatem/permissions/qt_dialog.py",
     "src/dictatem/macapp/activation.py",
+    # Apple-GPU engine adapter: mlx / mlx_whisper resolve only on macOS arm64.
+    "src/dictatem/transcribe/mlx_backend.py",
 ]
 typeCheckingMode = "standard"
