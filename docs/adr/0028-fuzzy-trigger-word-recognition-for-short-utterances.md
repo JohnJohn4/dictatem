@@ -37,8 +37,15 @@ recognizer adds a fuzzy tier behind the unchanged exact rule:
 - **Pure Python, no new dependency.** An in-repo Levenshtein and phonetic key
   (`transform/phonetic.py`), pinned by the recognizer's golden-table tests.
 - **Escape hatch.** `[trigger_words].fuzzy_matching = false` restores exact-only
-  matching. The section is hand-edited and appears commented in the first-run
-  config (ADR-0022).
+  matching. The section is hand-edited (ADR-0022) and follows a "commented
+  while default, live once changed" serialisation rule (`_COMMENTED_WHEN_DEFAULT`
+  in `config.py`): whenever Dictatem writes the config, `[trigger_words]` is
+  written commented out while it still equals its defaults (discoverable, but
+  never pinned by the app), and written live once the user has changed it.
+  The reason is the app's own config rewrites, such as the Start-at-login
+  toggle: they serialise the loaded config, so a section that was always
+  written commented would silently revert a user's hand edit, and one always
+  written live would pin today's defaults into every config.
 
 **Borderline pastes nothing (#248).** A weak match, an unconfident strong match
 or a cross-action tie is a third outcome, [Borderline](../../CONTEXT.md#borderline):
@@ -63,7 +70,11 @@ Trigger Words ("Summarize. Paste.") plus `hotwords` where the installed
 faster-whisper supports them. The recognizer fires only if that pass is an
 exact or strong-confident match for the *same action* as one of the Borderline
 candidates (any Alias of it). A match for a different action, another
-Borderline, dictation, or an error all end in say-again, as before. The pill
+Borderline, dictation, or an unexpected error all end in say-again, as before.
+A model-load failure or a GPU out-of-memory error (after the usual retry) is
+surfaced exactly as on the first pass (tray notification, back to idle):
+"say again" would hide a broken model behind a prompt to repeat a command
+that can never work. The pill
 stays "transcribing" and Esc discards the pass like any in-flight
 transcription. The persistent Vocabulary hint is not applied to this pass, and
 regular dictation is never biased.
@@ -79,6 +90,21 @@ regular dictation is never biased.
   onset can't be trimmed again. The confirm utterance is judged against the
   first pass's post-VAD speech duration, because the VAD-off pass reports the
   whole recording.
+
+**Load-time collision warnings use a cautious "within fuzzy range" bound
+(#251).** At startup Dictatem warns about two Aliases of different actions
+that sound alike (spec #226 Layer 4: an Alias that "sits within fuzzy range
+of" another), and about each Alias too short for fuzzy tolerance. Two Aliases
+are paired when they are equal, when their phonetic keys are equal, or, only
+if both are long enough for fuzzy matching, when the better of their spelling
+and phonetic-key similarity is at least 0.60 (`COLLISION_SCORE`). An
+exact-only Alias never fires on a near-miss, so it is only paired on an
+identical sound. The 0.60 bound is a heuristic, not a derived guarantee: it
+sits deliberately below the recognizer's weak band (0.70) so that pairs a
+mishearing could carry from one to the other are flagged. "palace" /
+"polish" scores only 0.67 on phonetic keys yet is exactly the pair a user
+should hear about. A false warning costs a log line; a missed one costs a
+wrong Trigger Fire.
 
 Thresholds are module constants, not config, and tests assert decisions only,
 so they stay tunable.
