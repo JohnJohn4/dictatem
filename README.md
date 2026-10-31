@@ -121,7 +121,7 @@ dropping a markdown prompt file into `~/.dictatem/prompts/`.
 
 Right-click the icon for: **Start/Stop Recording**, **Copy last dictation**,
 **Preload / Unload Model**, **Open config file…**, **How to use Dictatem…** (a
-live in-app guide), **Check for Updates…**, **Show Log**, **Restart**,
+live in-app guide), **Check for updates…**, **Show Log**, **Restart**,
 **Quit**.
 
 ---
@@ -150,7 +150,7 @@ the network:
 - **One-time model download** — the Faster-Whisper weights are fetched from
   Hugging Face at setup / on your first dictation. After that, transcription is
   fully offline.
-- **Manual update check** — only when you click **Check for Updates…**
+- **Manual update check** — only when you click **Check for updates…**
   in the tray; it asks `api.github.com` for the latest release number and sends
   nothing else. There is no automatic/background check.
 - **Install & upgrade** — the install one-liner fetches `uv`/CPython, Dictatem,
@@ -251,11 +251,11 @@ overlay flashes a message telling you which step is missing.
 
 ## Updating
 
-- **Windows** — right-click the tray icon → **Check for Updates…**. Dictatem
+- **Windows** — right-click the tray icon → **Check for updates…**. Dictatem
   compares against the latest GitHub release and, if newer, asks before
   re-running the installer for you (safe while running — it stops the old daemon
   first).
-- **macOS** — click the menu-bar icon → **Check for Updates…**. If a newer
+- **macOS** — click the menu-bar icon → **Check for updates…**. If a newer
   release exists, Dictatem shows its version and the matching install command —
   click **Copy Update Command**, paste it into **Terminal**, and press Return.
   Dictatem never runs the update itself on macOS. The command is just the
@@ -325,7 +325,7 @@ again before a manual re-install (the tray update re-detects instead).
   transiently sits on the pasteboard (~1.5 s) before your original clipboard is
   restored, so a clipboard-history app could capture it — see
   [Privacy](#privacy).
-- **Updating is copy-and-paste** — **Check for Updates…** finds a newer release
+- **Updating is copy-and-paste** — **Check for updates…** finds a newer release
   and gives you the install command to run in Terminal; it never updates itself
   on macOS (see [Updating](#updating)).
 </details>

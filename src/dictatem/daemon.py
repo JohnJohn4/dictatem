@@ -1629,11 +1629,14 @@ class _PlatformAdapters:
     into its native adapters (macOS: the event tap's creation failure and the
     keystroke sender's Accessibility preflight). ``None`` = no such reports.
 
-    ``relaunch`` backs the tray **Restart** item: it spawns whatever restarts
-    the daemon the platform's supported way and returns ``True`` (the daemon
-    then quits so the new instance can take the single-instance lock), or
-    ``False`` when it can't (nothing spawned; the user is told how instead).
-    ``None`` leaves the item unwired (Windows, unchanged).
+    ``relaunch`` backs the tray **Restart** item (#212): it spawns whatever
+    restarts the daemon the platform's supported way and returns ``True`` (the
+    daemon then quits so the new instance can take the single-instance lock), or
+    ``False`` when it can't (nothing spawned; the user is shown
+    ``relaunch_failed_hint`` instead). Windows spawns a detached replacement
+    daemon (``process.restart``); macOS plugs its launchd relauncher in here
+    (#95). ``None`` hides the Restart item rather than leave a silent no-op.
+    ``relaunch_failed_hint`` ``None`` means the generic Quit-and-start-again copy.
     """
 
     probe: HardwareProbe
@@ -1653,6 +1656,7 @@ class _PlatformAdapters:
         Callable[[Callable[[MacPermission], None]], None] | None
     ) = None
     relaunch: Callable[[], bool] | None = None
+    relaunch_failed_hint: str | None = None
 
 
 def _make_sounddevice_capture(config: Config, buffer: AudioBuffer) -> AudioCapture:
@@ -1687,7 +1691,9 @@ def _make_macaudio_capture(config: Config, buffer: AudioBuffer) -> AudioCapture:
     return MacAudioCapture(config, buffer)
 
 
-def _acquire_single_instance_lock(lock_path: Path) -> object | None:
+def _acquire_single_instance_lock(
+    lock_path: Path, *, wait_ms: int = 0
+) -> object | None:
     """Acquire the cross-platform single-instance lock (#92).
 
     Returns a lock object the caller must keep alive for the whole process, or
@@ -1717,6 +1723,11 @@ def _acquire_single_instance_lock(lock_path: Path) -> object | None:
     a rare edge — the common relaunch path (the installer's ``Stop-DictatemDaemon``
     / #98) stops the old daemon first, leaving no stale lock.
 
+    *wait_ms* > 0 is the tray-Restart path (#212): the replacement daemon is
+    spawned while the old one still holds the lock, so it waits up to *wait_ms*
+    for the old one to exit instead of failing fast. Still ``None`` if the lock
+    stays held past the wait — never two daemons at once.
+
     The import stays lazy so ``dictatem.daemon`` imports with no Qt present
     (``test_import_safety``).
     """
@@ -1725,9 +1736,10 @@ def _acquire_single_instance_lock(lock_path: Path) -> object | None:
     lock = QLockFile(str(lock_path))
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        # Try once without blocking: a redundant instance must fail fast and
-        # exit, not queue up waiting for the live daemon to release the lock.
-        if lock.tryLock(0):
+        # Normally try once without blocking: a redundant instance must fail
+        # fast and exit, not queue up waiting for the live daemon to release the
+        # lock. A Restart-spawned daemon (wait_ms > 0) waits for its predecessor.
+        if lock.tryLock(max(wait_ms, 0)):
             return lock
         if lock.error() == QLockFile.LockError.LockFailedError:
             return None  # genuinely held by a live daemon — the caller exits
@@ -1860,11 +1872,22 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # instance is still alive; a dev clone next to the installed build does it
     # too). Acquire the lock BEFORE any hook, audio, model, or tray setup so a
     # redundant instance exits cleanly here, leaving the live daemon untouched.
+    # A tray Restart (#212) spawns this daemon while the old one is still
+    # quitting, so that one case waits for the old one to release the lock.
     # ``_instance_lock`` is intentionally bound for the whole function: it must
     # outlive setup (app.exec() below holds it until the process exits), and
     # releasing the QLockFile would drop the guard.
+    from dictatem.process.restart import take_restart_lock_wait_ms
+
+    lock_wait_ms = take_restart_lock_wait_ms(os.environ)
+    if lock_wait_ms:
+        logger.info(
+            "Restarted from the tray; waiting up to %d ms for the previous "
+            "instance to exit",
+            lock_wait_ms,
+        )
     _instance_lock = _acquire_single_instance_lock(
-        Path.home() / ".dictatem" / "daemon.lock"
+        Path.home() / ".dictatem" / "daemon.lock", wait_ms=lock_wait_ms
     )
     if _instance_lock is None:
         logger.warning("Another Dictatem instance is already running; exiting")
@@ -2083,6 +2106,30 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     tray_icon.set_autostart_available(autostart_registrar is not None)
     tray_icon.on_quit = lambda: daemon.on_tray_quit(app.quit)
 
+    # Tray "Restart" (#212) — how a config.toml edit takes effect (the Usage
+    # Guide and README send the user here). The platform adapter spawns the
+    # replacement (Windows: a detached daemon that waits for our lock; macOS: a
+    # launchd kickstart, #95), then this daemon quits to free the lock. Hidden
+    # where the platform has no relauncher, so it is never a silent no-op.
+    relaunch = adapters.relaunch
+    if relaunch is not None:
+        from dictatem.process.restart import RESTART_FAILED_HINT
+
+        relaunch_failed_hint = adapters.relaunch_failed_hint or RESTART_FAILED_HINT
+
+        def _on_tray_restart() -> None:
+            logger.info("Restart requested from the tray")
+            try:
+                if relaunch():
+                    daemon.on_tray_quit(app.quit)
+                    return
+            except Exception:
+                logger.error("Error restarting Dictatem", exc_info=True)
+            tray.show_notification("Couldn't restart Dictatem", relaunch_failed_hint)
+
+        tray_icon.on_restart = _on_tray_restart
+    tray_icon.set_restart_available(relaunch is not None)
+
     # Tray "Check for Updates…" (#100). Resolve the latest GitHub release off the
     # UI thread and, if newer, act per the platform's update path (#193,
     # upgrade.prompt): on Windows re-run the install one-liner at that tag —
@@ -2149,27 +2196,6 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # they're on (e.g. after an upgrade). Hidden if the version can't be read.
     _ver = _current_version()
     tray_icon.set_version_label(f"Dictatem v{_ver}" if _ver else "")
-
-    # Tray "Restart" (#95): the permission dialogs send the user here, since a
-    # new grant only applies after a relaunch. The platform adapter spawns the
-    # supported restart (macOS: a detached launchctl kickstart, so the new
-    # daemon is a launchd job and keeps its grants) and this daemon quits to
-    # free the single-instance lock. Unwired where there is no adapter.
-    if adapters.relaunch is not None:
-        relaunch = adapters.relaunch
-
-        def _on_tray_restart() -> None:
-            try:
-                if relaunch():
-                    daemon.on_tray_quit(app.quit)
-                    return
-            except Exception:
-                logger.error("Error restarting Dictatem", exc_info=True)
-            from dictatem.macapp.relaunch import MANUAL_RELAUNCH_HINT
-
-            tray.show_notification("Couldn't restart Dictatem", MANUAL_RELAUNCH_HINT)
-
-        tray_icon.on_restart = _on_tray_restart
 
     # Ready signal for the installer (#95): once the loop runs and the tray icon
     # is realized (QtTrayIcon queued its own 0 ms realize first), drop a marker
@@ -2462,6 +2488,7 @@ def _start_windows_daemon() -> None:
     from dictatem.paste.win32_clipboard import Win32ClipboardIO
     from dictatem.paste.win32_foreground import Win32ForegroundTracker
     from dictatem.paste.win32_keystroke import Win32KeystrokeSender
+    from dictatem.process.restart import spawn_restart
 
     # One keystroke sender, shared by the paste rail AND the keyboard hook's
     # neutralizing-mask injector (#171), so the hook can emit the Ctrl tap that
@@ -2493,6 +2520,7 @@ def _start_windows_daemon() -> None:
             install_keyboard_hook=_install_hook,
             install_mouse_hook=_install_mouse_hook,
             check_permissions=None,
+            relaunch=spawn_restart,
         )
     )
 
@@ -2516,7 +2544,7 @@ def _start_macos_daemon() -> None:
     from dictatem.hardware.mac_probe import MacHardwareProbe
     from dictatem.hotkey.mac_hook import CGEventTapHook
     from dictatem.macapp.bundle import default_app_bundle_path
-    from dictatem.macapp.relaunch import spawn_launchd_relaunch
+    from dictatem.macapp.relaunch import MANUAL_RELAUNCH_HINT, spawn_launchd_relaunch
     from dictatem.paste.mac_clipboard import MacClipboardIO
     from dictatem.paste.mac_foreground import MacForegroundTracker
     from dictatem.paste.mac_keystroke import MacKeystrokeSender
@@ -2599,5 +2627,6 @@ def _start_macos_daemon() -> None:
             check_permissions=check_permissions,
             bind_permission_reporter=_bind_permission_reporter,
             relaunch=spawn_launchd_relaunch,
+            relaunch_failed_hint=MANUAL_RELAUNCH_HINT,
         )
     )

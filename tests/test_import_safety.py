@@ -66,6 +66,7 @@ DICTATEM_MODULES = [
     "dictatem.permissions.reprompt",
     "dictatem.macapp.relaunch",
     "dictatem.onboarding",
+    "dictatem.process.restart",
 ]
 
 # A known native adapter per platform. The discovery glob below must surface

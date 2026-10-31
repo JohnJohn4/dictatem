@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QMessageBox
 
-from dictatem.upgrade.core import apply_upgrade_decision, decide_upgrade
+from dictatem.upgrade.core import UpgradeKind, apply_upgrade_decision, decide_upgrade
 
 if TYPE_CHECKING:
     from collections.abc import Callable
