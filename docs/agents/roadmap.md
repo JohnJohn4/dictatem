@@ -24,37 +24,41 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: the macOS launch gates — #95, #94, #93, #193, and S11/#91.**
+**Next up: #227 signed App Launcher — owner review of the ADR, then #254.**
 
-The five pre-launch must-fixes (**#188–#192**) are **DONE and in review** as PRs
-**#194/#195/#196/#197/#198** (merge order **#188 → #190 → #189 → #191 → #192**;
-#196 is stacked on #195 — merge #195 first). See the 2026-07-16 ledger entry for
-what shipped and the decisions taken. Once those merge, the **Windows launch is
-clear**.
+Spec **#227** (a Developer-ID-signed App Launcher becomes the macOS **Permission
+Identity**, so the panes show "Dictatem", not "python3.12") is broken into
+tickets **#252–#261**, connected by GitHub-native blocked-by links. The
+**#252 ADR-0014 amendment** is written and open for the owner's review, as a
+PR into the integration branch `feat/227-signed-app-launcher`, which is cut
+from `beta/mac-2026-10-31`.
 
-The remaining launch gates are all **macOS**: **#95** (launch-blocking first-run
-onboarding + re-prompt-on-use), **#94** (refresh the stale v0.4.0 QA runbook +
-run it on a real Mac), **#93** (intermittent paste-not-landing), **#193** (macOS
-in-app update path), and the **S11/#91 signing decision** — the review
-recommends paying the $99 Developer-ID (a **user spend call**). Read the
-pre-launch review §5 (`docs/reviews/2026-07-08-prelaunch-review.md`) for the
-ordered macOS checklist and §§3–4 for the remaining non-gating findings
-(F-4…F-15, S-1/S-3/S-4) — deliberately *not* filed yet; file each as picked up.
-The **trigger-word overhaul (review §6)** is the recommended first post-launch
-release.
+**Gate 1:** no implementation ticket starts until the owner approves and merges
+that PR.
 
-**Settled — do NOT reopen:** the #188–#192 decisions are made (see the ledger
-entry + PR bodies for the deliberately-not-taken options — #189 TTL-at-paste-time,
-#191 stale-caret-same-window / whisper-hallucination-on-silence). S1–S9 done + QA
-passed; the macOS #161 freeze is FIXED and SHIPPED in **v0.6.2** (ADR-0027 native
-AVAudioEngine; QA PASS on the repro device); v0.6.3 (macOS `av` wheel pin) and
-v0.6.4 (README rewrite) shipped; post-#161 cleanup is DONE. Follow-ups tracked:
-#184 (Windows WASAPI), `config.audio.device` on macOS, off-main-thread `stop()`
-teardown. load-on-arm (ADR-0025) stands.
+**Gate 2:** **#254**'s real-Mac TCC check, using an ad-hoc build launched by a
+LaunchAgent, must pass before **#255–#260** are worth building.
 
-Skills: `verify`/`run`, `tdd`, `diagnose`, `grill-me` (for #91). Your role: the
-macOS track needs a **real Mac** (or the user's signing spend call) — confirm
-availability with the user before picking it up.
+The amendment records the ordered fallback if the gate fails. **#253** (Apple
+enrollment and secrets) is human-only and still pending, and it blocks
+**#258** and **#261**.
+
+Once the gates clear, run the remaining tickets with
+`/implement-spec https://github.com/JohnJohn4/dictatem/issues/227` on the same
+integration branch.
+
+The earlier macOS launch gates (#95, #193, #212) are in review as PRs
+#210/#211/#223, with the #225 reliability work in PR #262. See the ledger.
+
+**Settled, do NOT reopen:**
+- spawn-not-exec responsibility-chain attribution
+- the rejected alternatives and their fallback order
+- the Team-ID-pinned designated-requirement trust anchor
+- ad-hoc bundles are never installed by default
+- bundle id `com.dictatem.daemon` is permanent
+
+Skills: `implement-spec`, `tdd`. Your role: wait for the owner's ADR approval.
+#254 needs a **real Mac** for its gate.
 
 ---
 
@@ -343,6 +347,24 @@ Skills: <list>. Your role: <autonomous / decisions-needed / manual-QA on <device
 ```
 
 <!-- entries below -->
+
+### #227 kickoff: ADR-0014 amendment (#252) — 2026-10-31
+- **Shipped:** the ADR-0014 amendment covering the decision, the download
+  trust chain, the integrity residual, the QA gate and fallback order,
+  considered options and revised postures. ADR-0011 gains a note on the
+  narrowed posture.
+- **Issues:** #252 is in review and stays open until it merges.
+- **PRs:** ADR PR into `feat/227-signed-app-launcher`. Its base is
+  `beta/mac-2026-10-31`, which has #210's mapper and re-prompt; main doesn't
+  yet.
+- **QA owed:** none for the ADR. #254 carries the real-Mac gate.
+- **Follow-ups / notes:**
+  - The owner chose to stop after the ADR, so nothing gets built on an
+    unconfirmed architecture.
+  - The amendment names #54 (status item lost under a LaunchServices bundle
+    launch) as the main gate risk.
+  - The glossary terms **App Launcher** and **Permission Identity** land with
+    #255.
 
 ### Pre-launch fixes #188–#192 — 2026-07-16
 - **Shipped:** the five pre-launch must-fixes from the deep review, one branch +
