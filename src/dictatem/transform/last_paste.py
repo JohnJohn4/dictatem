@@ -11,7 +11,7 @@ class LastPaste:
 
     See ``CONTEXT.md#last-paste``.
 
-    ``char_count`` is the length, in Backspace Units (user-perceived
+    ``backspace_units`` is the length, in Backspace Units (user-perceived
     characters, see ``paste.backspace_units``), of the *post-normalisation*
     string actually sent to the focused window (what
     ``paste.pipeline.normalize_pasted_text`` produced), so the Trigger Fire
@@ -19,7 +19,7 @@ class LastPaste:
     """
 
     text: str
-    char_count: int
+    backspace_units: int
     target_id: int
     pasted_at_ms: int
 

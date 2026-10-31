@@ -335,6 +335,30 @@ class TestFullFormatSnapshot:
         assert "HTML Format" in caplog.text
         assert "top secret" not in caplog.text
 
+    def test_stops_measuring_non_text_once_over_cap(
+        self,
+        preserve_clipboard: None,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Like the mac adapter: once the bytes measured pass the cap, later
+        # non-text formats are not read (no needless delayed renders).
+        small = Win32ClipboardIO(snapshot_cap_bytes=64)
+        big_fmt = win32clipboard.RegisterClipboardFormat("dictatem smoke big")
+        late_fmt = win32clipboard.RegisterClipboardFormat("dictatem smoke late")
+        text = "keep me\0".encode("utf-16-le")
+        _put_raw([
+            (big_fmt, b"x" * 200),
+            (late_fmt, b"late"),
+            (win32clipboard.CF_UNICODETEXT, text),
+        ])
+        result: list[ClipboardSnapshot] = []
+        with caplog.at_level(logging.WARNING):
+            _retry_clipboard_op(lambda: result.append(small.save()))
+        assert "dictatem smoke late=unmeasured" in caplog.text
+        _dictate_over(result[0])
+        assert _read_text() == "keep me"
+        assert _read_raw(late_fmt) is None
+
     def test_empty_clipboard_round_trips_empty(self, preserve_clipboard: None) -> None:
         _put_raw([])
         saved = _save()

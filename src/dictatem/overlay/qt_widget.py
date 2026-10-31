@@ -193,15 +193,12 @@ class QtOverlayWidget(QWidget):
         # hue instead of bars — informational, so it reads as words, not as the
         # error flash. The colour stays HELD through the fade-out too.
         if self._state.current_color() == PillColor.HELD:
-            painter.setPen(_PHASE_HUES[PillColor.HELD])
-            font = QFont(painter.font())
-            font.setPointSizeF(10.0)
-            font.setWeight(QFont.Weight.DemiBold)
-            painter.setFont(font)
-            painter.drawText(
-                self.rect(),
-                Qt.AlignmentFlag.AlignCenter,
+            self._draw_caption(
+                painter,
                 self._state.current_held_text(),
+                _PHASE_HUES[PillColor.HELD],
+                10.0,
+                Qt.AlignmentFlag.AlignHCenter,
             )
             painter.end()
             return

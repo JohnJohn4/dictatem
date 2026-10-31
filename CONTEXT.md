@@ -301,6 +301,15 @@ colour). See
 [ADR-0016](docs/adr/0016-overlay-pill-model-loading-state.md) and
 [ADR-0025](docs/adr/0025-cold-start-load-on-arm-fetch-on-first-run.md).
 
+### Busy Nudge
+
+The [Overlay Pill](#overlay-pill)'s brief acknowledgement of a hotkey press made
+while Dictatem is already working (transcribing, computing a
+[Transform](#transform), or loading a model): the pill shows "Still working —
+Esc cancels" over the current phase colour for about a second and a half, then
+reverts on its own. The press is never acted on — it does not start, stop or
+queue anything — so a worried second press can't double a dictation (#240).
+
 ### Status Dot
 
 **Retired.** The dot on the [Overlay Pill](#overlay-pill) formerly signalled
@@ -362,9 +371,10 @@ The list of problems found while loading `config.toml`: an unreadable or
 unparseable file (with the parser's message and position), or a key with the
 wrong type or an invalid value (which falls back to its default). The daemon
 turns a non-empty report into exactly one startup tray notification; the detail
-goes to the log. An unreadable file makes the config **read-only for the
-session**: Dictatem runs on the [Hardware Tier](#hardware-tier) defaults and
-writes nothing, not even the Start-at-login toggle. Unknown keys and sections
+goes to the log. Any problem makes the config **read-only for the session**:
+Dictatem writes nothing, not even the Start-at-login toggle (which then applies
+for the session only). An unreadable file also runs the session on the
+[Hardware Tier](#hardware-tier) defaults. Unknown keys and sections
 are not problems; they stay info-only in the log. Dictatem never rewrites the
 file to "fix" it (ADR-0009 / ADR-0022).
 

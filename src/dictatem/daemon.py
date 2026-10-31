@@ -483,8 +483,9 @@ class DaemonCore:
         self._autostart_registrar = autostart_registrar
         self._persist_autostart = persist_autostart
         # --- Config Load Report (#238) ---
-        # The config file could not be read or parsed: nothing may write it
-        # this session, so the autostart toggle applies for the session only.
+        # The Config Load Report had a problem (unreadable file or a bad key):
+        # the startup notice promised the file was not changed, so nothing may
+        # write it this session — the autostart toggle is session-only.
         self._config_read_only = config_read_only
 
     def notify_config_problems(self, report: ConfigLoadReport) -> None:
@@ -507,9 +508,10 @@ class DaemonCore:
         restart — keeping the flag the single source of truth. Wrapped so a
         registry hiccup can never crash the daemon.
 
-        While the config is read-only for the session (unreadable file, #238)
-        the toggle applies for this session only: the config writer is never
-        called, and a notification says why the change wasn't saved.
+        While the config is read-only for the session (the Config Load Report
+        had any problem, #238) the toggle applies for this session only: the
+        config writer is never called, and a notification says why the change
+        wasn't saved.
         """
         try:
             if self._autostart_registrar is not None:
@@ -521,12 +523,12 @@ class DaemonCore:
             if self._config_read_only:
                 logger.warning(
                     "Start at login set to %s for this session only — "
-                    "config.toml is unreadable, so it was not written",
+                    "config.toml had problems at startup, so it was not written",
                     enabled,
                 )
                 self._tray.show_notification(
                     "Start at login: this session only",
-                    "Your config.toml couldn't be read, so this change applies "
+                    "Your config.toml has a problem, so this change applies "
                     "for this session only and the file was not changed.",
                 )
             elif self._persist_autostart is not None:
@@ -751,11 +753,10 @@ class DaemonCore:
             elif kind == "model_error":
                 self._session.transcription_outstanding = False
                 # The lifecycle attaches the pure classifier's diagnosis (#241).
-                diagnosis = getattr(data, "diagnosis", None)
+                assert isinstance(data, ModelLoadError)
+                diagnosis = data.diagnosis
                 reason = diagnosis.reason.name if diagnosis is not None else "UNKNOWN"
-                logger.error(
-                    "Model load failed (reason=%s)", reason, exc_info=data  # type: ignore[arg-type]
-                )
+                logger.error("Model load failed (reason=%s)", reason, exc_info=data)
                 if diagnosis is not None:
                     self._tray.show_notification(diagnosis.title, diagnosis.message)
                 else:
@@ -951,8 +952,8 @@ class DaemonCore:
         # bumps the session, so the late output is dropped at drain (#235).
         epoch = self._session.epoch
         logger.info(
-            "Trigger Fire: starting Transform on %d-char Last Paste",
-            captured.char_count,
+            "Trigger Fire: starting Transform on a %d-Backspace-Unit Last Paste",
+            captured.backspace_units,
         )
         # Within the keep_alive window the model is already resident, so the work
         # is generation — the "computing" pill colour (#96 / ADR-0026), not a
@@ -972,7 +973,7 @@ class DaemonCore:
             except Exception as exc:
                 q.put((epoch, "transform_unexpected", exc))
             else:
-                q.put((epoch, "ok", (out, captured.char_count)))
+                q.put((epoch, "ok", (out, captured.backspace_units)))
 
         t = threading.Thread(
             target=_worker, daemon=True, name="transform-worker"
@@ -1217,7 +1218,7 @@ class DaemonCore:
             # Words against text that actually landed (invariant kept by #190).
             self._last_paste = LastPaste(
                 text=normalized,
-                char_count=count_backspace_units(normalized),
+                backspace_units=count_backspace_units(normalized),
                 target_id=current_target_id,
                 pasted_at_ms=now_ms,
             )
@@ -2210,7 +2211,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         autostart_registrar=autostart_registrar,
         persist_autostart=_persist_autostart,
         replacements=replacements,
-        config_read_only=config_report.read_only,
+        config_read_only=config_report.write_protected,
     )
     # One startup notification for a non-empty Config Load Report (#238),
     # deferred like the CPU-fallback one below: a balloon needs a visible icon

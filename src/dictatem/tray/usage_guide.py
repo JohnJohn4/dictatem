@@ -170,8 +170,7 @@ def _pill_section(theme: GuideTheme) -> str:
         ),
         (
             "error",
-            "Something went wrong — nothing was heard, a trigger word was "
-            "cancelled, or there was nothing to paste",
+            "Didn't catch that — nothing to paste",
         ),
     )
     body = "".join(
