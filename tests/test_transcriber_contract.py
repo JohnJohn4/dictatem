@@ -18,7 +18,11 @@ real-engine params are skipped.
 The MLX backend (``tiny``, ~75 MB) runs the same way on an Apple-Silicon Mac
 with the apple-gpu extra (``uv sync --extra apple-gpu``); elsewhere it skips.
 
-Adding a backend (e.g. the fallback composite #232) is one entry in
+The MLX session fallback composite (#232) runs around fakes in default CI, both
+on the happy path (primary serves) and after a primary load failure (the
+fallback serves for the session).
+
+Adding a backend is one entry in
 ``BACKENDS``: a ``pytest.param`` whose value is a zero-argument factory
 returning a fresh, unloaded backend. Mark real engines with ``_real_engine()``.
 """
@@ -34,6 +38,7 @@ import numpy as np
 import pytest
 
 from dictatem.interfaces import TranscriberBackend
+from dictatem.transcribe.fallback import FallbackTranscriber
 from dictatem.types import EmptyResult
 from tests.fakes import FakeTranscriberBackend
 
@@ -69,12 +74,26 @@ def _mlx_tiny() -> TranscriberBackend:
     return MlxBackend(model_name="tiny", compute_type="float16")
 
 
+def _fallback_composite_happy() -> TranscriberBackend:
+    return FallbackTranscriber(
+        primary=FakeTranscriberBackend(), fallback_factory=FakeTranscriberBackend
+    )
+
+
+def _fallback_composite_fell_back() -> TranscriberBackend:
+    primary = FakeTranscriberBackend()
+    primary.fail_load_always(RuntimeError("primary engine failed to load"))
+    return FallbackTranscriber(primary=primary, fallback_factory=FakeTranscriberBackend)
+
+
 # MLX runs only on an Apple-Silicon Mac with the apple-gpu extra (#231). GitHub
 # macOS runners can't be relied on for Metal, so this is real-Mac QA only.
 _APPLE_SILICON = sys.platform == "darwin" and platform.machine() == "arm64"
 
 BACKENDS = [
     pytest.param(FakeTranscriberBackend, id="fake"),
+    pytest.param(_fallback_composite_happy, id="fallback-composite"),
+    pytest.param(_fallback_composite_fell_back, id="fallback-composite-fell-back"),
     pytest.param(_faster_whisper_tiny, id="faster-whisper", marks=_real_engine()),
     pytest.param(
         _mlx_tiny,

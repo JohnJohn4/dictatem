@@ -8,10 +8,11 @@ from dictatem.interfaces import TranscriberBackend
 from dictatem.transcribe.backend_selection import (
     BackendSelection,
     build_transcriber,
+    cpu_fallback_selection,
     select_backend,
 )
+from dictatem.transcribe.fallback import FallbackTranscriber
 from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
-from dictatem.transcribe.mlx_backend import MlxBackend
 from dictatem.transcribe.mlx_models import mlx_recognition_hint
 
 
@@ -70,19 +71,40 @@ class TestBuildTranscriber:
             assert isinstance(backend, TranscriberBackend)
             assert backend.is_loaded is False
 
-    def test_mlx_selection_builds_an_unloaded_mlx_backend_without_importing_mlx(
+    def test_mlx_selection_builds_the_session_fallback_composite_without_importing_mlx(
         self,
     ) -> None:
         # Construction is import-safe on any OS: mlx / mlx_whisper are imported
-        # lazily on the backend's worker thread at load time (#231).
+        # lazily on the backend's worker thread at load time (#231). The MLX
+        # backend is wrapped in the CPU session fallback (#232).
         before = set(sys.modules)
         sel = select_backend(device="mlx", model="large-v3-turbo", compute_type="float16")
         backend = self._build(sel)
-        assert isinstance(backend, MlxBackend)
+        assert isinstance(backend, FallbackTranscriber)
+        assert backend.fell_back is False
         assert isinstance(backend, TranscriberBackend)
         assert backend.is_loaded is False
         new = set(sys.modules) - before
         assert not [m for m in new if m.split(".")[0] in {"mlx", "mlx_whisper"}]
+
+    def test_cuda_and_cpu_are_never_wrapped_in_the_fallback_composite(self) -> None:
+        for device in ("cuda", "cpu"):
+            sel = select_backend(device=device, model="small", compute_type="int8")
+            backend = build_transcriber(
+                sel,
+                language=None,
+                vad_filter=True,
+                vocabulary=[],
+                on_fallback=lambda: None,
+            )
+            assert not isinstance(backend, FallbackTranscriber)
+
+
+class TestCpuFallbackSelection:
+    def test_is_the_apple_silicon_cpu_row_on_faster_whisper(self) -> None:
+        assert cpu_fallback_selection() == BackendSelection(
+            kind="faster-whisper", model="small", device="cpu", compute_type="int8"
+        )
 
 
 class TestMlxVocabularyHint:

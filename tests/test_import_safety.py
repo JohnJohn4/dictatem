@@ -56,6 +56,7 @@ DICTATEM_MODULES = [
     "dictatem.transcribe",
     "dictatem.transcribe.lifecycle",
     "dictatem.transcribe.backend_selection",
+    "dictatem.transcribe.fallback",
     "dictatem.transcribe.mlx_models",
     # Native adapter, but import-safe: mlx is imported lazily at load.
     "dictatem.transcribe.mlx_backend",

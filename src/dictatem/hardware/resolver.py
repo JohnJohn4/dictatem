@@ -100,6 +100,9 @@ _TIER_TABLE: dict[str, ResolvedHardware] = {
 # Why a session fell back (#231): the configured device's hardware is absent.
 # Machine-readable so the notification can name the cause.
 FallbackReason = Literal["cuda-absent", "mlx-unavailable"]
+# Why a running session switched engines (#232): the MLX engine failed to load
+# or transcribe. Not a reconcile outcome, so it is kept out of FallbackReason.
+RuntimeFallbackReason = Literal["mlx-load-failed"]
 
 
 @dataclass(frozen=True)
@@ -125,7 +128,7 @@ class FallbackNotice:
     body: str
 
 
-_FALLBACK_BODIES: dict[FallbackReason, str] = {
+_FALLBACK_BODIES: dict[FallbackReason | RuntimeFallbackReason, str] = {
     "cuda-absent": (
         "Configured GPU (cuda) isn't available — running on CPU this session. "
         "Your config is unchanged; restore the GPU to use it again."
@@ -136,10 +139,15 @@ _FALLBACK_BODIES: dict[FallbackReason, str] = {
         "Apple-Silicon Mac on macOS 14+ with the apple-gpu engine installed "
         "(re-run the installer), or set [model].device back to \"cpu\"."
     ),
+    "mlx-load-failed": (
+        "The Apple GPU engine (MLX) failed to load — your dictation and the "
+        "rest of this session run on CPU. Your config is unchanged; the next "
+        "launch tries the GPU again. See the log for the cause."
+    ),
 }
 
 
-def fallback_notice(reason: FallbackReason) -> FallbackNotice:
+def fallback_notice(reason: FallbackReason | RuntimeFallbackReason) -> FallbackNotice:
     """The tray notification naming why this session fell back to CPU. Pure."""
     return FallbackNotice(title="Running on CPU", body=_FALLBACK_BODIES[reason])
 
