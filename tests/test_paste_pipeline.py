@@ -85,7 +85,7 @@ class TestControlCharacterStripping:
             ("rm -rf x\rmore", "rm -rf x more "),  # lone CR is not Enter
             ("a\tb", "a b "),  # typed Tab would move focus / complete
             ("a\vb\fc", "a b c "),
-            ("a b c", "a b c "),  # Unicode line/paragraph separators
+            ("a\u2028b\u2029c", "a b c "),  # Unicode line/paragraph separators
             ("a\x85b", "a b "),  # NEL
             ("a\r\nb", "a b "),  # CRLF stays a single space
         ],

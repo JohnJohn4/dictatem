@@ -38,7 +38,7 @@ _RESTORE_DELAY_S = 1.5
 # preserving the long-standing "newline -> space" behaviour. Tab is in this set
 # on purpose: a *typed* Tab (Trigger Fire sends keystrokes) moves focus in a
 # form or triggers shell completion, so it must never reach the target as-is.
-_SPACE_CONTROLS = "\t\n\v\f\r\x85  "
+_SPACE_CONTROLS = "\t\n\v\f\r\x85\u2028\u2029"
 
 
 def _build_control_table() -> dict[int, str | None]:
