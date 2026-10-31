@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from dictatem.audio.buffer import AudioBuffer
-    from dictatem.config import Config
+    from dictatem.config import Config, ConfigLoadReport
     from dictatem.hotkey.classifier import (
         HookDecision,
         HotkeyClassifier,
@@ -383,6 +383,7 @@ class DaemonCore:
         autostart_registrar: AutostartRegistrar | None = None,
         persist_autostart: Callable[[bool], None] | None = None,
         replacements: list[Replacement] | None = None,
+        config_read_only: bool = False,
     ) -> None:
         self._sm = state_machine
         self._audio_capture = audio_capture
@@ -466,6 +467,22 @@ class DaemonCore:
         # --- Autostart toggle (see ADR-0012) ---
         self._autostart_registrar = autostart_registrar
         self._persist_autostart = persist_autostart
+        # --- Config Load Report (#238) ---
+        # The config file could not be read or parsed: nothing may write it
+        # this session, so the autostart toggle applies for the session only.
+        self._config_read_only = config_read_only
+
+    def notify_config_problems(self, report: ConfigLoadReport) -> None:
+        """Show the one startup notification for a non-empty Config Load Report.
+
+        A valid config shows nothing; the per-problem detail is already logged
+        by ``load_config_with_report``.
+        """
+        from dictatem.config import config_problem_notification
+
+        note = config_problem_notification(report)
+        if note is not None:
+            self._tray.show_notification(*note)
 
     def on_tray_set_autostart(self, enabled: bool) -> None:
         """Apply the tray "Start at login" toggle (see ADR-0012).
@@ -474,6 +491,10 @@ class DaemonCore:
         persists the new ``config.startup.autostart`` flag so it survives a
         restart — keeping the flag the single source of truth. Wrapped so a
         registry hiccup can never crash the daemon.
+
+        While the config is read-only for the session (unreadable file, #238)
+        the toggle applies for this session only: the config writer is never
+        called, and a notification says why the change wasn't saved.
         """
         try:
             if self._autostart_registrar is not None:
@@ -482,7 +503,18 @@ class DaemonCore:
                 apply_autostart(
                     desired=enabled, registrar=self._autostart_registrar
                 )
-            if self._persist_autostart is not None:
+            if self._config_read_only:
+                logger.warning(
+                    "Start at login set to %s for this session only — "
+                    "config.toml is unreadable, so it was not written",
+                    enabled,
+                )
+                self._tray.show_notification(
+                    "Start at login: this session only",
+                    "Your config.toml couldn't be read, so this change applies "
+                    "for this session only and the file was not changed.",
+                )
+            elif self._persist_autostart is not None:
                 self._persist_autostart(enabled)
         except Exception:
             logger.error("Error applying autostart toggle", exc_info=True)
@@ -1815,7 +1847,11 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 
     from dictatem.audio.buffer import AudioBuffer
     from dictatem.autostart.reconcile import apply_autostart
-    from dictatem.config import default_config_path, load_config, write_config
+    from dictatem.config import (
+        default_config_path,
+        load_config_with_report,
+        write_config,
+    )
     from dictatem.hotkey.classifier import HotkeyClassifier
     from dictatem.onboarding import (
         mark_usage_guide_seen,
@@ -1902,7 +1938,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # (ADR-0025 / #162), the run the installer triggers as its last step.
     is_first_run = not config_path.exists()
     probe = adapters.probe
-    config = load_config(config_path, probe=probe)
+    config, config_report = load_config_with_report(config_path, probe=probe)
 
     # Reconcile the config's pinned transcription hardware against the machine
     # we're actually on (#39 / ADR-0009). A config baked on a GPU box and then
@@ -2092,7 +2128,13 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         autostart_registrar=autostart_registrar,
         persist_autostart=_persist_autostart,
         replacements=replacements,
+        config_read_only=config_report.read_only,
     )
+    # One startup notification for a non-empty Config Load Report (#238),
+    # deferred like the CPU-fallback one below: a balloon needs a visible icon
+    # and a running event loop.
+    if not config_report.is_empty:
+        QTimer.singleShot(1000, lambda: daemon.notify_config_problems(config_report))
 
     tray_icon.on_start = daemon.on_tray_start_recording
     tray_icon.on_stop = daemon.on_tray_stop_recording

@@ -302,6 +302,20 @@ Transform model is not Dictatem's to manage: Ollama is a separate, user-managed
 process Dictatem only talks to — never installs, pulls, or runs on the user's
 behalf (see [ADR-0008](docs/adr/0008-dictatem-does-not-manage-ollama-lifecycle.md)).
 
+## Configuration
+
+### Config Load Report
+
+The list of problems found while loading `config.toml`: an unreadable or
+unparseable file (with the parser's message and position), or a key with the
+wrong type or an invalid value (which falls back to its default). The daemon
+turns a non-empty report into exactly one startup tray notification; the detail
+goes to the log. An unreadable file makes the config **read-only for the
+session**: Dictatem runs on the [Hardware Tier](#hardware-tier) defaults and
+writes nothing, not even the Start-at-login toggle. Unknown keys and sections
+are not problems; they stay info-only in the log. Dictatem never rewrites the
+file to "fix" it (ADR-0009 / ADR-0022).
+
 ## Flagged ambiguities
 
 - "the icon that changes colour" was used to mean both the **Tray Icon** and
