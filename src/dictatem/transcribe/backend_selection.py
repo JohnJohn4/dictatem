@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Literal
 from dictatem.hardware.resolver import tier_row
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from dictatem.interfaces import TranscriberBackend
 
 BackendKind = Literal["faster-whisper", "mlx"]
@@ -71,29 +73,60 @@ def select_backend(*, device: str, model: str, compute_type: str) -> BackendSele
     )
 
 
+def cpu_fallback_selection() -> BackendSelection:
+    """The engine the MLX session fallback (#232) switches to. Pure.
+
+    The whole ``Apple-Silicon`` CPU row on faster-whisper, the same row the
+    startup reconcile picks for an unusable ``mlx`` pin on Apple Silicon.
+    """
+    row = tier_row("Apple-Silicon")
+    return BackendSelection(
+        kind=_DEVICE_TO_KIND[row.device],
+        model=row.model,
+        device=row.device,
+        compute_type=row.compute_type,
+    )
+
+
 def build_transcriber(
     selection: BackendSelection,
     *,
     language: str | None,
     vad_filter: bool,
     vocabulary: list[str],
+    on_fallback: Callable[[], None] | None = None,
 ) -> TranscriberBackend:
     """Construct the (unloaded) backend for *selection*.
 
     The one place an engine is chosen by kind. ``mlx`` builds the Apple-GPU
     :class:`~dictatem.transcribe.mlx_backend.MlxBackend` (#231); constructing
     it never imports MLX, so a pin that reconcile let through is safe to build
-    on any OS. The runtime fallback composite around it is #232.
+    on any OS. It is wrapped in the
+    :class:`~dictatem.transcribe.fallback.FallbackTranscriber` (#232): if MLX
+    fails to load or transcribe, the session switches to the
+    :func:`cpu_fallback_selection` engine, re-runs the same audio there, and
+    calls *on_fallback* once. ``cuda`` / ``cpu`` are built exactly as before
+    (no composite, and *on_fallback* is unused).
     """
     if selection.kind == "mlx":
+        from dictatem.transcribe.fallback import FallbackTranscriber
         from dictatem.transcribe.mlx_backend import MlxBackend
 
-        return MlxBackend(
-            model_name=selection.model,
-            compute_type=selection.compute_type,
-            language=language,
-            vad_filter=vad_filter,
-            vocabulary=vocabulary,
+        return FallbackTranscriber(
+            primary=MlxBackend(
+                model_name=selection.model,
+                compute_type=selection.compute_type,
+                language=language,
+                vad_filter=vad_filter,
+                vocabulary=vocabulary,
+            ),
+            fallback_factory=lambda: build_transcriber(
+                cpu_fallback_selection(),
+                language=language,
+                vad_filter=vad_filter,
+                vocabulary=vocabulary,
+            ),
+            on_fallback=on_fallback,
         )
 
     from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
