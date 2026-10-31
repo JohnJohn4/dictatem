@@ -130,6 +130,37 @@ class TestControlCharacterStripping:
         assert ks.typed_texts == ["ok now "]
 
 
+ACUTE = chr(0x301)  # combining acute accent
+E_ACUTE = chr(0xE9)  # precomposed e-acute
+
+
+class TestNfcNormalization:
+    """#242 / F-5: pasted text is NFC-composed so decomposed accents land as
+    the single characters most apps expect, and the Backspace Unit count of
+    the Last Paste matches what is on screen."""
+
+    def test_decomposed_accent_is_composed(self) -> None:
+        assert normalize_pasted_text("cafe" + ACUTE) == "caf" + E_ACUTE + " "
+
+    def test_already_composed_text_unchanged(self) -> None:
+        assert normalize_pasted_text("caf" + E_ACUTE) == "caf" + E_ACUTE + " "
+
+    def test_accent_split_by_a_stripped_control_still_composes(self) -> None:
+        # The control is removed first, so the mark meets its base.
+        assert normalize_pasted_text("e\x00" + ACUTE) == E_ACUTE + " "
+
+    def test_typed_trigger_fire_path_is_composed(self) -> None:
+        ks = FakeKeystrokeSender()
+        paste(
+            "cafe" + ACUTE,
+            clipboard=FakeClipboardIO(),
+            keystroke=ks,
+            foreground=FakeForegroundTracker(),
+            replace_chars=3,
+        )
+        assert ks.typed_texts == ["caf" + E_ACUTE + " "]
+
+
 class TestInputNormalization:
     """Newlines replaced with spaces, trailing space appended."""
 
