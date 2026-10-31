@@ -115,7 +115,7 @@ dropping a markdown prompt file into `~/.dictatem/prompts/`.
 
 Right-click the icon for: **Start/Stop Recording**, **Copy last dictation**,
 **Preload / Unload Model**, **Open config file…**, **How to use Dictatem…** (a
-live in-app guide), **Check for Updates…** (Windows), **Show Log**, **Restart**,
+live in-app guide), **Check for Updates…**, **Show Log**, **Restart**,
 **Quit**.
 
 ---
@@ -144,7 +144,7 @@ the network:
 - **One-time model download** — the Faster-Whisper weights are fetched from
   Hugging Face at setup / on your first dictation. After that, transcription is
   fully offline.
-- **Manual update check (Windows)** — only when you click **Check for Updates…**
+- **Manual update check** — only when you click **Check for Updates…**
   in the tray; it asks `api.github.com` for the latest release number and sends
   nothing else. There is no automatic/background check.
 - **Install & upgrade** — the install one-liner fetches `uv`/CPython, Dictatem,
@@ -248,9 +248,15 @@ overlay flashes a message telling you which step is missing.
 - **Windows** — right-click the tray icon → **Check for Updates…**. Dictatem
   compares against the latest GitHub release and, if newer, re-runs the installer
   for you (safe while running — it stops the old daemon first).
-- **macOS** — re-run the [install one-liner](#macos); it refreshes the tool, the
-  `.app`, and the start-at-login entry together. *(An in-app updater is not yet
-  available on macOS — [#193](https://github.com/JohnJohn4/dictatem/issues/193).)*
+- **macOS** — click the menu-bar icon → **Check for Updates…**. If a newer
+  release exists, Dictatem shows its version and the matching install command —
+  click **Copy Update Command**, paste it into **Terminal**, and press Return.
+  Dictatem never runs the update itself on macOS. The command is just the
+  [install one-liner](#macos) at the newer tag: it stops the old daemon,
+  refreshes the tool, the `.app`, and the start-at-login entry, and restarts
+  Dictatem; your config and permission grants carry over. *(A one-click in-app
+  update on macOS is a planned follow-up to
+  [#193](https://github.com/JohnJohn4/dictatem/issues/193).)*
 
 You can also update either platform by re-running the one-liner with a newer
 version tag in the URL — see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest).
@@ -311,8 +317,9 @@ again before a manual re-install (the tray update re-detects instead).
   transiently sits on the pasteboard (~1.5 s) before your original clipboard is
   restored, so a clipboard-history app could capture it — see
   [Privacy](#privacy).
-- **Updating is manual** — re-run the install one-liner; there's no in-app
-  updater yet ([#193](https://github.com/JohnJohn4/dictatem/issues/193)).
+- **Updating is copy-and-paste** — **Check for Updates…** finds a newer release
+  and gives you the install command to run in Terminal; it never updates itself
+  on macOS (see [Updating](#updating)).
 </details>
 
 <details>

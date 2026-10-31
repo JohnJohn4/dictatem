@@ -59,6 +59,7 @@ if TYPE_CHECKING:
     from dictatem.transcribe.replacements import Replacement
     from dictatem.transform.detector import TriggerDetector
     from dictatem.transform.lifecycle import TransformLifecycle
+    from dictatem.upgrade.core import UpgradeDecision
 
 logger = logging.getLogger(__name__)
 
@@ -2030,16 +2031,22 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     tray_icon.on_quit = lambda: daemon.on_tray_quit(app.quit)
 
     # Tray "Check for Updates…" (#100). Resolve the latest GitHub release off the
-    # UI thread and, if newer, re-run the install one-liner at that tag — which
-    # stops the daemon, picks the right GPU/CPU extra, installs, and relaunches
-    # (ADR-0011/0015; the same verified upgrade path as #98), not a bundled
-    # updater. Kept alive for the event loop's lifetime, like the hook below.
+    # UI thread and, if newer, act per the platform's update path (#193,
+    # upgrade.prompt): on Windows re-run the install one-liner at that tag —
+    # which stops the daemon, picks the right GPU/CPU extra, installs, and
+    # relaunches (ADR-0011/0015; the same verified upgrade path as #98); on
+    # macOS show the pinned install.sh one-liner to copy (nothing auto-executes
+    # in phase 1). Not a bundled updater. Kept alive for the event loop's
+    # lifetime, like the hook below.
     from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as _installed_version
 
     from dictatem.upgrade.core import GITHUB_REPO
     from dictatem.upgrade.github import fetch_latest_tag
+    from dictatem.upgrade.prompt import UpdateMode, update_mode_for
     from dictatem.upgrade.qt_update_check import UpdateChecker
+
+    update_mode = update_mode_for(sys.platform)
 
     def _current_version() -> str:
         try:
@@ -2057,16 +2064,34 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             # in-app upgrade is Windows-only until a macOS installer path lands.
             logger.info("In-app upgrade is Windows-only for now; tag=%s", tag)
 
+    def _show_manual_update(decision: UpgradeDecision) -> None:
+        # macOS (#193 phase 1): a prompt with the pinned install.sh one-liner to
+        # copy into Terminal — nothing runs on the user's behalf.
+        try:
+            from dictatem.upgrade.prompt import manual_update_prompt
+            from dictatem.upgrade.qt_update_prompt import show_manual_update_prompt
+
+            assert decision.tag is not None  # guaranteed for UPGRADE_AVAILABLE
+            show_manual_update_prompt(
+                manual_update_prompt(_current_version(), decision.tag),
+                notify=tray_icon.show_notification,
+            )
+        except Exception:
+            logger.error("Error showing the update prompt", exc_info=True)
+
     _update_checker = UpdateChecker(
         current_version=_current_version(),
         fetch_latest_tag=lambda: fetch_latest_tag(repo=GITHUB_REPO),
         notify=tray_icon.show_notification,
         start_upgrade=_start_upgrade,
+        on_update_available=(
+            _show_manual_update if update_mode is UpdateMode.MANUAL else None
+        ),
     )
     tray_icon.on_upgrade = _update_checker.check
-    # In-app upgrade re-runs install.ps1 (Windows-only). Hide the item elsewhere
-    # so it never promises a restart it can't deliver (_start_upgrade no-ops).
-    tray_icon.set_upgrade_available(sys.platform == "win32")
+    # Shown wherever there is an update path (Windows in-app, macOS manual);
+    # hidden elsewhere so it never promises an update it can't deliver.
+    tray_icon.set_upgrade_available(update_mode is not UpdateMode.UNSUPPORTED)
     # Footer showing the installed version, so the user can confirm which build
     # they're on (e.g. after an upgrade). Hidden if the version can't be read.
     _ver = _current_version()

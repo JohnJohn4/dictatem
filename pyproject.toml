@@ -104,6 +104,7 @@ exclude = [
     "src/dictatem/process/win32_stopper.py",
     "src/dictatem/upgrade/win32_upgrader.py",
     "src/dictatem/upgrade/qt_update_check.py",
+    "src/dictatem/upgrade/qt_update_prompt.py",
     # macOS native adapters: the PyObjC bindings resolve only on macOS.
     "src/dictatem/hotkey/mac_hook.py",
     "src/dictatem/paste/mac_clipboard.py",
