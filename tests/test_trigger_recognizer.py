@@ -337,6 +337,51 @@ class TestFuzzyEscapeHatch:
         assert _prompt(_fuzzy_decide("polish", fuzzy_matching=False)) == POLISH
 
 
+class TestPasteAliases:
+    """User-declared aliases for the built-in `paste` action (#250)."""
+
+    def test_paste_alias_fires_paste_exactly_with_transforms_unarmed(self) -> None:
+        rec = TriggerWordRecognizer(ALIASES, paste_aliases=["glue"], fuzzy_matching=False)
+        for text in ("glue", "Glue.", "  GLUE!  "):
+            decision = rec.decide(_utt(text), transforms_armed=False)
+            assert _fires_paste(decision), repr(text)
+            assert decision.via is MatchVia.EXACT
+
+    def test_paste_alias_takes_part_in_fuzzy_matching(self) -> None:
+        rec = TriggerWordRecognizer(ALIASES, paste_aliases=["insert"])
+        utt = Utterance(text="Insurt.", speech_duration_s=0.7, confidence=CONFIDENT)
+        decision = rec.decide(utt, transforms_armed=False)
+        assert _fires_paste(decision)
+        assert decision.via is MatchVia.FUZZY
+
+    def test_paste_alias_fuzzy_respects_the_short_gate(self) -> None:
+        rec = TriggerWordRecognizer(ALIASES, paste_aliases=["insert"])
+        assert rec.decide(_utt("insurt", duration_s=4.0), transforms_armed=False) == Dictation()
+
+    def test_paste_alias_followed_by_more_words_is_dictation(self) -> None:
+        rec = TriggerWordRecognizer(ALIASES, paste_aliases=["insert"])
+        for text in ("insert this", "insert it"):
+            assert rec.decide(_utt(text), transforms_armed=True) == Dictation(), text
+
+    def test_fuzzy_matching_off_makes_paste_aliases_exact_only(self) -> None:
+        rec = TriggerWordRecognizer(ALIASES, paste_aliases=["insert"], fuzzy_matching=False)
+        assert rec.decide(_utt("insurt"), transforms_armed=False) == Dictation()
+
+    def test_paste_alias_shadows_a_same_named_prompt_file_alias(self) -> None:
+        rec = TriggerWordRecognizer(
+            {"insert": "an insert Transform", **ALIASES}, paste_aliases=["Insert"]
+        )
+        assert _armed(rec, "insert") == PASTE
+        # ... fuzzily too: the shadowed Transform is not a candidate.
+        utt = Utterance(text="insurt", speech_duration_s=0.7, confidence=CONFIDENT)
+        assert _fires_paste(rec.decide(utt, transforms_armed=True))
+
+    def test_blank_paste_aliases_are_ignored(self) -> None:
+        rec = TriggerWordRecognizer(ALIASES, paste_aliases=["", "  ", "..."])
+        assert _armed(rec, "") == Dictation()
+        assert _armed(rec, "paste") == PASTE
+
+
 class TestShadowedBuiltinAliases:
     def test_no_collision_returns_empty(self) -> None:
         assert shadowed_builtin_aliases(["summarize", "expand"]) == []
@@ -346,6 +391,12 @@ class TestShadowedBuiltinAliases:
 
     def test_surface_form_alias_is_shadowed(self) -> None:
         assert shadowed_builtin_aliases(["Paste.", "expand"]) == ["Paste."]
+
+    def test_alias_shadowed_by_a_paste_alias_is_reported(self) -> None:
+        out = shadowed_builtin_aliases(
+            ["insert", "summarize", "Paste."], paste_aliases=["Insert!"]
+        )
+        assert out == ["Paste.", "insert"]
 
     def test_result_is_deduped_and_sorted(self) -> None:
         out = shadowed_builtin_aliases(["paste", "paste", "PASTE"])

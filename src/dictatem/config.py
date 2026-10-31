@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import string
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -127,6 +128,10 @@ class TriggerWordsConfig:
     # defaults, so it is discoverable but never pinned by the app.
     # False restores exact-only Trigger Word matching (#247 / ADR-0028).
     fuzzy_matching: bool = True
+    # User aliases for the built-in `paste` action (#250): map a mishearing
+    # your voice consistently produces straight to `paste`. Normalised like
+    # Prompt File aliases on load.
+    paste_aliases: tuple[str, ...] = ()
 
 
 # Sections shown commented-out in a written config while they equal their
@@ -135,7 +140,9 @@ class TriggerWordsConfig:
 _COMMENTED_WHEN_DEFAULT: dict[str, str] = {
     "trigger_words": (
         "# Trigger Words tolerate small mishearings of a short command\n"
-        '# ("haste" -> paste). Uncomment and set false for exact-only matching.'
+        '# ("haste" -> paste). Uncomment and set fuzzy_matching = false for\n'
+        "# exact-only matching, or list words to treat as `paste` in paste_aliases\n"
+        '# (e.g. paste_aliases = ["haste"]).'
     ),
 }
 
@@ -469,7 +476,19 @@ def _check_field(
             key=name,
             message=f"Invalid value for {name}: {value!r} — using default {default!r}",
         )
+    if section == "trigger_words" and key == "paste_aliases":
+        value = _normalise_aliases(value)
     return value, None
+
+
+def _normalise_aliases(aliases: tuple[str, ...]) -> tuple[str, ...]:
+    """Normalise like Prompt File aliases; drop blanks and duplicates (#250)."""
+    out: list[str] = []
+    for alias in aliases:
+        norm = alias.strip().strip(string.punctuation).lower()
+        if norm and norm not in out:
+            out.append(norm)
+    return tuple(out)
 
 
 def _value_is_valid(section: str, key: str, value: Any) -> bool:

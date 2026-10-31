@@ -138,8 +138,8 @@ by more words is always dictation — `"summarize this"` and `"paste it"` are
 regular dictation; only the lone word fires. Fuzzy matching never alters
 dictated text (ADR-0024), and `[trigger_words].fuzzy_matching = false` restores
 exact-only matching. A user [Prompt File](#prompt-file) that re-uses a built-in
-name (`paste`) is shadowed by the built-in. A short utterance that only *might*
-be a Trigger Word is [Borderline](#borderline).
+name (`paste`) or a built-in action [Alias](#alias) is shadowed by the built-in.
+A short utterance that only *might* be a Trigger Word is [Borderline](#borderline).
 
 ### Borderline
 
@@ -164,6 +164,13 @@ vs US `"summarize"`) and any other surface forms the user expects to work.
 Aliases are declared in the YAML-style frontmatter of a [Prompt File](#prompt-file)
 and are the single source of truth for matching. The prompt filename is
 purely a human convenience and has no runtime meaning.
+
+The built-in `paste` action can have Aliases too — **built-in action aliases**,
+declared by the user in `[trigger_words].paste_aliases` (normalised the same
+way), so a mishearing their voice consistently produces maps straight to
+`paste`. They behave exactly like the built-in word: exact and fuzzy matching,
+no Transform feature or [Last Paste](#last-paste) needed, and they shadow a
+same-named Prompt File Alias (warned at startup).
 
 ### Prompt File
 
