@@ -2,7 +2,8 @@
 
 Covers every tier boundary: no CUDA; CUDA with VRAM <3 / 3-6 / >=6 GB;
 CUDA with unknown VRAM; and MLX-usable Macs split at 12 GB unified memory.
-The resolver maps a HardwareProfile to a resolved (whisper model, device, compute_type) plus a Transform (Ollama) model tag.
+The resolver maps a HardwareProfile to a resolved (whisper model, device,
+compute_type) plus a Transform (Ollama) model tag.
 """
 
 from __future__ import annotations
