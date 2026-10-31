@@ -230,12 +230,24 @@ def _bake_first_run_config(probe: HardwareProbe) -> Config:
     profile = probe.probe()
     resolved = HardwareTierResolver().resolve(profile)
 
-    vram = "unknown VRAM" if profile.total_vram_mb is None else f"{profile.total_vram_mb} MB"
-    gpu = "CUDA" if profile.cuda_available else "no CUDA"
+    if profile.cuda_available or not (
+        profile.apple_silicon or profile.unified_memory_mb is not None
+    ):
+        vram = (
+            "unknown VRAM" if profile.total_vram_mb is None else f"{profile.total_vram_mb} MB"
+        )
+        detected = ("CUDA" if profile.cuda_available else "no CUDA", vram)
+    else:
+        # A Mac: name MLX and unified memory, which decide the Apple tiers.
+        memory = (
+            "unknown unified memory"
+            if profile.unified_memory_mb is None
+            else f"{profile.unified_memory_mb} MB unified memory"
+        )
+        detected = ("MLX usable" if profile.mlx_available else "no MLX", memory)
     logger.info(
         "Detected %s, %s -> tier %s: %s/%s/%s, transform %s",
-        gpu,
-        vram,
+        *detected,
         resolved.tier,
         resolved.model,
         resolved.device,

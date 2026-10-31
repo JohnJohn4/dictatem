@@ -1,8 +1,8 @@
 """Tests for HardwareTierResolver — pure, table-driven tier selection (#36).
 
-Covers every tier boundary: no CUDA; CUDA with VRAM <3 / 3-6 / >=6 GB; and
-CUDA with unknown VRAM. The resolver maps a HardwareProfile to a resolved
-(whisper model, device, compute_type) plus a Transform (Ollama) model tag.
+Covers every tier boundary: no CUDA; CUDA with VRAM <3 / 3-6 / >=6 GB;
+CUDA with unknown VRAM; and MLX-usable Macs split at 12 GB unified memory.
+The resolver maps a HardwareProfile to a resolved (whisper model, device, compute_type) plus a Transform (Ollama) model tag.
 """
 
 from __future__ import annotations
@@ -376,3 +376,79 @@ class TestFallbackNotice:
         assert "apple gpu" in notice.body.lower()
         assert "cuda" not in notice.body.lower()
         assert "config is unchanged" in notice.body
+
+
+def _mlx_mac(unified_memory_mb: int | None) -> HardwareProfile:
+    return HardwareProfile(
+        cuda_available=False,
+        total_vram_mb=None,
+        apple_silicon=True,
+        mlx_available=True,
+        unified_memory_mb=unified_memory_mb,
+    )
+
+
+class TestAppleGpuTiers:
+    """MLX usable -> an Apple-GPU tier, split by unified memory (#233)."""
+
+    def test_mlx_mac_with_16gb_gets_apple_gpu(self) -> None:
+        resolved = HardwareTierResolver().resolve(_mlx_mac(16 * 1024))
+        assert resolved.tier == "Apple-GPU"
+        assert resolved.model == "large-v3-turbo"
+        assert resolved.device == "mlx"
+        assert resolved.compute_type == "float16"
+        assert resolved.transform_model == "gemma4:e2b"
+
+    def test_exactly_12gb_is_apple_gpu(self) -> None:
+        resolved = HardwareTierResolver().resolve(_mlx_mac(12 * 1024))
+        assert resolved.tier == "Apple-GPU"
+
+    def test_just_below_12gb_is_apple_gpu_low(self) -> None:
+        resolved = HardwareTierResolver().resolve(_mlx_mac(12 * 1024 - 1))
+        assert resolved.tier == "Apple-GPU-low"
+        assert resolved.model == "small"
+        assert resolved.device == "mlx"
+        assert resolved.compute_type == "float16"
+        assert resolved.transform_model == "gemma4:e2b"
+
+    def test_8gb_mac_is_apple_gpu_low(self) -> None:
+        resolved = HardwareTierResolver().resolve(_mlx_mac(8 * 1024))
+        assert resolved.tier == "Apple-GPU-low"
+
+    def test_unknown_memory_is_apple_gpu_low(self) -> None:
+        resolved = HardwareTierResolver().resolve(_mlx_mac(None))
+        assert resolved.tier == "Apple-GPU-low"
+
+    def test_apple_silicon_without_mlx_keeps_the_cpu_row(self) -> None:
+        profile = HardwareProfile(
+            cuda_available=False,
+            total_vram_mb=None,
+            apple_silicon=True,
+            mlx_available=False,
+            unified_memory_mb=32 * 1024,
+        )
+        resolved = HardwareTierResolver().resolve(profile)
+        assert resolved.tier == "Apple-Silicon"
+        assert (resolved.model, resolved.device, resolved.compute_type) == (
+            "small",
+            "cpu",
+            "int8",
+        )
+
+    def test_intel_mac_keeps_the_cpu_tier(self) -> None:
+        profile = HardwareProfile(
+            cuda_available=False, total_vram_mb=None, unified_memory_mb=16 * 1024
+        )
+        resolved = HardwareTierResolver().resolve(profile)
+        assert resolved.tier == "CPU"
+        assert (resolved.model, resolved.device, resolved.compute_type) == (
+            "base",
+            "cpu",
+            "int8",
+        )
+
+    def test_mlx_tiers_stay_multilingual_and_never_tiny(self) -> None:
+        for memory in (None, 8 * 1024, 16 * 1024, 64 * 1024):
+            model = HardwareTierResolver().resolve(_mlx_mac(memory)).model
+            assert model in {"small", "large-v3-turbo"}
+            assert not model.endswith(".en")

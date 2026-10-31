@@ -11,7 +11,8 @@ flowchart LR
     T --> P["Pasted into the<br/>focused window"]
 ```
 
-Transcription is GPU-accelerated on Windows (NVIDIA) and runs on the CPU on macOS.
+Transcription is GPU-accelerated on Windows (NVIDIA) and on Apple-Silicon Macs
+with macOS 14+, and runs on the CPU elsewhere.
 
 **Jump to install → [Windows](#windows) · [macOS](#macos)**
 
@@ -45,9 +46,24 @@ and run it once you're satisfied.
 
 ### macOS
 
-Requires **macOS 12+** (Apple Silicon or Intel). Transcription runs on the CPU
-([ADR-0013](docs/adr/0013-macos-transcription-engine.md)); Apple Silicon Macs get
-the more accurate `small` model, Intel Macs `base`.
+Requires **macOS 12+** (Apple Silicon or Intel). On first run Dictatem picks a
+transcription tier for your Mac
+([ADR-0013](docs/adr/0013-macos-transcription-engine.md)):
+
+| Your Mac | Tier | Engine and model |
+|---|---|---|
+| Apple Silicon, macOS 14+, **12 GB or more** memory | `Apple-GPU` | Apple GPU (MLX), `large-v3-turbo` |
+| Apple Silicon, macOS 14+, under 12 GB (or memory unreadable) | `Apple-GPU-low` | Apple GPU (MLX), `small` |
+| Apple Silicon without the GPU engine (macOS 12/13, or opted out) | `Apple-Silicon` | CPU, `small` |
+| Intel | `CPU` | CPU, `base` |
+
+The memory split exists because the Apple GPU shares memory with everything
+else, including the local Transform (Ollama) model. On an 8 GB Mac the smaller
+`small` model leaves room for both. The first run downloads the chosen model
+(about 1.6 GB for `large-v3-turbo`) so your first dictation works offline, and
+`daemon.log` records the tier, model and detected memory. The choice is written
+into `~/.dictatem/config.toml` once and never re-made, so an existing config
+keeps whatever it already says.
 
 On **Apple Silicon with macOS 14 or later**, the installer also installs the
 Apple GPU (MLX) transcription engine, which adds about **230 MB** to the
@@ -58,24 +74,35 @@ GPU engine on a qualifying Mac, run the one-liner with
 `DICTATEM_NO_APPLE_GPU=1` in front of `sh` (`… | DICTATEM_NO_APPLE_GPU=1 sh`).
 Re-running the installer later adds the engine without touching your config.
 
-**Opting into the Apple GPU.** Existing configs are never changed for you. With
-the GPU engine installed, switch transcription to the Apple GPU by setting these
-three lines under `[model]` in `~/.dictatem/config.toml`, then choose **Restart**
-from the menu-bar menu:
+**Existing installs: opting into the Apple GPU.** A config written before the GPU
+engine arrived stays on the CPU. With the engine installed (re-run the
+installer), switch to the Apple GPU by setting these three lines under `[model]`
+in `~/.dictatem/config.toml`, then choose **Restart** from the menu-bar menu:
 
 ```toml
 [model]
-name = "large-v3-turbo"         # or any Whisper size, or an mlx-community repo id
+name = "large-v3-turbo"         # or "small" on an 8 GB Mac, or an mlx-community repo id
 device = "mlx"
 compute_type = "float16"
 ```
 
-The first dictation fetches the MLX model (about 1.6 GB for `large-v3-turbo`);
-after that it loads from the cache with no network. **To revert**, set
-`device = "cpu"` and `compute_type = "int8"` (and `name = "small"` if you want
-the CPU default back), then Restart. If the GPU engine isn't usable on the
-machine (Intel Mac, macOS 12/13, the engine not installed, or a config copied to
-Windows), Dictatem runs on CPU for that session, shows one notification saying
+In this case the first dictation fetches the MLX model; after that it loads from
+the cache with no network.
+
+**Pinning back to the CPU.** To run on the CPU instead (on a new install that
+picked an Apple-GPU tier, or after opting in), set these under `[model]` and
+Restart:
+
+```toml
+[model]
+name = "small"
+device = "cpu"
+compute_type = "int8"
+```
+
+Your config is authoritative, so Dictatem keeps it that way. If the GPU engine
+isn't usable on the machine (Intel Mac, macOS 12/13, the engine not installed,
+or a config copied to Windows), Dictatem runs on CPU for that session, shows one notification saying
 why, and leaves your config as it is. **Vocabulary caveat:** the GPU engine has
 no `hotwords` support, so your `vocabulary.md` terms are fed through
 `initial_prompt` instead. They still bias recognition, but more weakly than on
@@ -161,7 +188,7 @@ live in-app guide), **Check for updates…**, **Show Log**, **Restart**,
 ## Features
 
 - **Global hotkey** — activate from any window; push-to-talk or hands-free toggle.
-- **On-device transcription** — Faster-Whisper, GPU-accelerated on NVIDIA, CPU on macOS, with an opt-in Apple GPU (mlx-whisper) engine on Apple Silicon.
+- **On-device transcription** — Faster-Whisper, GPU-accelerated on NVIDIA and, via mlx-whisper, on Apple-Silicon Macs (macOS 14+); CPU elsewhere.
 - **Offline after setup** — the model downloads once on first run; every dictation after that needs no network.
 - **Smart paste** — saves and restores your clipboard **text** and window focus around each paste, and never clutters clipboard history. (Non-text clipboard content — images, copied files — is not preserved yet.)
 - **Trigger Words** — rewrite the last paste in place via a local Ollama model.

@@ -31,6 +31,9 @@ class HardwareProfile:
     # installed (spec #224). Safe default False; the Mac probe populates it
     # (#233). Reconcile uses it to guard a config pinning device "mlx" (#231).
     mlx_available: bool = False
+    # Total unified (system) memory in MB on a Mac, or None when unknown or not
+    # a Mac. Splits the Apple-GPU tiers; unknown is treated conservatively.
+    unified_memory_mb: int | None = None
 
 
 @dataclass(frozen=True)
