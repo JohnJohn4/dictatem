@@ -5,15 +5,19 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING
 
-from dictatem.types import AudioChunk, EmptyResult, TranscriptionResult
+from dictatem.types import AudioChunk, EmptyResult, Transcript, TranscriptionResult
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 
 class FakeTranscriberBackend:
-    def __init__(self, result: TranscriptionResult = "fake transcription") -> None:
-        self._result = result
+    def __init__(self, result: TranscriptionResult | str = "fake transcription") -> None:
+        # Scriptable with text alone (a bare str: confidence and speech duration
+        # unknown) or with a full Transcript carrying confidence + post-VAD
+        # speech duration (#246). Tests may reassign ``_result`` mid-test with
+        # either form.
+        self._result: TranscriptionResult | str = result
         self._loaded: bool = False
         # A gate so a test can hold load_model() open (load-on-arm, #161): it
         # lets the test assert the "still loading" pill at transcribe-time, then
@@ -78,6 +82,8 @@ class FakeTranscriberBackend:
             raise self._errors_to_raise.pop(0)
         if not self._loaded:
             return EmptyResult()
+        if isinstance(self._result, str):
+            return Transcript(self._result)
         return self._result
 
     def empty_cache(self) -> None:

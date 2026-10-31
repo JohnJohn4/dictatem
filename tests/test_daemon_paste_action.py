@@ -15,8 +15,8 @@ import pytest
 from dictatem.daemon import DaemonCore
 from dictatem.state import Event, State, StateMachine
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
-from dictatem.transform.detector import TriggerDetector
 from dictatem.transform.lifecycle import TransformLifecycle
+from dictatem.transform.recognizer import TriggerWordRecognizer
 from tests.fakes import (
     FakeAudioCapture,
     FakeClipboardIO,
@@ -78,7 +78,7 @@ def _make_core(
         keystroke=keystroke,
         foreground=FakeForegroundTracker(target_id=42),
         transform_lifecycle=TransformLifecycle(backend=transform_backend),
-        trigger_detector=TriggerDetector(aliases if aliases is not None else ALIASES),
+        trigger_recognizer=TriggerWordRecognizer(aliases if aliases is not None else ALIASES),
         transform_enabled=transform_enabled,
         last_paste_ttl_s=300.0,
     )

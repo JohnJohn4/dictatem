@@ -15,7 +15,7 @@ from dictatem.exceptions import (
 )
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
 from dictatem.transcribe.load_failure import LoadFailureReason
-from dictatem.types import EmptyResult
+from dictatem.types import EmptyResult, SegmentConfidence, Transcript
 from tests.fakes import FakeTranscriberBackend
 from tests.support import wait_until
 
@@ -154,7 +154,7 @@ class TestPreload:
 
         result = lc.transcribe(AUDIO)
         assert backend.load_count == 1
-        assert result == "fake transcription"
+        assert result == Transcript("fake transcription")
 
     def test_preload_when_already_loaded_is_noop(self) -> None:
         backend = FakeTranscriberBackend()
@@ -321,12 +321,33 @@ class TestEmptyResultDetection:
     def test_valid_text_passes_through(self) -> None:
         backend = FakeTranscriberBackend(result="Hello world")
         lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
-        assert lc.transcribe(AUDIO) == "Hello world"
+        assert lc.transcribe(AUDIO) == Transcript("Hello world")
 
     def test_exactly_min_chars_passes(self) -> None:
         backend = FakeTranscriberBackend(result="Yes")
         lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
-        assert lc.transcribe(AUDIO) == "Yes"
+        assert lc.transcribe(AUDIO) == Transcript("Yes")
+
+    def test_confidence_and_speech_duration_pass_through(self) -> None:
+        heard = Transcript(
+            "summarize",
+            confidence=SegmentConfidence(avg_logprob=-0.4, no_speech_prob=0.1),
+            speech_duration_s=0.7,
+        )
+        backend = FakeTranscriberBackend(result=heard)
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        assert lc.transcribe(AUDIO) == heard
+
+    def test_empty_text_suppressed_even_with_confidence(self) -> None:
+        backend = FakeTranscriberBackend(
+            result=Transcript(
+                " . ",
+                confidence=SegmentConfidence(avg_logprob=-0.2, no_speech_prob=0.0),
+                speech_duration_s=0.4,
+            )
+        )
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        assert lc.transcribe(AUDIO) == EmptyResult()
 
     def test_backend_empty_result_passes_through(self) -> None:
         backend = FakeTranscriberBackend(result=EmptyResult())
@@ -342,7 +363,7 @@ class TestOOMRetry:
         backend.queue_error(GPUOutOfMemoryError("VRAM full"))
 
         result = lc.transcribe(AUDIO)
-        assert result == "recovered text"
+        assert result == Transcript("recovered text")
         assert backend.empty_cache_count == 1
         assert len(backend.transcribe_calls) == 2
 
@@ -475,7 +496,7 @@ class TestUnloadDuringTranscription:
         backend.release_transcribe()
         thread.join(timeout=2.0)
 
-        assert results == ["hello world"]
+        assert results == [Transcript("hello world")]
         assert backend.is_loaded is False
         assert backend.unload_count == 1
 
@@ -494,7 +515,7 @@ class TestUnloadDuringTranscription:
 
         backend.release_transcribe()
         thread.join(timeout=2.0)
-        assert results == ["hello world"]
+        assert results == [Transcript("hello world")]
         assert backend.is_loaded is True  # idle restarts from the end
 
         now[0] = 60 * 60  # a full idle period after the transcription ended

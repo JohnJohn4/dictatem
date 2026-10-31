@@ -63,4 +63,32 @@ class EmptyResult:
         return hash("EmptyResult")
 
 
-TranscriptionResult = str | EmptyResult
+@dataclass(frozen=True)
+class SegmentConfidence:
+    """How sure the model was about a transcript, aggregated over its segments.
+
+    ``avg_logprob`` is the duration-weighted mean of the segments'
+    ``avg_logprob``; ``no_speech_prob`` is the worst (max) segment
+    ``no_speech_prob``. Used only as a guardrail on Trigger Word recognition,
+    never on dictated text (#226).
+    """
+
+    avg_logprob: float
+    no_speech_prob: float
+
+
+@dataclass(frozen=True)
+class Transcript:
+    """A transcription backend's result: the text plus what it knows about it.
+
+    ``confidence`` and ``speech_duration_s`` (post-VAD speech, in seconds) are
+    ``None`` when the backend can't report them (#246). Everything downstream of
+    the Trigger Word decision receives only ``text``.
+    """
+
+    text: str
+    confidence: SegmentConfidence | None = None
+    speech_duration_s: float | None = None
+
+
+TranscriptionResult = Transcript | EmptyResult

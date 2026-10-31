@@ -5,13 +5,13 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from dictatem.exceptions import GPUOutOfMemoryError
-from dictatem.types import EmptyResult
+from dictatem.types import EmptyResult, SegmentConfidence, Transcript
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from dictatem.types import AudioChunk, TranscriptionResult
 
@@ -56,6 +56,38 @@ def _register_cuda_dll_directories() -> None:
         os.add_dll_directory(bin_dir)
     os.environ["PATH"] = os.pathsep.join([*bin_dirs, os.environ.get("PATH", "")])
     logger.debug("Added CUDA DLL directories to PATH: %s", bin_dirs)
+
+
+def transcript_from_segments(segments: Sequence[Any], info: object) -> Transcript:
+    """Build a :class:`Transcript` from faster-whisper segments + info (#246).
+
+    Text is the segments' texts joined (as before). Confidence is the
+    duration-weighted mean ``avg_logprob`` (plain mean if every segment is
+    zero-length) and the worst ``no_speech_prob``; unknown when there are no
+    segments. Speech duration is ``info.duration_after_vad`` — the post-VAD
+    speech length — or unknown if the info doesn't carry it.
+    """
+    text = "".join(seg.text for seg in segments)
+    confidence: SegmentConfidence | None = None
+    if segments:
+        weights = [max(0.0, float(seg.end) - float(seg.start)) for seg in segments]
+        total = sum(weights)
+        if total <= 0.0:
+            weights = [1.0] * len(segments)
+            total = float(len(segments))
+        avg_logprob = (
+            sum(w * float(seg.avg_logprob) for w, seg in zip(weights, segments, strict=True))
+            / total
+        )
+        no_speech_prob = max(float(seg.no_speech_prob) for seg in segments)
+        confidence = SegmentConfidence(
+            avg_logprob=avg_logprob, no_speech_prob=no_speech_prob
+        )
+    vad_duration = getattr(info, "duration_after_vad", None)
+    speech_duration_s = float(vad_duration) if vad_duration is not None else None
+    return Transcript(
+        text=text, confidence=confidence, speech_duration_s=speech_duration_s
+    )
 
 
 class FasterWhisperBackend:
@@ -140,13 +172,15 @@ class FasterWhisperBackend:
             return EmptyResult()
 
         try:
-            segments, _info = self._model.transcribe(  # type: ignore[union-attr]
+            segments, info = self._model.transcribe(  # type: ignore[union-attr]
                 audio,
                 language=self._language,
                 vad_filter=self._vad_filter,
                 **self._recognition_hint,
             )
-            return "".join(seg.text for seg in segments)
+            # ``segments`` is a lazy generator — decoding happens while it is
+            # consumed, so an OOM still surfaces inside this ``try``.
+            return transcript_from_segments(list(segments), info)
         except Exception as exc:
             if "out of memory" in str(exc).lower():
                 raise GPUOutOfMemoryError(str(exc)) from exc

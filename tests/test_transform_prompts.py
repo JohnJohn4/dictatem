@@ -89,7 +89,7 @@ class TestParsePromptFile:
         assert result.body == "The body."
 
     def test_aliases_kept_verbatim_for_loader_to_normalise(self) -> None:
-        # Surface form preserved here — TriggerDetector / loader normalise later.
+        # Surface form preserved here — the recognizer / loader normalise later.
         content = "---\naliases: [Summarize, summarize.]\n---\nbody"
         result = parse_prompt_file(content)
         assert result is not None

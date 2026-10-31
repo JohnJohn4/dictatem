@@ -78,7 +78,9 @@ class TranscribeLifecycle:
 
         if isinstance(raw, EmptyResult):
             return raw
-        if isinstance(raw, str) and _is_empty_text(raw, self._min_chars):
+        # Empty-text suppression runs on the text; a non-empty Transcript passes
+        # through whole, confidence and speech duration included (#246).
+        if _is_empty_text(raw.text, self._min_chars):
             return EmptyResult()
 
         return raw
