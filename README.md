@@ -49,6 +49,15 @@ Requires **macOS 12+** (Apple Silicon or Intel). Transcription runs on the CPU
 ([ADR-0013](docs/adr/0013-macos-transcription-engine.md)); Apple Silicon Macs get
 the more accurate `small` model, Intel Macs `base`.
 
+On **Apple Silicon with macOS 14 or later**, the installer also installs the
+Apple GPU (MLX) transcription engine, which adds about **230 MB** to the
+download (torch, mlx, mlx-metal and friends). Intel Macs and macOS 12/13 skip
+it, because its wheels need macOS 14+ on Apple Silicon, and get the CPU set
+exactly as before. The installer prints which engine set it chose. To skip the
+GPU engine on a qualifying Mac, run the one-liner with
+`DICTATEM_NO_APPLE_GPU=1` in front of `sh` (`… | DICTATEM_NO_APPLE_GPU=1 sh`).
+Re-running the installer later adds the engine without touching your config.
+
 Run in **Terminal**:
 
 ```sh
