@@ -365,6 +365,21 @@ class TestWriteConfig:
         write_config(Config(), path)
         assert path.exists()
 
+    def test_whole_number_floats_are_written_as_integers(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "config.toml"
+        cfg = Config()
+        cfg.behaviour.silence_timeout_s = 45.5
+        write_config(cfg, path)
+        content = path.read_text()
+        assert "max_recording_seconds = 300\n" in content
+        assert "silence_timeout_s = 45.5\n" in content
+        reloaded = load_config(path)
+        assert reloaded.behaviour.max_recording_seconds == 300.0
+        assert isinstance(reloaded.behaviour.max_recording_seconds, float)
+        assert reloaded.behaviour.silence_timeout_s == 45.5
+
     def test_none_values_round_trip(self, tmp_path: Path) -> None:
         path = tmp_path / "config.toml"
         write_config(Config(), path)

@@ -169,14 +169,22 @@ class Win32ClipboardIO:
         blocks: dict[Hashable, tuple[int, int]] = {}
         ids = _enumerate_formats()
         names = {fid: _format_name(fid) for fid in ids}
+        total = 0
         for fid, base_kind in classify_win32_formats(ids, names=names):
             kind = base_kind
             size: int | None = None
-            if kind is FormatKind.MEMORY and (is_text_format(fid) or time.monotonic() < deadline):
+            # Like mac_clipboard: once the bytes measured pass the cap (or the
+            # budget runs out) later non-text formats go unmeasured, so the plan
+            # falls back to text-only. Known limitation: a true delayed-render
+            # format can't be told apart before GetClipboardDataHandle makes its
+            # owner render it, so one slow render may overrun the probe budget.
+            in_budget = time.monotonic() < deadline and total <= self._snapshot_cap_bytes
+            if kind is FormatKind.MEMORY and (is_text_format(fid) or in_budget):
                 handle = _global_handle(fid)
                 size = int(_kernel32.GlobalSize(handle)) if handle else 0
                 if handle and size:
                     blocks[fid] = (handle, size)
+                    total += size
                 else:
                     # No memory block behind it after all: not capturable.
                     kind, size = FormatKind.HANDLE, None

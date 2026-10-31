@@ -179,9 +179,9 @@ class ConfigLoadReport:
 
     Pure data: :func:`load_config_with_report` fills it and the daemon turns a
     non-empty report into exactly one startup tray notification. *read_only*
-    marks a file that could not be read or parsed: nothing may write to it this
-    session, not even the Start-at-login toggle. Unknown keys and sections are
-    deliberately NOT problems — they stay info-only in the log.
+    marks a file that could not be read or parsed (the session runs on the
+    Hardware Tier defaults). Unknown keys and sections are deliberately NOT
+    problems — they stay info-only in the log.
     """
 
     problems: list[ConfigProblem] = field(default_factory=list)
@@ -190,6 +190,16 @@ class ConfigLoadReport:
     @property
     def is_empty(self) -> bool:
         return not self.problems
+
+    @property
+    def write_protected(self) -> bool:
+        """True when nothing may write config.toml this session.
+
+        Any problem — unreadable file or a per-key one — protects the file:
+        the startup notice promises it was not changed, so even the
+        Start-at-login toggle applies for this session only.
+        """
+        return not self.is_empty
 
 
 _OPEN_CONFIG_HINT = (
@@ -477,6 +487,10 @@ def _toml_value(value: Any) -> str:
     """Format a Python value as a TOML literal."""
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, float) and value.is_integer():
+        # Whole-number floats are written as integers ("60", not "60.0") so a
+        # fresh config reads as it always has; float fields accept ints on read.
+        return str(int(value))
     if isinstance(value, (int, float)):
         return repr(value)
     if isinstance(value, str):

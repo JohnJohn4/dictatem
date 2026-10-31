@@ -237,7 +237,7 @@ class TestTriggerFireHappyPath:
         transform_backend.queue_result("CONDENSED")
         _cycle(core, start_ms=2_000, end_ms=3_000)
 
-        # Replacement: backspaces = char_count of previous LastPaste.
+        # Replacement: backspaces = backspace_units of previous LastPaste.
         # "the long verbose thing" → normalize → "the long verbose thing " (23 chars).
         assert keystroke.total_backspaces == 23
         # Trigger fire types directly via send_text — no extra Ctrl+V paste,

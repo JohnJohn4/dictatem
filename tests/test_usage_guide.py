@@ -210,8 +210,7 @@ class TestVisualDesign:
         # No longer the catch-all "Didn't land" (held dictations have their own
         # row now); it names a genuine failure where nothing was saved.
         assert "Didn't land" not in row
-        assert "Something went wrong" in row
-        assert "nothing to paste" in row
+        assert "Didn't catch that — nothing to paste" in row
 
     def test_dark_theme_switches_the_page_colour(self) -> None:
         from dictatem.tray.usage_guide import DARK, LIGHT
