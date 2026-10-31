@@ -117,6 +117,17 @@ and **`summarize`** (condense to notes). This feature is **off until you set up
 [Ollama](#trigger-words-setup-ollama)** yourself. Add your own triggers by
 dropping a markdown prompt file into `~/.dictatem/prompts/`.
 
+Trigger words tolerate small mishearings when said on their own: a quick
+"paste" heard as "haste", or "polish" heard as "palish", still fires. Anything
+longer than a few words (or a couple of seconds of speech) is always pasted as
+dictation, and dictated text itself is never altered. To match trigger words
+exactly only, add this to `config.toml`:
+
+```toml
+[trigger_words]
+fuzzy_matching = false
+```
+
 ### Tray / menu-bar menu
 
 Right-click the icon for: **Start/Stop Recording**, **Copy last dictation**,
@@ -202,6 +213,9 @@ preload_model = false           # load at startup vs. when you first arm a dicta
 [transform]
 enabled = true                  # master switch for Trigger Words
 model_name = "gemma4:e2b"       # Ollama model tag; must match `ollama list`
+
+[trigger_words]                 # shown commented-out in the first-run file
+fuzzy_matching = true           # false = trigger words must be heard exactly
 ```
 
 `[audio].sample_rate` is fixed at `16000` (the transcriber needs 16 kHz). Any

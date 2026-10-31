@@ -128,10 +128,17 @@ of whether the [Transform](#transform) feature is enabled.
 
 A transcription is recognised as a Trigger Word if, after stripping
 whitespace and ASCII punctuation and lowercasing, it exactly matches a configured
-[Alias](#alias) or a built-in action word. Multi-token utterances never match —
-`"summarize this"` is regular dictation; only the lone word `"summarize"` (or
-`"paste"`, or their [Aliases](#alias)) fires. A user [Prompt File](#prompt-file)
-that re-uses a built-in name (`paste`) is shadowed by the built-in.
+[Alias](#alias) or a built-in action word. Failing that, a **short** utterance
+(about ≤ 2.5 s of speech, ≤ 3 tokens) whose joined tokens *sound like* an Alias
+— strong letter or phonetic-key similarity, an unambiguous winner, and no sign
+the model was unsure — also fires it (fuzzy matching, ADR-0028): `"haste"` fires
+`paste`, `"clean up"` fires `cleanup`. Aliases shorter than about 5 letters are
+matched exactly only. An utterance whose first word is an exact Alias followed
+by more words is always dictation — `"summarize this"` and `"paste it"` are
+regular dictation; only the lone word fires. Fuzzy matching never alters
+dictated text (ADR-0024), and `[trigger_words].fuzzy_matching = false` restores
+exact-only matching. A user [Prompt File](#prompt-file) that re-uses a built-in
+name (`paste`) is shadowed by the built-in.
 
 ### Alias
 

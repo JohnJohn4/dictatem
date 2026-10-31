@@ -641,3 +641,50 @@ class TestHotkeyModifiersValidation:
             "modifiers" in r.message and r.levelname == "WARNING"
             for r in caplog.records
         )
+
+
+class TestTriggerWordsSection:
+    """[trigger_words] — hand-edited, shown commented in the first-run file (#247)."""
+
+    def test_fuzzy_matching_defaults_on(self, tmp_path: Path) -> None:
+        assert load_config(tmp_path / "config.toml").trigger_words.fuzzy_matching is True
+
+    def test_fuzzy_matching_can_be_turned_off(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text("[trigger_words]\nfuzzy_matching = false\n")
+        assert load_config(path).trigger_words.fuzzy_matching is False
+
+    def test_invalid_value_logged_falls_back_and_file_untouched(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "config.toml"
+        original = '[trigger_words]\nfuzzy_matching = "nope"\n'
+        path.write_text(original)
+        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert cfg.trigger_words.fuzzy_matching is True
+        assert any(
+            "fuzzy_matching" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        )
+        assert path.read_text() == original
+
+    def test_first_run_file_shows_the_section_commented(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        load_config(path)
+        lines = path.read_text().splitlines()
+        assert "# [trigger_words]" in lines
+        assert "[trigger_words]" not in lines
+        assert any(
+            line.startswith("#") and "fuzzy_matching" in line for line in lines
+        )
+        assert load_config(path).trigger_words.fuzzy_matching is True
+
+    def test_a_user_opt_out_survives_an_app_rewrite(self, tmp_path: Path) -> None:
+        # The tray's Start-at-login toggle rewrites the whole file.
+        path = tmp_path / "config.toml"
+        path.write_text("[trigger_words]\nfuzzy_matching = false\n")
+        cfg = load_config(path)
+        cfg.startup.autostart = False
+        write_config(cfg, path)
+        assert load_config(path).trigger_words.fuzzy_matching is False

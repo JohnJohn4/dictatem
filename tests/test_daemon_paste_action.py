@@ -131,6 +131,41 @@ class TestPasteReRePastes:
         assert keystroke.total_backspaces == 0
         assert keystroke.typed_texts == []
 
+    @pytest.mark.parametrize("heard", ["haste", "Haste.", "Pasta."])
+    def test_lone_near_miss_of_paste_re_pastes_the_most_recent_dictation(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        heard: str,
+    ) -> None:
+        # #247: "paste" misheard as "haste" still re-pastes; the misheard
+        # word never lands in the document.
+        backend._result = "hello world"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = heard
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+        assert _set_texts(clipboard) == ["hello world ", "hello world "]
+        assert keystroke.paste_count == 2
+        assert keystroke.typed_texts == []
+
+    def test_near_miss_of_paste_inside_a_sentence_is_dictation(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        clipboard: FakeClipboardIO,
+    ) -> None:
+        backend._result = "hello world"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = "more haste less speed"
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+        assert _set_texts(clipboard)[-1] == "more haste less speed "
+
     @pytest.mark.parametrize("form", ["paste", "Paste.", "paste?", "PASTE"])
     def test_case_and_punctuation_forms_all_fire(
         self,
