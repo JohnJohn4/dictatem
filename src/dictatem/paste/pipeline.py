@@ -34,15 +34,43 @@ _POST_PASTE_SETTLE_S = 0.100
 _RESTORE_DELAY_S = 1.5
 
 
+# Control characters that read as a line or word break become a single space,
+# preserving the long-standing "newline -> space" behaviour. Tab is in this set
+# on purpose: a *typed* Tab (Trigger Fire sends keystrokes) moves focus in a
+# form or triggers shell completion, so it must never reach the target as-is.
+_SPACE_CONTROLS = "\t\n\v\f\r\x85  "
+
+
+def _build_control_table() -> dict[int, str | None]:
+    # Drop every other C0 control, DEL, and C1 control (incl. 8-bit CSI U+009B):
+    # typed into a terminal these are live keystrokes/escape sequences — a lone
+    # \r is Enter, ESC starts a sequence — bypassing bracketed-paste protection
+    # (pre-launch review S-4 / #199).
+    table: dict[int, str | None] = dict.fromkeys(
+        [*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0)]
+    )
+    for ch in _SPACE_CONTROLS:
+        table[ord(ch)] = " "
+    return table
+
+
+_CONTROL_TABLE = _build_control_table()
+
+
 def normalize_pasted_text(text: str) -> str:
     """Return *text* as it will actually be placed on the clipboard.
 
     Public because the daemon snapshots the post-normalisation form into
     ``LastPaste`` so backspace counts line up with what the user sees.
+
+    Line/word-break controls (``\\r``, ``\\n``, tab, VT, FF, NEL, U+2028/U+2029)
+    become a space (``\\r\\n`` is one space); every other control character is
+    removed, so neither the clipboard paste nor the typed Trigger-Fire path can
+    deliver a keystroke-equivalent control code to the target.
     """
+    text = text.replace("\r\n", " ").translate(_CONTROL_TABLE)
     # faster-whisper prefixes transcribed segments with a space; strip both
     # ends so we don't paste double spaces between consecutive transcriptions.
-    text = text.replace("\r\n", " ").replace("\n", " ")
     return text.strip() + " "
 
 
