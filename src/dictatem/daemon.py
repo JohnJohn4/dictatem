@@ -24,6 +24,7 @@ from dictatem.exceptions import (
 # per-event/tick path, so it is imported eagerly rather than lazily under the
 # bridge lock (the heavier classifier types stay TYPE_CHECKING-only below).
 from dictatem.hotkey.classifier import HotkeyEvent
+from dictatem.paste.backspace_units import count_backspace_units
 from dictatem.state import Command, Event, State
 from dictatem.transform.detector import PASTE_ACTION, match_builtin_action
 from dictatem.transform.last_paste import LastPaste
@@ -1105,7 +1106,7 @@ class DaemonCore:
             # Words against text that actually landed (invariant kept by #190).
             self._last_paste = LastPaste(
                 text=normalized,
-                char_count=len(normalized),
+                char_count=count_backspace_units(normalized),
                 target_id=current_target_id,
                 pasted_at_ms=now_ms,
             )

@@ -167,11 +167,22 @@ Transform runs and again at paste time, because the Transform can take up to
 `[transform].model_timeout_s` and focus may drift during it; a mismatch at
 either point discards the fire so backspaces never land in the wrong window.
 
-Replacement is done by sending backspaces equal to the character length of
-the Last Paste (post-normalisation) and pasting the Transform output. The
+Replacement is done by sending one backspace per
+[Backspace Unit](#backspace-unit) of the Last Paste (post-normalisation, which
+includes NFC composition) and pasting the Transform output. The
 Transform output then itself becomes the new [Last Paste](#last-paste),
 which allows trigger words to compose (e.g. running `"summarize"` twice
 further condenses the result).
+
+### Backspace Unit
+
+One user-perceived character of pasted text — an extended grapheme cluster
+(UAX #29), not a code point. A skin-toned emoji, a family ZWJ sequence, a flag,
+a keycap or an accented letter is one Backspace Unit, matching what one
+Backspace deletes in a text field. The [Last Paste](#last-paste) records its
+length in Backspace Units so a [Trigger Fire](#trigger-fire) erases exactly what
+was pasted. Counted by a stdlib-only approximation of UAX #29
+(`dictatem.paste.backspace_units`), not the `regex` package.
 
 ### Vocabulary
 
