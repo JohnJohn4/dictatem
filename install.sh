@@ -212,6 +212,11 @@ if [ ! -f "$plist" ]; then
     wait "$boot_pid" 2>/dev/null || true
 fi
 
+# The daemon drops this marker once its menu-bar icon is up (#95). Clear any
+# stale one now, so the wait below only sees the daemon started here.
+ready_marker="$HOME/.dictatem/.daemon_ready"
+rm -f "$ready_marker" 2>/dev/null || true
+
 # Start the daemon under launchd (see the comment above for why a terminal
 # launch breaks the hotkey/paste). bootstrap loads the plist and RunAtLoad
 # starts it; retry a few times in case the unload has not fully settled.
@@ -233,11 +238,37 @@ else
     nohup "$launcher" >/dev/null 2>&1 &
 fi
 
-# --- 5. Permissions + optional Ollama pointers ------------------------------
+# --- 5. Wait for the menu-bar icon, then say what's left ------------------
+# Setup is NOT done when the files are installed: the first launch spends a
+# while importing the speech stack before the icon and the permission prompts
+# appear, and a hotkey pressed before the grants are in does nothing (#95).
+# So wait for the daemon's ready marker (up to ~90 s) and keep the user posted,
+# rather than printing "done" into ~20 s of silence.
+printf "Waiting for Dictatem to start (the first launch can take up to a minute) "
+i=0
+while [ ! -f "$ready_marker" ] && [ "$i" -lt 360 ]; do
+    sleep 0.25
+    i=$((i + 1))
+    if [ $((i % 8)) -eq 0 ]; then printf "."; fi
+done
 echo ""
-echo "Dictatem is starting in the menu bar."
-echo "macOS will ask for Microphone access on your first dictation, and Dictatem"
-echo "will guide you through granting Accessibility and Input Monitoring in"
-echo "System Settings (each needs a one-time relaunch to apply)."
+echo ""
+if [ -f "$ready_marker" ]; then
+    echo "Dictatem is running — its icon is in your menu bar."
+else
+    echo "Dictatem is still starting — its menu-bar icon should appear shortly."
+    echo "If it doesn't, see Troubleshooting:"
+    echo "  https://github.com/JohnJohn4/dictatem#troubleshooting"
+fi
+echo ""
+echo "Setup isn't finished until you've granted two permissions:"
+echo "  1. When Dictatem asks for Accessibility and Input Monitoring, click"
+echo "     Open System Settings and turn on \"python${DICTATEM_PYTHON}\" in each pane"
+echo "     (that entry is Dictatem)."
+echo "  2. Then choose Restart from the Dictatem menu-bar menu."
+echo "The hotkey and paste won't work until both are on and Dictatem has restarted."
+echo "(Already granted them on an earlier install? Then you're all set.)"
+echo "macOS asks for Microphone access on your first dictation."
+echo ""
 echo "Optional Trigger Words (local-LLM rewrites) need Ollama set up yourself — see"
 echo "the README: https://github.com/JohnJohn4/dictatem#trigger-words-setup-ollama"

@@ -278,11 +278,40 @@ class TestStarterAdapterSets:
         # The CGPreflight permission check (#57) — passed as a reference,
         # never called here (this runs on a headless TCC-less runner).
         assert adapters.check_permissions is not None
+        # Re-prompt-on-use (#95): the reporter seam and the launchd Restart.
+        assert adapters.bind_permission_reporter is not None
+        from dictatem.macapp.relaunch import spawn_launchd_relaunch
+
+        assert adapters.relaunch is spawn_launchd_relaunch
         # No Dictatem.app and no LaunchAgent, so the registrar is guarded off
         # (#61) — absent, not faked: the reconcile is skipped and the tray
         # hides the toggle rather than registering a LaunchAgent that points
         # at a missing bundle.
         assert adapters.autostart_registrar is None
+
+    @pytest.mark.skipif(
+        sys.platform != "darwin", reason="lazy-imports the PyObjC native adapters"
+    )
+    def test_macos_reporter_binding_routes_blocked_paste_reports(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # #95: once the daemon binds its reporter, the keystroke sender's
+        # Accessibility-blocked hook reports ACCESSIBILITY through it. Only
+        # the wiring is exercised — no CGEvent is posted here.
+        from dictatem.permissions.mapper import MacPermission
+
+        self._patch_darwin_paths(monkeypatch, tmp_path)
+        captured: list[daemon._PlatformAdapters] = []
+        monkeypatch.setattr(daemon, "_run_daemon", captured.append)
+        daemon._start_macos_daemon()
+        (adapters,) = captured
+        assert adapters.bind_permission_reporter is not None
+        reports: list[MacPermission] = []
+        adapters.bind_permission_reporter(reports.append)
+        hook = adapters.keystroke.on_access_blocked  # type: ignore[union-attr]
+        assert hook is not None
+        hook()
+        assert reports == [MacPermission.ACCESSIBILITY]
 
     @pytest.mark.skipif(
         sys.platform != "darwin", reason="lazy-imports the PyObjC native adapters"
@@ -345,3 +374,6 @@ class TestStarterAdapterSets:
         # Windows has no guided permission UX — the mic permission surfaces
         # in-flow when capture fails.
         assert adapters.check_permissions is None
+        # No re-prompt reports and no Restart adapter on Windows (unchanged).
+        assert adapters.bind_permission_reporter is None
+        assert adapters.relaunch is None

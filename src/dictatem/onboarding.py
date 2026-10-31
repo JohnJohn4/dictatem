@@ -65,3 +65,31 @@ def mark_usage_guide_seen(marker_path: Path) -> None:
             marker_path,
             exc_info=True,
         )
+
+
+def daemon_ready_marker(home: Path) -> Path:
+    """Path to the "daemon is up and its menu-bar icon is showing" marker (#95).
+
+    The macOS installer deletes this before starting the daemon under launchd
+    and waits for it to reappear, so it can tell the user *setup is still
+    running* during the cold first launch (~20 s of otherwise-silent import
+    time) instead of declaring "done" before the icon or the permission prompts
+    exist. Lives beside the other ``~/.dictatem`` sentinels.
+    """
+    return home / ".dictatem" / ".daemon_ready"
+
+
+def write_daemon_ready_marker(marker_path: Path, *, pid: int) -> None:
+    """Write the ready marker (content: this daemon's PID). Best-effort.
+
+    Called once the Qt event loop is running and the tray icon has been
+    realized. An unwritable home only costs the installer its wait signal (it
+    times out and prints the same next steps), never a failed start.
+    """
+    try:
+        marker_path.parent.mkdir(parents=True, exist_ok=True)
+        marker_path.write_text(f"{pid}\n", encoding="ascii")
+    except OSError:
+        logger.warning(
+            "Could not write the daemon-ready marker at %s", marker_path, exc_info=True
+        )

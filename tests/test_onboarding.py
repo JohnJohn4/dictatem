@@ -10,9 +10,11 @@ import logging
 from typing import TYPE_CHECKING
 
 from dictatem.onboarding import (
+    daemon_ready_marker,
     mark_usage_guide_seen,
     should_auto_open_usage_guide,
     usage_guide_seen_marker,
+    write_daemon_ready_marker,
 )
 
 if TYPE_CHECKING:
@@ -92,4 +94,40 @@ class TestMarkUsageGuideSeen:
         with caplog.at_level(logging.WARNING, logger="dictatem.onboarding"):
             mark_usage_guide_seen(marker)  # must not raise
         assert not marker.exists()
+        assert any(r.levelname == "WARNING" for r in caplog.records)
+
+
+class TestDaemonReadyMarker:
+    """The installer waits on this marker to know the menu-bar icon is up (#95)."""
+
+    def test_marker_path_under_dictatem_home(self, tmp_path: Path) -> None:
+        assert daemon_ready_marker(tmp_path) == tmp_path / ".dictatem" / ".daemon_ready"
+
+    def test_path_matches_the_one_install_sh_waits_on(self) -> None:
+        # install.sh hardcodes the same path; the two must never drift.
+        from pathlib import Path as _Path
+
+        script = (_Path(__file__).resolve().parents[1] / "install.sh").read_text(
+            encoding="utf-8"
+        )
+        assert 'ready_marker="$HOME/.dictatem/.daemon_ready"' in script
+
+    def test_write_records_the_pid_creating_parent(self, tmp_path: Path) -> None:
+        marker = daemon_ready_marker(tmp_path)
+        write_daemon_ready_marker(marker, pid=4242)
+        assert marker.read_text(encoding="ascii").strip() == "4242"
+
+    def test_rewrite_overwrites(self, tmp_path: Path) -> None:
+        marker = daemon_ready_marker(tmp_path)
+        write_daemon_ready_marker(marker, pid=1)
+        write_daemon_ready_marker(marker, pid=2)
+        assert marker.read_text(encoding="ascii").strip() == "2"
+
+    def test_unwritable_home_degrades_without_raising(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture
+    ) -> None:
+        blocker = tmp_path / "blocker"
+        blocker.write_text("not a dir", encoding="utf-8")
+        with caplog.at_level(logging.WARNING, logger="dictatem.onboarding"):
+            write_daemon_ready_marker(blocker / ".daemon_ready", pid=1)
         assert any(r.levelname == "WARNING" for r in caplog.records)
