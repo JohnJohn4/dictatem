@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from dictatem.exceptions import ClipboardContentionError
-from dictatem.paste.pipeline import _RETRY_DELAY_S, paste
+from dictatem.paste.pipeline import _RETRY_DELAY_S, normalize_pasted_text, paste
 from tests.fakes import FakeClipboardIO, FakeForegroundTracker, FakeKeystrokeSender
 
 if TYPE_CHECKING:
@@ -70,6 +70,64 @@ class TestPasteCallSequence:
         paste("text", clipboard=clip, keystroke=ks, foreground=fg)
 
         assert order.index("restore_fg") < order.index("send_paste")
+
+
+class TestControlCharacterStripping:
+    """S-4 / #199: no control character may reach the target window.
+
+    Trigger Fire *types* its output, so a surviving ``\\r`` is Enter in a shell
+    and ESC starts a terminal escape sequence.
+    """
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("rm -rf x\rmore", "rm -rf x more "),  # lone CR is not Enter
+            ("a\tb", "a b "),  # typed Tab would move focus / complete
+            ("a\vb\fc", "a b c "),
+            ("a\u2028b\u2029c", "a b c "),  # Unicode line/paragraph separators
+            ("a\x85b", "a b "),  # NEL
+            ("a\r\nb", "a b "),  # CRLF stays a single space
+        ],
+    )
+    def test_break_controls_become_spaces(self, raw: str, expected: str) -> None:
+        assert normalize_pasted_text(raw) == expected
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("hi\x1b[31mred", "hi[31mred "),  # ESC removed, sequence defanged
+            ("a\x00b\x07c", "abc "),  # NUL, BEL
+            ("a\x7fb", "ab "),  # DEL
+            ("a\x9b31mb", "a31mb "),  # C1 CSI (8-bit escape introducer)
+            ("a\x08b", "ab "),  # backspace
+        ],
+    )
+    def test_other_controls_removed(self, raw: str, expected: str) -> None:
+        assert normalize_pasted_text(raw) == expected
+
+    def test_no_control_survives_any_codepoint(self) -> None:
+        controls = "".join(
+            chr(cp) for cp in [*range(0x20), 0x7F, *range(0x80, 0xA0), 0x2028, 0x2029]
+        )
+        out = normalize_pasted_text(f"x{controls}y")
+        assert out.startswith("x")
+        assert out.endswith("y ")
+        assert all(c == " " or c.isprintable() for c in out)
+
+    def test_plain_unicode_text_untouched(self) -> None:
+        assert normalize_pasted_text(" Café — naïve 日本 ") == "Café — naïve 日本 "
+
+    def test_typed_trigger_fire_path_is_sanitised(self) -> None:
+        ks = FakeKeystrokeSender()
+        paste(
+            "ok\rnow",
+            clipboard=FakeClipboardIO(),
+            keystroke=ks,
+            foreground=FakeForegroundTracker(),
+            replace_chars=3,
+        )
+        assert ks.typed_texts == ["ok now "]
 
 
 class TestInputNormalization:

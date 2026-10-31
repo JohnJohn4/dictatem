@@ -185,34 +185,6 @@ class TestTranscribing:
         assert Command.FLASH_ERROR in cmds
         assert Command.PASTE not in cmds
 
-    def test_oom_first_retries(self) -> None:
-        sm = StateMachine()
-        self._enter_transcribing_via_toggle(sm)
-        cmds = sm.handle(Event.OOM, now_ms=2000)
-        assert sm.state is State.TRANSCRIBING
-        assert Command.RETRY_TRANSCRIPTION in cmds
-
-    def test_oom_second_notifies_and_idles(self) -> None:
-        sm = StateMachine()
-        self._enter_transcribing_via_toggle(sm)
-        sm.handle(Event.OOM, now_ms=2000)
-        assert sm.state is State.TRANSCRIBING
-
-        cmds = sm.handle(Event.OOM, now_ms=3000)
-        assert sm.state is State.IDLE
-        assert Command.NOTIFY_ERROR in cmds
-
-    def test_oom_retry_resets_on_new_transcription(self) -> None:
-        sm = StateMachine()
-        self._enter_transcribing_via_toggle(sm)
-        sm.handle(Event.OOM, now_ms=2000)
-        sm.handle(Event.TRANSCRIPTION_DONE, now_ms=3000)
-        assert sm.state is State.IDLE
-
-        self._enter_transcribing_via_toggle(sm)
-        cmds = sm.handle(Event.OOM, now_ms=5000)
-        assert Command.RETRY_TRANSCRIPTION in cmds
-
 
 class TestAutoRepeatSuppression:
     def test_key_down_while_pressed_is_ignored(self) -> None:
@@ -397,7 +369,7 @@ class TestEnumCompleteness:
         expected = {
             "KEY_DOWN", "KEY_UP", "ESC", "TIMER_EXPIRED",
             "SILENCE_TIMEOUT", "MAX_DURATION", "TRANSCRIPTION_DONE",
-            "EMPTY_RESULT", "OOM",
+            "EMPTY_RESULT",
         }
         assert set(Event.__members__) == expected
 
@@ -405,7 +377,6 @@ class TestEnumCompleteness:
         expected = {
             "RECORD_START", "RECORD_STOP_AND_TRANSCRIBE", "CANCEL", "PASTE",
             "FLASH_ERROR", "START_TAP_TIMER", "CANCEL_TAP_TIMER",
-            "RETRY_TRANSCRIPTION", "NOTIFY_ERROR",
         }
         assert set(Command.__members__) == expected
 
