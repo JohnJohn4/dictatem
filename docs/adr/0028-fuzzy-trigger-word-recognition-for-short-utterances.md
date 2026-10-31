@@ -19,12 +19,14 @@ recognizer adds a fuzzy tier behind the unchanged exact rule:
   this", "paste it" stay dictation). Longer speech is never a Trigger Word.
 - **Score.** Join the tokens ("clean up" → "cleanup") and take the better of
   the letter edit similarity and the edit similarity of a small metaphone-style
-  phonetic key. A strong match fires; anything weaker is dictation. Aliases
+  phonetic key. A strong match fires; a weak match is Borderline (below);
+  anything weaker is dictation. Aliases
   shorter than about 5 letters are matched exactly only. A near-tie between
-  different actions never fires.
+  different actions never fires; it is Borderline.
 - **Confidence guardrail.** A strong fuzzy match fires only when Whisper's own
   conventional thresholds hold (`avg_logprob` ≥ −1.0, `no_speech_prob` < 0.6) or
-  the backend can't report confidence. Confidence never blocks an exact match
+  the backend can't report confidence; otherwise it is Borderline. Confidence
+  never blocks an exact match
   and never fires anything on its own (hallucinations can be confident).
 - **Same rails.** A fuzzy fire is an ordinary Fire: an unarmed Transform is
   never a candidate, and a Transform passes the same-target and TTL rails,
@@ -37,6 +39,22 @@ recognizer adds a fuzzy tier behind the unchanged exact rule:
 - **Escape hatch.** `[trigger_words].fuzzy_matching = false` restores exact-only
   matching. The section is hand-edited and appears commented in the first-run
   config (ADR-0022).
+
+**Borderline pastes nothing (#248).** A weak match, an unconfident strong match
+or a cross-action tie is a third outcome, [Borderline](../../CONTEXT.md#borderline):
+nothing is pasted or typed, the pill flashes a distinct "say again" colour (the
+error flash's timing, not its coral), and the Most-recent dictation and Last
+Paste are left untouched. This is a deliberate, visible exception to "paste what
+was heard", limited to ≤ 3-token near-homophones of a Trigger Word inside the
+short-utterance gate. Pasting instead re-creates the original bug: "haste"
+lands in the document, becomes the Most-recent dictation, and the user's next
+"paste" re-pastes "haste". It squares with ADR-0023's never-lost guarantee
+because nothing the user *dictated* is dropped: the buffer still holds the
+previous dictation, and the Borderline utterance was, by construction, a
+near-miss of a command rather than content. The cost is that a genuine one-word
+dictation such as "Summer." is swallowed; the Usage Guide and README tell the
+user to say it inside a longer phrase. A command-biased confirm pass (#249) runs
+before the flash, so most Borderlines resolve without a repeat.
 
 Thresholds are module constants, not config, and tests assert decisions only,
 so they stay tunable.
@@ -59,6 +77,8 @@ so they stay tunable.
 
 - A lone "Taste." / "Waste." / "Past." fires `paste`, which re-pastes the
   Most-recent dictation; Ctrl+Z recovers it. Accepted.
-- Weak matches, unconfident strong matches and cross-action ties are dictation
-  in this slice. The Borderline outcome (#248) turns them into a "say again"
-  flash plus a command-biased confirm pass (#249), and is recorded there.
+- Weak matches, unconfident strong matches and cross-action ties show the "say
+  again" flash and paste nothing (#248); a command-biased confirm pass (#249)
+  gets one more listen first.
+- A genuine single-word dictation that sounds like a Trigger Word ("Summer.")
+  needs a longer phrase. Accepted.

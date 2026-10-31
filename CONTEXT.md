@@ -138,7 +138,22 @@ by more words is always dictation — `"summarize this"` and `"paste it"` are
 regular dictation; only the lone word fires. Fuzzy matching never alters
 dictated text (ADR-0024), and `[trigger_words].fuzzy_matching = false` restores
 exact-only matching. A user [Prompt File](#prompt-file) that re-uses a built-in
-name (`paste`) is shadowed by the built-in.
+name (`paste`) is shadowed by the built-in. A short utterance that only *might*
+be a Trigger Word is [Borderline](#borderline).
+
+### Borderline
+
+The third outcome of [Trigger Word](#trigger-word) recognition, beside
+dictation and a fire: the short utterance sounds *close to* a Trigger Word but
+Dictatem isn't sure — a weak fuzzy match, a strong match the model was
+unconfident about, or a near-tie between two different actions. Its
+**candidates** are the near-miss actions. A Borderline outcome **pastes
+nothing**: the [Overlay Pill](#overlay-pill) flashes a distinct **"say again"**
+colour, and the [Most-recent dictation](#most-recent-dictation) and [Last
+Paste](#last-paste) are left untouched, so saying `paste` (or the intended
+Trigger Word) again still acts on the right text. The next utterance is judged
+fresh. A genuine one-word dictation that trips it ("Summer.") is dictated inside
+a longer phrase instead. See ADR-0028.
 
 ### Alias
 
@@ -294,6 +309,10 @@ a half, silent and never refocusing anything. It is *not* the error flash; the
 error flash is kept for genuine failures where nothing is held (an empty result,
 a discarded [Trigger Fire](#trigger-fire), "paste" with nothing to recover, a
 transcription error).
+
+A [Borderline](#borderline) Trigger Word gets its own **"say again"** flash: the
+error flash's timing in a distinct colour — nothing broke and nothing was lost,
+the user just repeats the command.
 
 While a model is still loading or downloading — the first dictation's Whisper
 load, the first [Trigger Word](#trigger-word)'s LLM load, a tray **Preload**, or

@@ -15,7 +15,9 @@ Fuzzy tier (#247, ADR-0028): when no exact match fires and the utterance is
 short (≤ ~2.5 s of speech, ≤ 3 tokens, and not an exact Alias followed by more
 words), the joined tokens are scored against the lexicon by letter and
 phonetic-key edit similarity. A strong, confident (or confidence-unknown),
-unambiguous match fires ``via=FUZZY``; anything else is Dictation.
+unambiguous match fires ``via=FUZZY``; a weak match, an unconfident strong
+match or a cross-action tie is :class:`Borderline` (#248); anything else is
+Dictation.
 """
 
 from __future__ import annotations
@@ -121,7 +123,28 @@ class Fire:
     via: MatchVia = MatchVia.EXACT
 
 
-TriggerDecision = Dictation | Fire
+class ScoreBand(enum.Enum):
+    """How close the best fuzzy candidate scored: strong or merely weak."""
+
+    STRONG = "strong"
+    WEAK = "weak"
+
+
+@dataclass(frozen=True)
+class Borderline:
+    """Close to a Trigger Word, but not sure enough to fire (#248).
+
+    A weak fuzzy match, a strong match the model was unconfident about, or a
+    tie between different actions. ``candidates`` are the near-miss targets,
+    best first, one per action; ``band`` is the best candidate's score band.
+    The daemon pastes nothing and flashes "say again" (ADR-0028).
+    """
+
+    candidates: tuple[TriggerTarget, ...]
+    band: ScoreBand
+
+
+TriggerDecision = Dictation | Fire | Borderline
 
 
 class TriggerWordRecognizer:
@@ -179,7 +202,7 @@ class TriggerWordRecognizer:
 
         Only decides "is this a Trigger Word" — never rewrites dictation
         (ADR-0024 / ADR-0028). Weak matches, unconfident strong matches and
-        cross-action ties are Dictation until the Borderline ticket (#248).
+        cross-action ties are :class:`Borderline` (#248).
         """
         tokens = [t for t in (_normalise(t) for t in utterance.text.split()) if t]
         if not tokens or len(tokens) > FUZZY_MAX_TOKENS or not utterance.is_short:
@@ -204,13 +227,18 @@ class TriggerWordRecognizer:
             return Dictation()
         scored.sort(key=lambda s: s[0], reverse=True)
         best_score, best_strong, best_target = scored[0]
-        rival = any(
-            _action_of(target) != _action_of(best_target)
-            and best_score - score <= FUZZY_TIE_MARGIN
-            for score, _strong, target in scored[1:]
-        )
-        if rival or not best_strong or not _is_confident(utterance.confidence):
-            return Dictation()  # Borderline lands here in #248
+        # The best target plus one target per *other* action within the tie
+        # margin: more than one candidate means a cross-action tie.
+        candidates: list[TriggerTarget] = [best_target]
+        seen_actions = {_action_of(best_target)}
+        for score, _strong, target in scored[1:]:
+            action = _action_of(target)
+            if action not in seen_actions and best_score - score <= FUZZY_TIE_MARGIN:
+                candidates.append(target)
+                seen_actions.add(action)
+        if len(candidates) > 1 or not best_strong or not _is_confident(utterance.confidence):
+            band = ScoreBand.STRONG if best_strong else ScoreBand.WEAK
+            return Borderline(candidates=tuple(candidates), band=band)
         return Fire(best_target, via=MatchVia.FUZZY)
 
 

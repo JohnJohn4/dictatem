@@ -72,6 +72,7 @@ PILL_HUES = {
     "transcribing": PILL_HEX[PillColor.PROCESSING],
     "computing": PILL_HEX[PillColor.COMPUTING],
     "held": PILL_HEX[PillColor.HELD],
+    "say_again": PILL_HEX[PillColor.SAY_AGAIN],
     "error": PILL_HEX[PillColor.ERROR],
 }
 
@@ -169,6 +170,11 @@ def _pill_section(theme: GuideTheme) -> str:
             "focus where it belongs and say <i>paste</i>",
         ),
         (
+            "say_again",
+            "<b>Say again</b> — that sounded close to a trigger word but Dictatem "
+            "wasn't sure, so nothing was pasted; just say it again",
+        ),
+        (
             "error",
             "Didn't catch that — nothing to paste",
         ),
@@ -208,6 +214,16 @@ def _trigger_words_section(theme: GuideTheme, trigger_words: Sequence[str]) -> s
             "filler and false starts and tightening the wording while keeping your "
             "meaning and voice. <i>summarize</i> condenses it instead. Both ship "
             "built in and need the Transform (Ollama) set up.",
+        )
+        # #248: the Borderline outcome and its workaround.
+        + _p(
+            theme,
+            "<b>Say again:</b> if a short word sounds <i>close to</i> a trigger "
+            "word but Dictatem isn't sure, the pill flashes the say-again colour "
+            "and nothing is pasted — your last dictation is kept, so just say the "
+            "trigger word again, clearly. If a real one-word dictation (say, "
+            "<i>Summer.</i>) trips it, dictate it inside a longer phrase instead.",
+            muted=True,
         )
     )
     if trigger_words:

@@ -201,6 +201,21 @@ class TestVisualDesign:
         row = html[row_start : html.index("</tr>", row_start)]
         assert "Saved — say paste" in row
 
+    def test_pill_legend_has_say_again_row_with_palette_hue(self) -> None:
+        # The Borderline "say again" flash (#248) gets its own row and hue.
+        from dictatem.overlay.state import PILL_HEX, PillColor
+
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        row_start = html.index(PILL_HEX[PillColor.SAY_AGAIN])
+        row = html[row_start : html.index("</tr>", row_start)]
+        assert "Say again" in row
+        assert "nothing was pasted" in row
+
+    def test_explains_say_again_and_the_longer_phrase_workaround(self) -> None:
+        html = usage_guide_html(("win", "alt"), platform="win32", trigger_words=("summarize",))
+        assert "say again" in html.lower()
+        assert "longer phrase" in html
+
     def test_pill_legend_error_row_means_a_real_failure(self) -> None:
         from dictatem.overlay.state import PILL_HEX, PillColor
 

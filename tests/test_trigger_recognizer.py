@@ -11,10 +11,12 @@ import pytest
 
 from dictatem.transform.recognizer import (
     PASTE_ACTION,
+    Borderline,
     BuiltinAction,
     Dictation,
     Fire,
     MatchVia,
+    ScoreBand,
     TransformTarget,
     TriggerWordRecognizer,
     Utterance,
@@ -192,6 +194,11 @@ def _fuzzy_decide(
     return rec.decide(utt, transforms_armed=armed)
 
 
+def _candidate_prompts(decision: Borderline) -> set[str]:
+    """The Transform prompt bodies a Borderline decision's candidates run."""
+    return {t.prompt for t in decision.candidates if isinstance(t, TransformTarget)}
+
+
 def _fires_paste(decision: object) -> bool:
     return isinstance(decision, Fire) and decision.target == BuiltinAction(PASTE_ACTION)
 
@@ -245,10 +252,17 @@ class TestFuzzyGoldenTable:
         assert _fuzzy_decide("haste", duration_s=4.0) == Dictation()
         assert _fuzzy_decide("summerize", duration_s=4.0) == Dictation()
 
-    def test_weak_match_is_dictation_in_this_slice(self) -> None:
+    def test_weak_match_is_borderline(self) -> None:
         # "some of us" only sounds roughly like "summarise": a weak match.
-        # Until the Borderline ticket (#248) it stays Dictation.
-        assert _fuzzy_decide("some of us") == Dictation()
+        # Not sure enough to fire, too close to paste as dictation (#248).
+        decision = _fuzzy_decide("some of us")
+        assert isinstance(decision, Borderline)
+        assert _candidate_prompts(decision) == {SUMMARIZE}
+        assert decision.band is ScoreBand.WEAK
+
+    def test_weak_match_to_an_unarmed_transform_is_dictation(self) -> None:
+        # An unarmed Transform is never a candidate — not even a Borderline one.
+        assert _fuzzy_decide("some of us", armed=False) == Dictation()
 
 
 class TestFuzzyConfidenceGuardrail:
@@ -256,15 +270,24 @@ class TestFuzzyConfidenceGuardrail:
         assert _fires_paste(_fuzzy_decide("haste", confidence=None))
         assert _prompt(_fuzzy_decide("summerize", confidence=None)) == SUMMARIZE
 
-    def test_high_no_speech_prob_blocks_a_fuzzy_fire(self) -> None:
+    def test_high_no_speech_prob_makes_a_strong_match_borderline(self) -> None:
         noisy = SegmentConfidence(avg_logprob=-0.3, no_speech_prob=0.9)
-        assert _fuzzy_decide("haste", confidence=noisy) == Dictation()
-        assert _fuzzy_decide("summerize", confidence=noisy) == Dictation()
+        haste = _fuzzy_decide("haste", confidence=noisy)
+        assert isinstance(haste, Borderline)
+        assert haste.candidates == (BuiltinAction(PASTE_ACTION),)
+        assert haste.band is ScoreBand.STRONG
+        summ = _fuzzy_decide("summerize", confidence=noisy)
+        assert isinstance(summ, Borderline)
+        assert _candidate_prompts(summ) == {SUMMARIZE}
 
-    def test_low_avg_logprob_blocks_a_fuzzy_fire(self) -> None:
+    def test_low_avg_logprob_makes_a_strong_match_borderline(self) -> None:
         unsure = SegmentConfidence(avg_logprob=-1.8, no_speech_prob=0.05)
-        assert _fuzzy_decide("haste", confidence=unsure) == Dictation()
-        assert _fuzzy_decide("palish", confidence=unsure) == Dictation()
+        haste = _fuzzy_decide("haste", confidence=unsure)
+        assert isinstance(haste, Borderline)
+        assert haste.candidates == (BuiltinAction(PASTE_ACTION),)
+        palish = _fuzzy_decide("palish", confidence=unsure)
+        assert isinstance(palish, Borderline)
+        assert _candidate_prompts(palish) == {POLISH}
 
     def test_exact_match_ignores_bad_confidence(self) -> None:
         unsure = SegmentConfidence(avg_logprob=-3.0, no_speech_prob=0.99)
@@ -290,11 +313,13 @@ class TestFuzzyGates:
         aliases = {"paste": "a user paste Transform"}
         assert _fires_paste(_fuzzy_decide("haste", aliases=aliases))
 
-    def test_cross_action_tie_is_dictation(self) -> None:
+    def test_cross_action_tie_is_borderline_with_both_candidates(self) -> None:
         # Two different Transforms whose aliases are equally close to what
-        # was heard: never guess between them.
+        # was heard: never guess between them — ask again (#248).
         aliases = {"rewrite": "rewrite body", "rewrote": "rewrote body"}
-        assert _fuzzy_decide("rewrute", aliases=aliases) == Dictation()
+        decision = _fuzzy_decide("rewrute", aliases=aliases)
+        assert isinstance(decision, Borderline)
+        assert _candidate_prompts(decision) == {"rewrite body", "rewrote body"}
 
     def test_same_action_variants_are_not_a_tie(self) -> None:
         # summarize/summarise share one Transform: no ambiguity.

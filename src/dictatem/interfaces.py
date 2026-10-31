@@ -354,6 +354,12 @@ class OverlayRenderer(Protocol):
         flash; silent, and never refocuses anything (#239 / ADR-0026)."""
         ...
 
+    def show_say_again(self) -> None:
+        """Flash "say again": Dictatem heard something close to a Trigger Word
+        but wasn't sure, and pasted nothing (a Borderline outcome, #248). Same
+        timing as the error flash, its own hue — nothing broke."""
+        ...
+
     def hide(self) -> None:
         """Fade out and hide the overlay."""
         ...

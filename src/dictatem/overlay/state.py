@@ -21,6 +21,7 @@ class OverlayPhase(enum.Enum):
     TRANSCRIBING = "transcribing"
     COMPUTING = "computing"
     ERROR_FLASH = "error_flash"
+    SAY_AGAIN_FLASH = "say_again_flash"  # a Borderline Trigger Word (#248)
     HELD = "held"  # the quiet "Saved — say paste" signal (#239)
     FADING_OUT = "fading_out"
 
@@ -38,6 +39,7 @@ class PillColor(enum.Enum):
     COMPUTING = "computing"  # a Transform/Trigger Fire generating (distinct hue)
     ERROR = "error"  # a genuine failure (empty result, discarded Trigger Fire, ...)
     HELD = "held"  # a dictation held for recovery: "Saved — say paste" (#239)
+    SAY_AGAIN = "say_again"  # close to a Trigger Word but unsure: say it again (#248)
 
 
 # The actual hue for each semantic PillColor, as hex. Pure so the Usage Guide's
@@ -51,6 +53,7 @@ PILL_HEX: dict[PillColor, str] = {
     PillColor.COMPUTING: "#9C8CFF",  # computing — iris
     PillColor.ERROR: "#F07167",  # genuine failure — coral
     PillColor.HELD: "#4FD1A5",  # held for recovery — mint (#239)
+    PillColor.SAY_AGAIN: "#4FB3F7",  # Borderline Trigger Word, say again — sky (#248)
 }
 
 # The Held pill's caption (#239 / F-13 / ADR-0026): a regular dictation was kept
@@ -193,6 +196,14 @@ class OverlayState:
         self._phase = OverlayPhase.ERROR_FLASH
         self._transition_start = self._clock()
 
+    def flash_say_again(self) -> None:
+        """The "say again" flash (#248): Dictatem heard something close to a
+        Trigger Word but wasn't sure, so it pasted nothing. Same timing as the
+        error flash, its own hue — nothing broke, the user just repeats."""
+        self._color = PillColor.SAY_AGAIN
+        self._phase = OverlayPhase.SAY_AGAIN_FLASH
+        self._transition_start = self._clock()
+
     def show_held(self) -> None:
         """The quiet "Saved — say paste" signal (#239 / F-13 / ADR-0026).
 
@@ -218,7 +229,7 @@ class OverlayState:
         if self._phase == OverlayPhase.FADING_IN:
             if now - self._transition_start >= self._fade_in_s:
                 self._phase = OverlayPhase.RECORDING
-        elif self._phase == OverlayPhase.ERROR_FLASH:
+        elif self._phase in (OverlayPhase.ERROR_FLASH, OverlayPhase.SAY_AGAIN_FLASH):
             if now - self._transition_start >= self._flash_duration_s:
                 self._phase = OverlayPhase.FADING_OUT
                 self._transition_start = now
@@ -244,6 +255,7 @@ class OverlayState:
             OverlayPhase.TRANSCRIBING,
             OverlayPhase.COMPUTING,
             OverlayPhase.ERROR_FLASH,
+            OverlayPhase.SAY_AGAIN_FLASH,
             OverlayPhase.HELD,
         ):
             return 1.0

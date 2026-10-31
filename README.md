@@ -120,8 +120,13 @@ dropping a markdown prompt file into `~/.dictatem/prompts/`.
 Trigger words tolerate small mishearings when said on their own: a quick
 "paste" heard as "haste", or "polish" heard as "palish", still fires. Anything
 longer than a few words (or a couple of seconds of speech) is always pasted as
-dictation, and dictated text itself is never altered. To match trigger words
-exactly only, add this to `config.toml`:
+dictation, and dictated text itself is never altered.
+
+If a short word only sounds *close to* a trigger word and Dictatem isn't sure,
+the pill flashes a distinct sky-blue **"say again"** colour and **nothing is
+pasted** — your last dictation is kept, so just say the trigger word again. If a
+real one-word dictation (say, "Summer.") trips it, dictate it inside a longer
+phrase. To match trigger words exactly only, add this to `config.toml`:
 
 ```toml
 [trigger_words]
@@ -313,6 +318,16 @@ The same two steps apply on macOS (in Terminal) — step 1 also removes
 ---
 
 ## Troubleshooting
+
+<details>
+<summary><strong>The pill flashed blue and nothing was pasted</strong></summary>
+
+That's the **"say again"** flash: what you said sounded close to a trigger word
+(e.g. "haste" for **paste**), but Dictatem wasn't sure enough to run it, so it
+pasted nothing rather than typing the wrong word. Your last dictation is
+untouched — say the trigger word again, clearly. If you meant to dictate a single
+word that sounds like a trigger word, say it inside a longer phrase.
+</details>
 
 <details>
 <summary><strong>The tray icon takes a few seconds to appear (or the first dictation lags)</strong></summary>
