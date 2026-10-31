@@ -1,3 +1,5 @@
 # install.sh is curl|sh'd on macOS — a CRLF checkout or commit would break
 # it (`/bin/sh^M: bad interpreter`). Pin it to LF everywhere.
 install.sh text eol=lf
+# Wizard scripts are run by bash (Git Bash on Windows); CRLF breaks them.
+scripts/**/*.sh text eol=lf
