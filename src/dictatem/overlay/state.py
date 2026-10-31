@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -37,6 +38,19 @@ class PillColor(enum.Enum):
     ERROR = "error"  # the error / focus-drift "saved" flash
 
 
+# The actual hue for each semantic PillColor, as hex. Pure so the Usage Guide's
+# colour legend (``tray.usage_guide``) renders the exact same swatches the Qt
+# widget paints — one source, no drift. Recording stays white (S9 QA: motion is
+# the cue); the two processing phases and the flash get distinct hues.
+PILL_BODY_HEX: str = "#1A1D24"
+PILL_HEX: dict[PillColor, str] = {
+    PillColor.ACCENT: "#F4F6FA",  # recording
+    PillColor.PROCESSING: "#F2B544",  # transcribing — amber
+    PillColor.COMPUTING: "#9C8CFF",  # computing — iris
+    PillColor.ERROR: "#F07167",  # error / focus-drift "saved" flash — coral
+}
+
+
 class Point(NamedTuple):
     x: int
     y: int
@@ -55,6 +69,10 @@ class WaveformFrame:
 
 
 _BAR_WEIGHTS: tuple[float, ...] = (0.5, 0.7, 0.9, 1.0, 0.85, 0.95, 1.0, 0.8, 0.65, 0.5)
+
+# The processing wave: radians/second and radians between neighbouring bars.
+_WAVE_SPEED: float = 7.0
+_WAVE_STEP: float = 0.55
 
 PILL_WIDTH: int = 200
 PILL_HEIGHT: int = 40
@@ -190,6 +208,22 @@ class OverlayState:
     def current_waveform_frame(self, level_supplier: Callable[[], float]) -> WaveformFrame:
         level = max(0.0, min(1.0, level_supplier()))
         bars = tuple(w * level for w in self._bar_weights)
+        return WaveformFrame(bars=bars)
+
+    def current_processing_frame(self) -> WaveformFrame:
+        """A low wave travelling left-to-right across the bars.
+
+        Shown while transcribing / computing, so a slow pass reads as "working"
+        rather than frozen (review F-14). Driven by the injected clock: bar *i*
+        sits on a sine whose phase advances with time, between 15% and 55% of
+        its weight.
+        """
+        t = self._clock()
+        n = len(self._bar_weights)
+        bars = tuple(
+            w * (0.15 + 0.40 * (0.5 + 0.5 * math.sin(t * _WAVE_SPEED - i * _WAVE_STEP)))
+            for i, w in zip(range(n), self._bar_weights, strict=True)
+        )
         return WaveformFrame(bars=bars)
 
     @staticmethod

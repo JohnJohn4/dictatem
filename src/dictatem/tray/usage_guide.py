@@ -7,89 +7,245 @@ Qt adapter (``qt_tray``) only hosts the window. The guide reflects the **live
 configuration** — the actual Hotkey Combo via ``format_hotkey`` — so it can
 never drift from what the user has set. See ADR-0019.
 
-It grows by appending one section per feature: dictating, trigger words,
-recovering a lost dictation, first-use model loading, and changing your hotkey.
+Layout: the live hotkey drawn as keycaps opens the page (the one thing every
+user must learn), followed by the two recording modes, a legend for the pill's
+phase colours, then one section per feature. Styling uses only the subset of
+CSS Qt rich text supports (no border-radius, no flex), and the palette follows
+the OS light/dark scheme via :data:`LIGHT` / :data:`DARK`.
 """
 
 from __future__ import annotations
 
 import html
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from dictatem.tray.hotkey_hint import format_hotkey
+from dictatem.overlay.state import PILL_BODY_HEX, PILL_HEX, PillColor
+from dictatem.tray.hotkey_hint import format_hotkey, hotkey_keys
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-def _dictating_section(combo: str) -> str:
-    c = html.escape(combo)
+@dataclass(frozen=True)
+class GuideTheme:
+    """The guide's colour tokens (pill swatches come from ``overlay.state``)."""
+
+    page: str
+    text: str
+    muted: str
+    rule: str
+    keycap: str
+    keycap_edge: str
+    chip: str
+    code: str
+
+
+LIGHT = GuideTheme(
+    page="#FAFBFC",
+    text="#20232A",
+    muted="#5F6573",
+    rule="#E3E6EC",
+    keycap="#FFFFFF",
+    keycap_edge="#BCC2CE",
+    chip="#EDEFF4",
+    code="#3B4FA8",
+)
+
+DARK = GuideTheme(
+    page="#1D2027",
+    text="#E7E9EE",
+    muted="#9AA1AE",
+    rule="#343842",
+    keycap="#2B2F38",
+    keycap_edge="#4C5260",
+    chip="#2B2F38",
+    code="#A9B6FF",
+)
+
+# The pill's phase hues come straight from the overlay's pure palette, so the
+# legend can never drift from what the widget paints. Swatches sit on the pill's
+# dark body colour (recording is white) rather than the page.
+PILL_BODY = PILL_BODY_HEX
+PILL_HUES = {
+    "recording": PILL_HEX[PillColor.ACCENT],
+    "transcribing": PILL_HEX[PillColor.PROCESSING],
+    "computing": PILL_HEX[PillColor.COMPUTING],
+    "error": PILL_HEX[PillColor.ERROR],
+}
+
+
+def _h(theme: GuideTheme, text: str) -> str:
     return (
-        "<h3>Dictating</h3>"
-        f"<p><b>{c}</b> is your dictation hotkey.</p>"
-        f"<p><b>Hold to talk</b> — Hold {c} while you speak, then release. "
-        "Dictatem transcribes and pastes the moment you let go. "
-        "Best for quick phrases.</p>"
-        f"<p><b>Tap to toggle</b> — Tap {c} to start recording hands-free, then "
-        "tap again to stop. Best for longer dictation.</p>"
-        "<p><i>While recording, a pill appears in the corner of your screen.</i></p>"
+        f'<h3 style="color:{theme.text}; font-size:13pt; font-weight:600; '
+        f'margin-top:22px; margin-bottom:6px;">{text}</h3>'
     )
 
 
-def _trigger_words_section(trigger_words: Sequence[str]) -> str:
+def _p(theme: GuideTheme, body: str, *, muted: bool = False) -> str:
+    colour = theme.muted if muted else theme.text
+    return f'<p style="color:{colour}; margin-top:0; margin-bottom:8px;">{body}</p>'
+
+
+def _code(theme: GuideTheme, text: str) -> str:
+    return f'<code style="color:{theme.code};">{text}</code>'
+
+
+def _chips(theme: GuideTheme, words: Sequence[str]) -> str:
+    cells = "".join(
+        f'<td style="background-color:{theme.chip}; padding:2px 8px;">'
+        f"{html.escape(word)}</td>"
+        for word in words
+    )
+    return f'<table cellspacing="4" cellpadding="0"><tr>{cells}</tr></table>'
+
+
+def _keycaps(theme: GuideTheme, keys: Sequence[str], combo: str) -> str:
+    """The live hotkey as large keycaps — the guide's opening element.
+
+    Each key is a bordered table cell (Qt rich text has no border-radius); a
+    muted ``+`` joins them on Windows, while macOS glyph chords sit side by side
+    as the platform writes them. The full combo string is carried in the table's
+    ``title`` so the plain chord text (``Win+Alt``) is always present.
+    """
+    joiner = "" if any(len(k) == 1 for k in keys) else "+"
+    cells: list[str] = []
+    for i, key in enumerate(keys):
+        if i and joiner:
+            cells.append(
+                f'<td style="color:{theme.muted}; font-size:16pt; padding:0 2px;">'
+                f"{joiner}</td>"
+            )
+        cells.append(
+            f'<td style="background-color:{theme.keycap}; color:{theme.text}; '
+            f"border:1px solid {theme.keycap_edge}; border-bottom:3px solid "
+            f'{theme.keycap_edge}; font-size:17pt; font-weight:600; '
+            f'padding:6px 14px;">{html.escape(key)}</td>'
+        )
+    return (
+        f'<table title="{html.escape(combo)}" cellspacing="6" cellpadding="0" '
+        f'style="margin-top:4px; margin-bottom:10px;"><tr>{"".join(cells)}</tr></table>'
+    )
+
+
+def _dictating_section(theme: GuideTheme, combo: str, keys: Sequence[str]) -> str:
+    c = html.escape(combo)
+    rows = (
+        ("Hold to talk", f"Hold {c} while you speak, then release. Dictatem "
+         "transcribes and pastes the moment you let go. Best for quick phrases."),
+        ("Tap to toggle", f"Tap {c} to start recording hands-free, then tap "
+         "again to stop. Best for longer dictation."),
+    )
+    table = "".join(
+        f'<tr><td style="color:{theme.text}; font-weight:600; padding:0 14px 8px 0;" '
+        f'width="112">{name}</td><td style="color:{theme.text}; padding:0 0 8px 0;">'
+        f"{desc}</td></tr>"
+        for name, desc in rows
+    )
+    return (
+        f'<p style="color:{theme.muted}; margin-bottom:0;">Your dictation hotkey '
+        f"is <b>{c}</b></p>"
+        + _keycaps(theme, keys or [combo], combo)
+        + f'<table cellspacing="0" cellpadding="0">{table}</table>'
+    )
+
+
+def _pill_section(theme: GuideTheme) -> str:
+    rows = (
+        ("recording", "Listening — the bars follow your voice"),
+        ("transcribing", "Turning your speech into text"),
+        ("computing", "Running a trigger word"),
+        ("error", "Didn't land — see how to recover it below"),
+    )
+    body = "".join(
+        f'<tr><td style="background-color:{PILL_BODY}; padding:2px 8px;">'
+        f'<span style="color:{PILL_HUES[key]}; font-size:11pt;">▮▮▮</span></td>'
+        f'<td style="color:{theme.text}; padding:0 0 0 10px;">{label}</td></tr>'
+        for key, label in rows
+    )
+    return (
+        _h(theme, "The pill")
+        + _p(
+            theme,
+            "While recording, a pill appears in the corner of your screen. Its "
+            "colour tells you what Dictatem is doing:",
+        )
+        + f'<table cellspacing="0" cellpadding="0" style="margin-bottom:6px;">{body}</table>'
+    )
+
+
+def _trigger_words_section(theme: GuideTheme, trigger_words: Sequence[str]) -> str:
     section = (
-        "<h3>Trigger words</h3>"
-        "<p>Right after dictating, say a single word like <i>polish</i> or "
-        "<i>summarize</i> on its own. Instead of typing it, Dictatem runs that "
-        "word's transform and replaces what you just pasted with the result. It "
-        "only fires in the <b>same window</b>, within a few minutes of the "
-        "paste.</p>"
-        "<p><b>Clean up your last dictation:</b> say <i>polish</i> on its own "
-        "just after dictating and Dictatem rewrites what you pasted — removing "
-        "filler and false starts and tightening the wording while keeping your "
-        "meaning and voice. <i>summarize</i> condenses it instead. Both ship "
-        "built in and need the Transform (Ollama) set up.</p>"
+        _h(theme, "Trigger words")
+        + _p(
+            theme,
+            "Right after dictating, say a single word like <i>polish</i> or "
+            "<i>summarize</i> on its own. Instead of typing it, Dictatem runs that "
+            "word's transform and replaces what you just pasted with the result. "
+            "It only fires in the <b>same window</b>, within a few minutes of the "
+            "paste.",
+        )
+        + _p(
+            theme,
+            "<b>Clean up your last dictation:</b> say <i>polish</i> on its own "
+            "just after dictating and Dictatem rewrites what you pasted — removing "
+            "filler and false starts and tightening the wording while keeping your "
+            "meaning and voice. <i>summarize</i> condenses it instead. Both ship "
+            "built in and need the Transform (Ollama) set up.",
+        )
     )
     if trigger_words:
-        words = ", ".join(html.escape(word) for word in trigger_words)
-        section += f"<p><i>Your trigger words: {words}</i></p>"
+        section += _p(theme, "Your trigger words:", muted=True) + _chips(
+            theme, trigger_words
+        )
     else:
-        section += (
-            "<p><i>You haven't added any trigger words yet — drop a prompt file "
-            "in <code>~/.dictatem/prompts/</code>.</i></p>"
+        section += _p(
+            theme,
+            "You haven't added any trigger words yet — drop a prompt file in "
+            + _code(theme, "~/.dictatem/prompts/")
+            + ".",
+            muted=True,
         )
     return section
 
 
-def _recovery_section() -> str:
-    return (
-        "<h3>Recovering a lost dictation</h3>"
-        "<p>If a dictation lands nowhere — you weren't focused on a text box — "
-        "it isn't lost. Focus where it should have gone and say <i>paste</i> on "
-        "its own to drop it in. You can also use <b>Copy last dictation</b> in "
-        "this menu to put it on your clipboard.</p>"
+def _recovery_section(theme: GuideTheme) -> str:
+    return _h(theme, "Recovering a lost dictation") + _p(
+        theme,
+        "If a dictation lands nowhere — you weren't focused on a text box — it "
+        "isn't lost. Focus where it should have gone and say <i>paste</i> on its "
+        "own to drop it in. You can also use <b>Copy last dictation</b> in the "
+        "tray menu to put it on your clipboard.",
     )
 
 
-def _first_use_section() -> str:
+def _first_use_section(theme: GuideTheme) -> str:
     return (
-        "<h3>First use</h3>"
-        "<p>The speech model downloads <b>once</b>, on Dictatem's first run "
-        "after install — a tray notification marks it. After that it works fully "
-        "offline: every dictation, including the first, needs no network. (If "
-        "you happen to be offline at that first run, the model downloads on your "
-        "first dictation instead.)</p>"
-        "<p>From then on the model loads when you <b>arm</b> a dictation, so the "
-        "load overlaps the time you spend talking. If a load — or that one-time "
-        "download — is still finishing, the pill shows a "
-        "<b>Loading Dict. Model…</b> or <b>Downloading model…</b> caption and "
-        "pastes automatically once it's ready, so you never press the hotkey "
-        "again. Use <b>Preload Model</b> in this menu to warm it up ahead of "
-        "time.</p>"
+        _h(theme, "First use")
+        + _p(
+            theme,
+            "The speech model downloads <b>once</b>, on Dictatem's first run after "
+            "install — a tray notification marks it. After that it works fully "
+            "offline: every dictation, including the first, needs no network. (If "
+            "you happen to be offline at that first run, the model downloads on "
+            "your first dictation instead.)",
+        )
+        + _p(
+            theme,
+            "From then on the model loads when you <b>arm</b> a dictation, so the "
+            "load overlaps the time you spend talking. If a load — or that "
+            "one-time download — is still finishing, the pill shows a "
+            "<b>Loading Dict. Model…</b> or <b>Downloading model…</b> caption and "
+            "pastes automatically once it's ready, so you never press the hotkey "
+            "again. Use <b>Preload model</b> in the tray menu to warm it up ahead "
+            "of time.",
+        )
     )
 
 
-def _changing_hotkey_section(modifiers: tuple[str, ...], platform: str) -> str:
+def _changing_hotkey_section(
+    theme: GuideTheme, modifiers: tuple[str, ...], platform: str
+) -> str:
     """The "Changing your hotkey" config-discoverability section (ADR-0022).
 
     Shows the live Hotkey Combo, names ``config.toml`` and the
@@ -99,27 +255,48 @@ def _changing_hotkey_section(modifiers: tuple[str, ...], platform: str) -> str:
     must stay in step with ``config.VALID_MODIFIER_NAMES`` (a test enforces it).
     """
     combo = html.escape(format_hotkey(modifiers, platform=platform))
+    names = (
+        ("win", "(or " + _code(theme, "meta") + ") Windows key / ⌘ Command"),
+        ("alt", "Alt / ⌥ Option"),
+        ("ctrl", "Ctrl / Control"),
+        ("shift", "Shift"),
+        ("mouse4", "and " + _code(theme, "mouse5") + " — the two side mouse buttons"),
+        ("middle", "the mouse-wheel click"),
+    )
+    rows = "".join(
+        f'<tr><td style="padding:1px 12px 1px 0;">{_code(theme, name)}</td>'
+        f'<td style="color:{theme.text}; padding:1px 0;">{desc}</td></tr>'
+        for name, desc in names
+    )
     return (
-        "<h3>Changing your hotkey</h3>"
-        f"<p>Your dictation hotkey is <b>{combo}</b>. To change it, edit "
-        "<code>config.toml</code> in <code>~/.dictatem/</code> (use "
-        "<b>Open config file…</b> in this menu), set the "
-        "<code>[hotkey].modifiers</code> list, then restart Dictatem to apply it "
-        "(use <b>Restart</b> in this menu).</p>"
-        "<p>Pick from this set — Dictatem has no free-form key binding:</p>"
-        "<ul>"
-        "<li><code>win</code> (or <code>meta</code>) — Windows key / ⌘ Command</li>"
-        "<li><code>alt</code> — Alt / ⌥ Option</li>"
-        "<li><code>ctrl</code> — Ctrl / Control</li>"
-        "<li><code>shift</code> — Shift</li>"
-        "<li><code>mouse4</code>, <code>mouse5</code> — the two side mouse buttons</li>"
-        "<li><code>middle</code> — the mouse-wheel click</li>"
-        "</ul>"
-        "<p>Use one on its own (e.g. <code>[\"mouse4\"]</code>) or combine several "
-        "(e.g. <code>[\"ctrl\", \"alt\"]</code>). Any other name is ignored and the "
-        "default is kept.</p>"
-        "<p><i>Heads up: some mice only report a click, not a held press. On those, "
-        "a mouse-button trigger taps to toggle but can't hold-to-talk.</i></p>"
+        _h(theme, "Changing your hotkey")
+        + _p(
+            theme,
+            f"Your dictation hotkey is <b>{combo}</b>. To change it, edit "
+            + _code(theme, "config.toml")
+            + " in "
+            + _code(theme, "~/.dictatem/")
+            + " (use <b>Open config file…</b> in the tray menu), set the "
+            + _code(theme, "[hotkey].modifiers")
+            + " list, then restart Dictatem to apply it (use <b>Restart</b> in the "
+            "tray menu). Pick from this set — Dictatem has no free-form key "
+            "binding:",
+        )
+        + f'<table cellspacing="0" cellpadding="0" style="margin-bottom:8px;">{rows}</table>'
+        + _p(
+            theme,
+            "Use one on its own (e.g. "
+            + _code(theme, '["mouse4"]')
+            + ") or combine several (e.g. "
+            + _code(theme, '["ctrl", "alt"]')
+            + "). Any other name is ignored and the default is kept.",
+        )
+        + _p(
+            theme,
+            "Some mice only report a click, not a held press. On those, a "
+            "mouse-button trigger taps to toggle but can't hold-to-talk.",
+            muted=True,
+        )
     )
 
 
@@ -128,6 +305,7 @@ def usage_guide_html(
     *,
     platform: str,
     trigger_words: Sequence[str] = (),
+    dark: bool = False,
 ) -> str:
     """Build the full Usage Guide document as an HTML string.
 
@@ -135,14 +313,20 @@ def usage_guide_html(
     (Windows ``Win+Alt`` / macOS ``⌥⌘``); see ``format_hotkey``. *trigger_words*
     is the user's configured aliases (the daemon's alias map keys) — listed in
     the trigger-words section, or replaced by an empty-state pointer when none
-    are configured.
+    are configured. *dark* selects the :data:`DARK` palette to match the OS.
     """
+    theme = DARK if dark else LIGHT
     combo = format_hotkey(modifiers, platform=platform)
+    keys = hotkey_keys(modifiers, platform=platform)
     sections = [
-        _dictating_section(combo),
-        _trigger_words_section(trigger_words),
-        _recovery_section(),
-        _first_use_section(),
-        _changing_hotkey_section(modifiers, platform),
+        _dictating_section(theme, combo, keys),
+        _pill_section(theme),
+        _trigger_words_section(theme, trigger_words),
+        _recovery_section(theme),
+        _first_use_section(theme),
+        _changing_hotkey_section(theme, modifiers, platform),
     ]
-    return "<html><body>" + "".join(sections) + "</body></html>"
+    return (
+        f'<html><body style="background-color:{theme.page}; color:{theme.text}; '
+        f'font-size:10.5pt;">' + "".join(sections) + "</body></html>"
+    )

@@ -439,3 +439,30 @@ class TestImportSafety:
             assert violations == [], (
                 f"overlay.state pulled in forbidden module(s): {violations}"
             )
+
+
+class TestProcessingWave:
+    def test_wave_travels_over_time(self) -> None:
+        from dictatem.overlay.state import OverlayState
+
+        now = [0.0]
+        state = OverlayState(lambda: now[0])
+        state.show_transcribing()
+        first = state.current_processing_frame().bars
+        now[0] += 0.25
+        assert state.current_processing_frame().bars != first
+
+    def test_wave_stays_low_and_visible(self) -> None:
+        from dictatem.overlay.state import OverlayState
+
+        now = [0.0]
+        state = OverlayState(lambda: now[0])
+        for step in range(40):
+            now[0] = step * 0.05
+            for bar in state.current_processing_frame().bars:
+                assert 0.0 < bar <= 0.55
+
+    def test_every_pill_colour_has_a_hue(self) -> None:
+        from dictatem.overlay.state import PILL_HEX, PillColor
+
+        assert set(PILL_HEX) == set(PillColor)

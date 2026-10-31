@@ -1889,6 +1889,12 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # closing the first-run permission dialog killed the daemon (and its
     # menu-bar icon) outright (#57 QA). Tray/hotkey keep it alive instead.
     app.setQuitOnLastWindowClosed(False)
+    if sys.platform == "win32":
+        # Qt's default style on Windows draws Windows-10-era menus and dialogs;
+        # the native Windows 11 style (Qt 6.7+) gives the tray menu, Usage Guide
+        # and dialogs rounded, current-looking chrome. An unknown style name is a
+        # no-op, so an older Qt simply keeps its default.
+        app.setStyle("windows11")
 
     if sys.platform == "darwin":
         # Make the running process a menu-bar accessory: the .app's LSUIElement
@@ -2076,12 +2082,17 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # so the "How to use Dictatem…" item reflects the actual activation chord.
     from dictatem.tray.usage_guide import usage_guide_html
 
+    trigger_words = sorted(prompt_aliases)
     tray_icon.set_usage_guide_html(
         usage_guide_html(
+            config.hotkey.modifiers, platform=sys.platform, trigger_words=trigger_words
+        ),
+        dark_html=usage_guide_html(
             config.hotkey.modifiers,
             platform=sys.platform,
-            trigger_words=sorted(prompt_aliases),
-        )
+            trigger_words=trigger_words,
+            dark=True,
+        ),
     )
 
     bridge: _HotkeyBridge | None = None

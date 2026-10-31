@@ -92,7 +92,7 @@ class TestFirstUseSection:
     def test_explains_model_load_and_preload(self) -> None:
         html = usage_guide_html(("win", "alt"), platform="win32")
         assert "First use" in html
-        assert "Preload Model" in html
+        assert "Preload model" in html
 
     def test_explains_one_time_download_then_offline(self) -> None:
         # ADR-0025 / #164: the model downloads once on first run, then offline.
@@ -162,9 +162,32 @@ class TestDocumentShape:
 
     def test_sections_are_ordered_dictating_triggers_first_use(self) -> None:
         html = usage_guide_html(("win", "alt"), platform="win32")
-        assert html.index("Dictating") < html.index("Trigger words")
+        # The hotkey keycaps + modes open the page (no "Dictating" heading now).
+        assert html.index("Hold to talk") < html.index("The pill")
+        assert html.index("The pill") < html.index("Trigger words")
         assert html.index("Trigger words") < html.index("First use")
 
     def test_changing_hotkey_section_comes_last(self) -> None:
         html = usage_guide_html(("win", "alt"), platform="win32")
         assert html.index("First use") < html.index("Changing your hotkey")
+
+
+class TestVisualDesign:
+    def test_hotkey_opens_the_page_as_keycaps(self) -> None:
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        assert html.index(">Win</td>") < html.index(">Alt</td>") < html.index("Hold to talk")
+
+    def test_pill_legend_names_every_phase(self) -> None:
+        from dictatem.tray.usage_guide import PILL_HUES
+
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        for hue in PILL_HUES.values():
+            assert hue in html
+
+    def test_dark_theme_switches_the_page_colour(self) -> None:
+        from dictatem.tray.usage_guide import DARK, LIGHT
+
+        assert LIGHT.page in usage_guide_html(("win", "alt"), platform="win32")
+        dark = usage_guide_html(("win", "alt"), platform="win32", dark=True)
+        assert DARK.page in dark
+        assert LIGHT.page not in dark
