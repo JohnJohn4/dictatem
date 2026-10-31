@@ -41,7 +41,7 @@ from dictatem.transform.recognizer import (
 from dictatem.types import EmptyResult, RecordingMode, Transcript
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable, Mapping
     from pathlib import Path
 
     from dictatem.audio.buffer import AudioBuffer
@@ -1969,6 +1969,40 @@ def _acquire_single_instance_lock(
     return lock
 
 
+def log_trigger_lexicon_warnings(
+    prompt_files: Mapping[str, Iterable[str]],
+    paste_aliases: Iterable[str],
+    prompts_dir: Path,
+) -> None:
+    """Log the load-time Trigger Word collision check (#251, spec #226 Layer 4).
+
+    One warning per pair of Aliases of different actions that sound alike,
+    one info note per Alias too short for fuzzy tolerance. Alias and file
+    names are configuration, not dictated content (#188). Never raises.
+    """
+    from dictatem.transform.collisions import PASTE_ACTION_LABEL, check_trigger_lexicon
+
+    report = check_trigger_lexicon(prompt_files, paste_aliases=paste_aliases)
+    for c in report.collisions:
+        logger.warning(
+            "Trigger Words %r (%s) and %r (%s) sound alike — a misheard one may "
+            "fire the other or ask you to say it again. Rename one (Prompt Files "
+            "live in %s; paste aliases in [trigger_words].paste_aliases).",
+            c.alias, c.action, c.other_alias, c.other_action, prompts_dir,
+        )
+    for e in report.exact_only:
+        where = (
+            "[trigger_words].paste_aliases"
+            if e.action == PASTE_ACTION_LABEL
+            else f"{prompts_dir / e.action}"
+        )
+        logger.info(
+            "Trigger Word %r (%s) is too short for fuzzy matching — it only "
+            "fires when heard exactly. A longer word is more reliable.",
+            e.alias, where,
+        )
+
+
 def startup_version_line(
     version: str | None, *, python_version: str, platform_name: str, machine: str
 ) -> str:
@@ -2052,7 +2086,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     from dictatem.transform.prompts import (
         bootstrap_prompts,
         default_prompts_dir,
-        load_prompts_dir,
+        load_prompts,
     )
     from dictatem.transform.recognizer import shadowed_builtin_aliases
     from dictatem.tray.qt_tray import QtTrayIcon
@@ -2236,7 +2270,8 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     transform_lifecycle = TransformLifecycle(backend=transform_backend)
     prompts_dir = Path.home() / ".dictatem" / "prompts"
     bootstrap_prompts(prompts_dir, default_prompts_dir())
-    prompt_aliases = load_prompts_dir(prompts_dir)
+    loaded_prompts = load_prompts(prompts_dir)
+    prompt_aliases = loaded_prompts.aliases
     # A user Prompt File that reuses a built-in action name (`paste`) or one of
     # the user's `[trigger_words].paste_aliases` (#250) is shadowed by the
     # built-in — its Transform can never fire (ADR-0023 / #139). Warn so the
@@ -2251,6 +2286,9 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             ", ".join(shadowed),
             prompts_dir,
         )
+    # Aliases of different actions that sound alike, and Aliases too short
+    # for fuzzy tolerance (#251) — logged, never blocking startup.
+    log_trigger_lexicon_warnings(loaded_prompts.aliases_by_file(), paste_aliases, prompts_dir)
     trigger_recognizer = TriggerWordRecognizer(
         prompt_aliases,
         paste_aliases=paste_aliases,
