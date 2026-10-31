@@ -18,7 +18,7 @@ from dictatem.interfaces import (
     TranscriberBackend,
     TrayRenderer,
 )
-from dictatem.types import EmptyResult, RecordingMode
+from dictatem.types import EmptyResult, RecordingMode, SegmentConfidence, Transcript
 from tests.fakes import (
     FakeAudioCapture,
     FakeAutostartRegistrar,
@@ -136,9 +136,28 @@ class TestFakeTranscriberBackend:
         assert tb.is_loaded is True
         audio = np.zeros(16000, dtype=np.float32)
         result = tb.transcribe(audio)
-        assert result == "hello world"
+        assert result == Transcript("hello world")
         tb.unload_model()
         assert tb.is_loaded is False
+
+    def test_scripted_with_text_alone_has_unknown_confidence(self) -> None:
+        tb = FakeTranscriberBackend(result="paste")
+        tb.load_model()
+        result = tb.transcribe(np.zeros(16000, dtype=np.float32))
+        assert isinstance(result, Transcript)
+        assert result.text == "paste"
+        assert result.confidence is None
+        assert result.speech_duration_s is None
+
+    def test_scripted_with_text_confidence_and_speech_duration(self) -> None:
+        heard = Transcript(
+            "haste",
+            confidence=SegmentConfidence(avg_logprob=-1.4, no_speech_prob=0.3),
+            speech_duration_s=0.5,
+        )
+        tb = FakeTranscriberBackend(result=heard)
+        tb.load_model()
+        assert tb.transcribe(np.zeros(16000, dtype=np.float32)) == heard
 
     def test_transcribe_when_unloaded_returns_empty(self) -> None:
         tb = FakeTranscriberBackend()

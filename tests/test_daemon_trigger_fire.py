@@ -15,9 +15,9 @@ from dictatem.daemon import DaemonCore
 from dictatem.exceptions import TransformFailedError
 from dictatem.state import Event, State, StateMachine
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
-from dictatem.transform.detector import TriggerDetector
 from dictatem.transform.failure import OllamaFailure
 from dictatem.transform.lifecycle import TransformLifecycle
+from dictatem.transform.recognizer import TriggerWordRecognizer
 from tests.fakes import (
     FakeAudioCapture,
     FakeClipboardIO,
@@ -86,8 +86,8 @@ def transform_lifecycle(
 
 
 @pytest.fixture
-def trigger_detector() -> TriggerDetector:
-    return TriggerDetector(ALIASES)
+def trigger_recognizer() -> TriggerWordRecognizer:
+    return TriggerWordRecognizer(ALIASES)
 
 
 @pytest.fixture
@@ -106,7 +106,7 @@ def core(
     keystroke: FakeKeystrokeSender,
     foreground: FakeForegroundTracker,
     transform_lifecycle: TransformLifecycle,
-    trigger_detector: TriggerDetector,
+    trigger_recognizer: TriggerWordRecognizer,
 ) -> DaemonCore:
     return DaemonCore(
         state_machine=sm,
@@ -118,7 +118,7 @@ def core(
         keystroke=keystroke,
         foreground=foreground,
         transform_lifecycle=transform_lifecycle,
-        trigger_detector=trigger_detector,
+        trigger_recognizer=trigger_recognizer,
         transform_enabled=True,
         last_paste_ttl_s=300.0,
     )
@@ -411,7 +411,7 @@ class TestTriggerDoesNotFire:
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
         transform_lifecycle: TransformLifecycle,
-        trigger_detector: TriggerDetector,
+        trigger_recognizer: TriggerWordRecognizer,
         backend: FakeTranscriberBackend,
         transform_backend: FakeTransformBackend,
     ) -> None:
@@ -426,7 +426,7 @@ class TestTriggerDoesNotFire:
             keystroke=keystroke,
             foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector,
+            trigger_recognizer=trigger_recognizer,
             transform_enabled=False,
         )
         backend._result = "hello"
@@ -624,7 +624,7 @@ def _make_core(
     keystroke: FakeKeystrokeSender,
     foreground: FakeForegroundTracker,
     transform_lifecycle: TransformLifecycle,
-    trigger_detector: TriggerDetector,
+    trigger_recognizer: TriggerWordRecognizer,
     model_name: str = "gemma4:e4b",
     base_url: str = "http://localhost:11434",
 ) -> DaemonCore:
@@ -638,7 +638,7 @@ def _make_core(
         keystroke=keystroke,
         foreground=foreground,
         transform_lifecycle=transform_lifecycle,
-        trigger_detector=trigger_detector,
+        trigger_recognizer=trigger_recognizer,
         transform_enabled=True,
         last_paste_ttl_s=300.0,
         transform_model_name=model_name,
@@ -674,7 +674,7 @@ class TestActionableFailureMessaging:
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
         transform_lifecycle: TransformLifecycle,
-        trigger_detector: TriggerDetector,
+        trigger_recognizer: TriggerWordRecognizer,
         backend: FakeTranscriberBackend,
         transform_backend: FakeTransformBackend,
     ) -> None:
@@ -682,7 +682,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector,
+            trigger_recognizer=trigger_recognizer,
         )
         self._run_failure(
             core=core, backend=backend, transform_backend=transform_backend,
@@ -707,7 +707,7 @@ class TestActionableFailureMessaging:
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
         transform_lifecycle: TransformLifecycle,
-        trigger_detector: TriggerDetector,
+        trigger_recognizer: TriggerWordRecognizer,
         backend: FakeTranscriberBackend,
         transform_backend: FakeTransformBackend,
     ) -> None:
@@ -715,7 +715,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector,
+            trigger_recognizer=trigger_recognizer,
         )
         self._run_failure(
             core=core, backend=backend, transform_backend=transform_backend,
@@ -737,7 +737,7 @@ class TestActionableFailureMessaging:
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
         transform_lifecycle: TransformLifecycle,
-        trigger_detector: TriggerDetector,
+        trigger_recognizer: TriggerWordRecognizer,
         backend: FakeTranscriberBackend,
         transform_backend: FakeTransformBackend,
     ) -> None:
@@ -745,7 +745,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector,
+            trigger_recognizer=trigger_recognizer,
             model_name="llama3.2:1b",
         )
         self._run_failure(
@@ -768,7 +768,7 @@ class TestActionableFailureMessaging:
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
         transform_lifecycle: TransformLifecycle,
-        trigger_detector: TriggerDetector,
+        trigger_recognizer: TriggerWordRecognizer,
         backend: FakeTranscriberBackend,
         transform_backend: FakeTransformBackend,
     ) -> None:
@@ -779,7 +779,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector,
+            trigger_recognizer=trigger_recognizer,
         )
         self._run_failure(
             core=core, backend=backend, transform_backend=transform_backend,
@@ -806,7 +806,7 @@ class TestActionableFailureMessaging:
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
         transform_lifecycle: TransformLifecycle,
-        trigger_detector: TriggerDetector,
+        trigger_recognizer: TriggerWordRecognizer,
         backend: FakeTranscriberBackend,
         transform_backend: FakeTransformBackend,
     ) -> None:
@@ -816,7 +816,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector,
+            trigger_recognizer=trigger_recognizer,
         )
         self._run_failure(
             core=core, backend=backend, transform_backend=transform_backend,

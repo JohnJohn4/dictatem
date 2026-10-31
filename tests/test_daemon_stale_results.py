@@ -22,8 +22,8 @@ from dictatem.daemon import DaemonCore
 from dictatem.state import Event, State, StateMachine
 from dictatem.transcribe.latency_monitor import LatencyMonitor
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
-from dictatem.transform.detector import TriggerDetector
 from dictatem.transform.lifecycle import TransformLifecycle
+from dictatem.transform.recognizer import TriggerWordRecognizer
 from tests.fakes import (
     FakeAudioCapture,
     FakeClipboardIO,
@@ -108,7 +108,7 @@ def core(
         keystroke=keystroke,
         foreground=FakeForegroundTracker(target_id=42),
         transform_lifecycle=TransformLifecycle(backend=transform_backend),
-        trigger_detector=TriggerDetector(ALIASES),
+        trigger_recognizer=TriggerWordRecognizer(ALIASES),
         transform_enabled=True,
         last_paste_ttl_s=300.0,
         latency_monitor=LatencyMonitor(clock=clock, rtf_threshold=1.5, window=3),

@@ -119,7 +119,7 @@ def load_prompts_dir(directory: Path) -> dict[str, str]:
     """Load every ``*.md`` in *directory* into a flat alias → body map.
 
     Files that fail to parse are skipped (the parser already logged).
-    Alias normalisation matches ``TriggerDetector``'s match rule. On a
+    Alias normalisation matches the Trigger Word recognizer's match rule. On a
     collision across files the first occurrence wins (deterministic by
     sorted filename) and a warning is logged.
     """

@@ -27,9 +27,16 @@ from dictatem.hotkey.classifier import HotkeyEvent
 from dictatem.paste.backspace_units import count_backspace_units
 from dictatem.session import DictationSession
 from dictatem.state import Command, Event, State
-from dictatem.transform.detector import PASTE_ACTION, match_builtin_action
 from dictatem.transform.last_paste import LastPaste
-from dictatem.types import EmptyResult, RecordingMode
+from dictatem.transform.recognizer import (
+    PASTE_ACTION,
+    BuiltinAction,
+    Fire,
+    TransformTarget,
+    TriggerWordRecognizer,
+    Utterance,
+)
+from dictatem.types import EmptyResult, RecordingMode, Transcript
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -61,7 +68,6 @@ if TYPE_CHECKING:
     from dictatem.transcribe.latency_monitor import LatencyMonitor
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
     from dictatem.transcribe.replacements import Replacement
-    from dictatem.transform.detector import TriggerDetector
     from dictatem.transform.lifecycle import TransformLifecycle
     from dictatem.upgrade.core import UpgradeDecision
 
@@ -385,7 +391,7 @@ class DaemonCore:
         silence_timeout_s: float = 60.0,
         max_recording_s: float = 300.0,
         transform_lifecycle: TransformLifecycle | None = None,
-        trigger_detector: TriggerDetector | None = None,
+        trigger_recognizer: TriggerWordRecognizer | None = None,
         transform_enabled: bool = False,
         last_paste_ttl_s: float = 300.0,
         transform_model_name: str = "",
@@ -445,7 +451,13 @@ class DaemonCore:
         self._transcription_thread: threading.Thread | None = None
         # --- Trigger Words / Transform state (see CONTEXT.md) ---
         self._transform_lifecycle = transform_lifecycle
-        self._trigger_detector = trigger_detector
+        # One pure Trigger Word decision (#246). Absent one, a recognizer with
+        # no Prompt File aliases still recognises the built-in actions.
+        self._trigger_recognizer = (
+            trigger_recognizer
+            if trigger_recognizer is not None
+            else TriggerWordRecognizer({})
+        )
         self._transform_enabled = transform_enabled
         self._last_paste_ttl_s = last_paste_ttl_s
         self._transform_model_name = transform_model_name
@@ -787,27 +799,45 @@ class DaemonCore:
                     self._execute_commands(commands, now_ms=now_ms)
                     return
 
-                # Built-in action words (today: `paste`) are matched BEFORE the
-                # Transform alias map and run regardless of [transform].enabled
-                # or any Last Paste — they are the recovery path (ADR-0023 /
-                # #139). Detected before Replacements so a rule can't rewrite or
-                # mask them, and before _detect_trigger so they bypass both of
-                # its gates (transform-enabled + Last-Paste-exists).
-                action = match_builtin_action(result)  # type: ignore[arg-type]
-                if action is not None:
-                    self._builtin_action_handlers[action](now_ms=now_ms)
-                    return
+                assert isinstance(result, Transcript)
+                utterance = Utterance(
+                    text=result.text,
+                    # Post-VAD speech when the backend reported it, else the
+                    # recording duration (#246).
+                    speech_duration_s=(
+                        result.speech_duration_s
+                        if result.speech_duration_s is not None
+                        else audio_duration_s
+                    ),
+                    confidence=result.confidence,
+                )
+                self._log_short_utterance(utterance, audio_duration_s, result)
 
-                # Trigger Word detection — see CONTEXT.md#trigger-fire. Detect
-                # BEFORE applying Replacements so a Replacement rule can never
-                # rewrite (or mask) a Trigger Word; the trigger path is
-                # intercepted here and bypasses find/replace entirely (#125).
-                prompt = self._detect_trigger(result)  # type: ignore[arg-type]
-                if prompt is None:
+                # One pure Trigger Word decision — see CONTEXT.md#trigger-word.
+                # Built-in actions (today: `paste`) win over Prompt File aliases
+                # and fire regardless of [transform].enabled or any Last Paste —
+                # they are the recovery path (ADR-0023 / #139); a Transform is
+                # only a candidate when armed. Decided BEFORE Replacements so a
+                # rule can never rewrite (or mask) a Trigger Word (#125).
+                decision = self._trigger_recognizer.decide(
+                    utterance, transforms_armed=self._transforms_armed()
+                )
+                if isinstance(decision, Fire) and isinstance(
+                    decision.target, BuiltinAction
+                ):
+                    self._builtin_action_handlers[decision.target.name](
+                        now_ms=now_ms
+                    )
+                    return
+                if isinstance(decision, Fire) and isinstance(
+                    decision.target, TransformTarget
+                ):
+                    self._handle_trigger_fire(decision.target.prompt, now_ms=now_ms)
+                else:
                     self._session.transcription_outstanding = False
                     # Regular dictation only: apply deterministic Replacements
                     # (ADR-0024) just before this text becomes the paste payload.
-                    text = self._apply_replacements(result)  # type: ignore[arg-type]
+                    text = self._apply_replacements(result.text)
                     # Never log dictated text content — it is private and the
                     # rotating file handler would retain it for ~7 days (S-2 /
                     # #188). Count only, mirroring the Transform path below.
@@ -815,8 +845,6 @@ class DaemonCore:
                     self._session.text_to_paste = text
                     commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
                     self._execute_commands(commands, now_ms=now_ms)
-                else:
-                    self._handle_trigger_fire(prompt, now_ms=now_ms)
         except Exception:
             logger.error("Unhandled error processing transcription result", exc_info=True)
             self._recover_to_idle()
@@ -870,19 +898,39 @@ class DaemonCore:
 
         return apply_replacements(text, self._replacements)
 
-    def _detect_trigger(self, text: str) -> str | None:
-        """Return the prompt body for *text* if it is a Trigger Word.
+    def _transforms_armed(self) -> bool:
+        """Whether a Transform Trigger Word may fire: feature on AND a Last Paste."""
+        return self._transform_enabled and self._last_paste is not None
 
-        Returns ``None`` if the feature is disabled, no detector is wired,
-        no Last Paste exists, or *text* is just regular dictation.
+    def _log_short_utterance(
+        self, utterance: Utterance, recording_s: float, transcript: Transcript
+    ) -> None:
+        """Debug diagnostics for a short utterance — durations and confidence only.
+
+        Recording duration vs post-VAD speech duration plus segment confidence:
+        the data the review's §6.3 VAD-trimming question needs (#246). Never
+        the text — dictated content stays out of the log (S-2 / #188).
         """
-        if not self._transform_enabled:
-            return None
-        if self._trigger_detector is None:
-            return None
-        if self._last_paste is None:
-            return None
-        return self._trigger_detector.match(text)
+        if not utterance.is_short:
+            return
+        speech = (
+            f"{transcript.speech_duration_s:.2f}s"
+            if transcript.speech_duration_s is not None
+            else "unknown"
+        )
+        conf = transcript.confidence
+        confidence = (
+            f"avg_logprob={conf.avg_logprob:.2f} "
+            f"no_speech_prob={conf.no_speech_prob:.2f}"
+            if conf is not None
+            else "confidence=unknown"
+        )
+        logger.debug(
+            "Short utterance: recording=%.2fs speech=%s %s",
+            recording_s,
+            speech,
+            confidence,
+        )
 
     def _handle_paste_action(self, *, now_ms: int) -> None:
         """Re-paste the Most-recent dictation — the built-in ``paste`` recovery.
@@ -1952,10 +2000,6 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         bootstrap_vocabulary,
         load_vocabulary,
     )
-    from dictatem.transform.detector import (
-        TriggerDetector,
-        shadowed_builtin_aliases,
-    )
     from dictatem.transform.lifecycle import TransformLifecycle
     from dictatem.transform.ollama_backend import OllamaBackend
     from dictatem.transform.prompts import (
@@ -1963,6 +2007,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         default_prompts_dir,
         load_prompts_dir,
     )
+    from dictatem.transform.recognizer import shadowed_builtin_aliases
     from dictatem.tray.qt_tray import QtTrayIcon
 
     # Configure logging before load_config so the first-run Hardware Tier
@@ -2156,7 +2201,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             ", ".join(shadowed),
             prompts_dir,
         )
-    trigger_detector = TriggerDetector(prompt_aliases)
+    trigger_recognizer = TriggerWordRecognizer(prompt_aliases)
 
     overlay_state = OverlayState(
         clock=time.monotonic,
@@ -2201,7 +2246,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         silence_timeout_s=float(config.behaviour.silence_timeout_s),
         max_recording_s=float(config.behaviour.max_recording_seconds),
         transform_lifecycle=transform_lifecycle,
-        trigger_detector=trigger_detector,
+        trigger_recognizer=trigger_recognizer,
         transform_enabled=config.transform.enabled,
         last_paste_ttl_s=float(config.transform.last_paste_ttl_s),
         transform_model_name=config.transform.model_name,
