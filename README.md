@@ -145,6 +145,23 @@ in **How to use Dictatem…**.
 paste_aliases = ["haste", "taste"]
 ```
 
+#### Choosing trigger words
+
+Words with more than one syllable that sound different from each other and from
+everyday speech work best: `summarize` beats `sum`. Bare "paste" is short and
+easily misheard ("haste", "taste"), which is why `paste_aliases` exists. Aliases
+under five letters only fire when heard exactly.
+
+At startup Dictatem checks all your trigger words (prompt files, `paste` and your
+`paste_aliases`) and writes to `daemon.log`:
+
+- a **warning** when two words of different actions sound alike (e.g. a
+  `palace` prompt next to `polish`): a misheard one may run the other;
+- a **note** when a word is too short for mishearing tolerance.
+
+To rename a trigger word, edit the `aliases: [...]` line of its prompt file in
+`~/.dictatem/prompts/` (or your `paste_aliases` list) and restart Dictatem.
+
 ### Tray / menu-bar menu
 
 Right-click the icon for: **Start/Stop Recording**, **Copy last dictation**,
@@ -400,6 +417,10 @@ Dictatem diagnoses this from Ollama's network response and flashes the cause:
 A Trigger Fire also only runs if the focused window is still the one you pasted
 into and the paste is younger than `[transform].last_paste_ttl_s` (default 5 min).
 Switching windows or waiting too long discards the trigger silently.
+
+If the wrong trigger runs, check `daemon.log` for a startup warning that two
+trigger words sound alike, and rename one (see
+[Choosing trigger words](#choosing-trigger-words)).
 </details>
 
 <details>

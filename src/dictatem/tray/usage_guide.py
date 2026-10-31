@@ -249,6 +249,38 @@ def _trigger_words_section(
     return section
 
 
+def _choosing_trigger_words_section(theme: GuideTheme) -> str:
+    # #251 (spec #226 Layer 4): pick Trigger Words the recognizer can tell
+    # apart, and what the startup collision warning means.
+    return (
+        _h(theme, "Choosing trigger words")
+        + _p(
+            theme,
+            "Words with <b>more than one syllable</b> that <b>sound different</b> "
+            "from each other and from everyday speech work best — <i>summarize</i> "
+            "beats <i>sum</i>. Short words (under five letters) only fire when "
+            "heard exactly.",
+        )
+        + _p(
+            theme,
+            "Bare <i>paste</i> is short and easily misheard as <i>haste</i> or "
+            "<i>taste</i>. If your voice keeps producing the same mishearing, add it "
+            "to " + _code(theme, "paste_aliases") + " under "
+            + _code(theme, "[trigger_words]") + " in "
+            + _code(theme, "config.toml") + ".",
+        )
+        + _p(
+            theme,
+            "If two of your trigger words sound alike, Dictatem warns about it in "
+            + _code(theme, "daemon.log")
+            + " at startup — a misheard one may run the other. Rename one by "
+            "editing the " + _code(theme, "aliases:") + " line of its prompt file "
+            "in " + _code(theme, "~/.dictatem/prompts/") + ", then restart Dictatem.",
+            muted=True,
+        )
+    )
+
+
 def _recovery_section(theme: GuideTheme) -> str:
     return _h(theme, "Recovering a lost dictation") + _p(
         theme,
@@ -365,6 +397,7 @@ def usage_guide_html(
         _dictating_section(theme, combo, keys),
         _pill_section(theme),
         _trigger_words_section(theme, trigger_words, paste_aliases),
+        _choosing_trigger_words_section(theme),
         _recovery_section(theme),
         _first_use_section(theme),
         _changing_hotkey_section(theme, modifiers, platform),

@@ -115,8 +115,31 @@ def _normalise_alias(alias: str) -> str:
     return alias.strip().strip(string.punctuation).lower()
 
 
+@dataclass(frozen=True)
+class LoadedPrompts:
+    """A loaded prompts folder: alias → body, plus each alias's file name."""
+
+    aliases: dict[str, str]
+    sources: dict[str, str]
+
+    def aliases_by_file(self) -> dict[str, list[str]]:
+        """File name → its registered aliases, in load order (#251)."""
+        by_file: dict[str, list[str]] = {}
+        for alias, source in self.sources.items():
+            by_file.setdefault(source, []).append(alias)
+        return by_file
+
+
 def load_prompts_dir(directory: Path) -> dict[str, str]:
     """Load every ``*.md`` in *directory* into a flat alias → body map.
+
+    See :func:`load_prompts`.
+    """
+    return load_prompts(directory).aliases
+
+
+def load_prompts(directory: Path) -> LoadedPrompts:
+    """Load every ``*.md`` in *directory*, remembering each alias's file.
 
     Files that fail to parse are skipped (the parser already logged).
     Alias normalisation matches the Trigger Word recognizer's match rule. On a
@@ -124,8 +147,10 @@ def load_prompts_dir(directory: Path) -> dict[str, str]:
     sorted filename) and a warning is logged.
     """
     result: dict[str, str] = {}
+    sources: dict[str, str] = {}
+    loaded = LoadedPrompts(aliases=result, sources=sources)
     if not directory.is_dir():
-        return result
+        return loaded
 
     for path in sorted(directory.glob("*.md")):
         try:
@@ -153,8 +178,9 @@ def load_prompts_dir(directory: Path) -> dict[str, str]:
                 )
                 continue
             result[key] = parsed.body
+            sources[key] = path.name
 
-    return result
+    return loaded
 
 
 def bootstrap_prompts(target: Path, source: Path) -> None:
