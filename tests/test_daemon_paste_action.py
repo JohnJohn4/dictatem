@@ -240,6 +240,7 @@ class TestEmptyBuffer:
         assert keystroke.paste_count == 0
         assert keystroke.typed_texts == []
         assert any(c[0] == "show_error" for c in overlay.calls)
+        assert ("show_held",) not in overlay.calls  # nothing to recover (#239)
         assert core._most_recent_dictation is None
         assert core._sm.state is State.IDLE
 

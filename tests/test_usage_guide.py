@@ -33,6 +33,12 @@ class TestDictatingSection:
         assert "release" in html
         assert "let go" in html
 
+    def test_says_the_hotkey_is_ignored_while_working_and_esc_cancels(self) -> None:
+        # #240: a press mid-transcription shows a busy caption, not a new take.
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        assert "ignored while Dictatem is working" in html
+        assert "<b>Esc</b> cancels" in html
+
     def test_mentions_the_overlay_pill(self) -> None:
         html = usage_guide_html(("win", "alt"), platform="win32")
         assert "pill" in html
@@ -183,6 +189,29 @@ class TestVisualDesign:
         html = usage_guide_html(("win", "alt"), platform="win32")
         for hue in PILL_HUES.values():
             assert hue in html
+
+    def test_pill_legend_has_held_row_with_palette_hue_and_caption(self) -> None:
+        # The "Saved — say paste" row (#239) uses the overlay palette's Held hue.
+        from dictatem.overlay.state import PILL_HEX, PillColor
+
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        held_hue = PILL_HEX[PillColor.HELD]
+        assert held_hue in html
+        row_start = html.index(held_hue)
+        row = html[row_start : html.index("</tr>", row_start)]
+        assert "Saved — say paste" in row
+
+    def test_pill_legend_error_row_means_a_real_failure(self) -> None:
+        from dictatem.overlay.state import PILL_HEX, PillColor
+
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        row_start = html.index(PILL_HEX[PillColor.ERROR])
+        row = html[row_start : html.index("</tr>", row_start)]
+        # No longer the catch-all "Didn't land" (held dictations have their own
+        # row now); it names a genuine failure where nothing was saved.
+        assert "Didn't land" not in row
+        assert "Something went wrong" in row
+        assert "nothing to paste" in row
 
     def test_dark_theme_switches_the_page_colour(self) -> None:
         from dictatem.tray.usage_guide import DARK, LIGHT

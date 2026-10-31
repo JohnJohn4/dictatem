@@ -248,11 +248,13 @@ class TestBufferPopulatedBeforePaste:
         assert _set_texts(clipboard) == []
         assert keystroke.paste_count == 0
         # ...but the buffer holds the dictation, the tray flag is set, and the
-        # error flashed. No Last Paste is armed (nothing landed).
+        # pill shows the Held "Saved — say paste" signal rather than the error
+        # flash (#239). No Last Paste is armed (nothing landed).
         assert core._most_recent_dictation == "hello world "
         assert tray.has_last_dictation is True
         assert core._last_paste is None
-        assert any(c[0] == "show_error" for c in overlay.calls)
+        assert ("show_held",) in overlay.calls
+        assert ("show_error",) not in overlay.calls
 
         # Recovery: saying "paste" re-pastes the held dictation, now successfully.
         backend._result = "paste"

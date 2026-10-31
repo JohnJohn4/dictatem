@@ -135,6 +135,25 @@ class QtOverlayWidget(QWidget):
             self._shown_bars[i] = shown + (target - shown) * k
         return self._shown_bars
 
+    def _draw_caption(
+        self,
+        painter: QPainter,
+        text: str,
+        colour: QColor,
+        point_size: float,
+        h_align: Qt.AlignmentFlag,
+    ) -> None:
+        painter.setPen(colour)
+        font = QFont(painter.font())
+        font.setPointSizeF(point_size)
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        painter.drawText(
+            self.rect().adjusted(18, 0, -14, 0),
+            Qt.AlignmentFlag.AlignVCenter | h_align,
+            text,
+        )
+
     def paintEvent(self, event: object) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -146,27 +165,52 @@ class QtOverlayWidget(QWidget):
         painter.setPen(QPen(_RIM, 1.0))
         painter.drawRoundedRect(body, radius, radius)
 
+        # The busy nudge (#240): a hotkey press while working swaps the pill's
+        # content for a short caption, tinted in the processing phase's colour
+        # so the phase still reads. It reverts on its own when the window ends.
+        busy = self._state.current_busy_caption()
+        if busy is not None:
+            loading = self._state.phase == OverlayPhase.LOADING
+            col = _CAPTION if loading else _PHASE_HUES[self._state.current_color()]
+            self._draw_caption(painter, busy, col, 9.0, Qt.AlignmentFlag.AlignHCenter)
+            painter.end()
+            return
+
         # While a model loads, the pill is a single animated caption — no
         # waveform (there is no recording yet to visualise).
         if self._state.phase == OverlayPhase.LOADING:
-            painter.setPen(_CAPTION)
+            self._draw_caption(
+                painter,
+                self._state.current_loading_text(),
+                _CAPTION,
+                10.0,
+                Qt.AlignmentFlag.AlignLeft,
+            )
+            painter.end()
+            return
+
+        # A held dictation (#239): the "Saved — say paste" caption in the Held
+        # hue instead of bars — informational, so it reads as words, not as the
+        # error flash. The colour stays HELD through the fade-out too.
+        if self._state.current_color() == PillColor.HELD:
+            painter.setPen(_PHASE_HUES[PillColor.HELD])
             font = QFont(painter.font())
             font.setPointSizeF(10.0)
             font.setWeight(QFont.Weight.DemiBold)
             painter.setFont(font)
             painter.drawText(
-                self.rect().adjusted(18, 0, -14, 0),
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-                self._state.current_loading_text(),
+                self.rect(),
+                Qt.AlignmentFlag.AlignCenter,
+                self._state.current_held_text(),
             )
             painter.end()
             return
 
         # Phase by COLOUR (#96 / ADR-0026): the waveform itself is drawn in the
         # phase's colour — white while recording, amber while transcribing, iris
-        # while a Transform computes, coral on the error / focus-drift "saved"
-        # flash. Only RECORDING tracks the live mic level; the processing phases
-        # show a low wave travelling across the bars so they read as working.
+        # while a Transform computes, coral on the error flash. Only RECORDING
+        # tracks the live mic level; the processing phases show a low wave
+        # travelling across the bars so they read as working.
         col = _PHASE_HUES[self._state.current_color()]
         live = self._state.phase in (OverlayPhase.RECORDING, OverlayPhase.FADING_IN)
         if live:
