@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 
     from dictatem.audio.buffer import AudioBuffer
     from dictatem.config import Config, ConfigLoadReport
+    from dictatem.hardware.resolver import RuntimeFallbackReason
     from dictatem.hotkey.classifier import (
         HookDecision,
         HotkeyClassifier,
@@ -504,6 +505,13 @@ class DaemonCore:
         # an older epoch — a cancelled dictation's late result (F-6 / #235).
         self._transcription_queue: queue.Queue[tuple[int, str, object]] = (
             queue.Queue()
+        )
+        # Tray notifications raised off the GUI thread (e.g. the MLX session
+        # fallback firing on the transcribe worker or a load-on-arm thread,
+        # #232). Drained on the tick by check_notifications, because a tray
+        # balloon must be shown from the Qt GUI thread.
+        self._pending_notifications: queue.SimpleQueue[tuple[str, str]] = (
+            queue.SimpleQueue()
         )
         self._transcription_thread: threading.Thread | None = None
         # --- Trigger Words / Transform state (see CONTEXT.md) ---
@@ -1274,6 +1282,7 @@ class DaemonCore:
             # Mirror the production tick: flip the loading pill to transcribing
             # once the model is resident, before the result is processed (#74).
             self.check_loading_overlay(now_ms=now_ms)
+            self.check_notifications()
             self.check_transcription_result(now_ms=now_ms)
         if self._transform_thread is not None:
             self._transform_thread.join(timeout=5.0)
@@ -1611,6 +1620,30 @@ class DaemonCore:
             self._awaiting_download_completion = self._lifecycle.prefetch_to_disk()
         except Exception:
             logger.error("Error starting first-run model fetch", exc_info=True)
+
+    def on_transcriber_fallback(self, reason: RuntimeFallbackReason) -> None:
+        """The MLX engine failed and the session switched to CPU (#232).
+
+        Thread-safe: called by the fallback composite from whichever thread hit
+        the failure. *reason* says whether MLX failed to load or failed while
+        transcribing. Queues the one "Running on CPU" notification for the tick.
+        """
+        from dictatem.hardware.resolver import fallback_notice
+
+        notice = fallback_notice(reason)
+        self._pending_notifications.put((notice.title, notice.body))
+
+    def check_notifications(self) -> None:
+        """Show any notifications queued off the GUI thread. Polled on the tick."""
+        while True:
+            try:
+                title, body = self._pending_notifications.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                self._tray.show_notification(title, body)
+            except Exception:
+                logger.error("Error showing a queued notification", exc_info=True)
 
     def check_model_download(self) -> None:
         """Surface the one-time first-run model download finishing (#162).
@@ -2186,7 +2219,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     from dictatem.overlay.qt_widget import QtOverlayWidget
     from dictatem.overlay.state import OverlayState
     from dictatem.state import StateMachine
-    from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
+    from dictatem.transcribe.backend_selection import build_transcriber, select_backend
     from dictatem.transcribe.latency_monitor import LatencyMonitor
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
     from dictatem.transcribe.replacements import (
@@ -2268,21 +2301,29 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # load. On the absent-GPU case we fall back to the CPU tier FOR THIS SESSION
     # only — the config file is never rewritten, so the user's pinned GPU values
     # return automatically once the hardware does.
-    from dictatem.hardware.resolver import HardwareTierResolver
+    from dictatem.hardware.resolver import HardwareTierResolver, fallback_notice
 
-    effective, did_fall_back = HardwareTierResolver().reconcile(
+    # A config pinning mlx where MLX isn't usable falls back the same way (#231),
+    # to the Apple-Silicon CPU row on Apple Silicon or the CPU row elsewhere;
+    # fallback_reason says which hardware was missing.
+    reconciliation = HardwareTierResolver().reconcile(
         device=config.model.device,
         model=config.model.name,
         compute_type=config.model.compute_type,
         profile=probe.probe(),
     )
-    # Transcription hardware only. We deliberately do NOT apply
-    # effective.transform_model: the Transform/Ollama model is independent of
+    fallback_reason = reconciliation.fallback_reason
+    # Transcription hardware only. select_backend reads only the model, device
+    # and compute_type: we deliberately do NOT apply the resolved
+    # transform_model, because the Transform/Ollama model is independent of
     # CUDA and reconcile carries the CPU tier's tag in the fallback case purely
     # as a side effect of returning the whole row (see ADR-0009).
-    effective_model = effective.model
-    effective_device = effective.device
-    effective_compute_type = effective.compute_type
+    # Pick the transcription engine for the effective device (#229): cuda/cpu
+    # run faster-whisper, mlx is the Apple-GPU engine (#224), and an unknown
+    # device string warns and runs the CPU row for this session.
+    selection = select_backend(reconciliation.resolved)
+    if selection.warning is not None:
+        logger.warning("%s", selection.warning)
 
     logging.getLogger().setLevel(
         getattr(logging, config.logging.level.upper(), logging.INFO)
@@ -2354,13 +2395,17 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     vocabulary = load_vocabulary(dictatem_dir / "vocabulary.md")
     replacements = load_replacements(dictatem_dir / "replacements.md")
 
-    backend = FasterWhisperBackend(
-        model_name=effective_model,
-        compute_type=effective_compute_type,
-        device=effective_device,
+    # An mlx selection comes back wrapped in the session fallback composite
+    # (#232): if MLX fails, this dictation and the rest of the session run on
+    # the Apple-Silicon CPU row, and on_fallback queues one tray notification.
+    # The lambda late-binds `daemon` (built below); it can only fire on a model
+    # load or transcription, which never happen before the daemon exists.
+    backend = build_transcriber(
+        selection,
         language=config.model.language,
         vad_filter=config.model.vad_filter,
         vocabulary=vocabulary,
+        on_fallback=lambda reason: daemon.on_transcriber_fallback(reason),
     )
     lifecycle = TranscribeLifecycle(
         backend=backend,
@@ -2762,6 +2807,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         overlay.update_level(audio_buffer.current_level())
         daemon.check_loading_overlay(now_ms=now)
         daemon.check_model_download()
+        daemon.check_notifications()
         daemon.check_transcription_result(now_ms=now)
         daemon.check_transform_result(now_ms=now)
 
@@ -2840,26 +2886,23 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # Surface the session CPU fallback once, after the loop is up. A
     # QSystemTrayIcon balloon needs a visible icon and a running event loop, so
     # we defer it with a single-shot timer rather than firing it inline (#39).
-    if did_fall_back:
+    if fallback_reason is not None:
+        notice = fallback_notice(fallback_reason)
         logger.warning(
-            "Configured GPU (device=%s, model=%s, compute_type=%s) is "
-            "unavailable on this machine — running on CPU "
+            "Configured %s (device=%s, model=%s, compute_type=%s) is "
+            "unavailable on this machine (%s) — running on CPU "
             "(%s/%s/%s) for this session. The config file is unchanged.",
+            notice.device_label,
             config.model.device,
             config.model.name,
             config.model.compute_type,
-            effective_model,
-            effective_device,
-            effective_compute_type,
+            fallback_reason,
+            selection.model,
+            selection.device,
+            selection.compute_type,
         )
         QTimer.singleShot(
-            2000,
-            lambda: tray.show_notification(
-                "Running on CPU",
-                "Configured GPU (cuda) isn't available — running on CPU this "
-                "session. Your config is unchanged; restore the GPU to use it "
-                "again.",
-            ),
+            2000, lambda: tray.show_notification(notice.title, notice.body)
         )
 
     logger.info("Dictatem daemon started")
@@ -2949,8 +2992,9 @@ def _start_macos_daemon() -> None:
     global hotkey (#56),
     NSPasteboard/CGEvent/NSWorkspace paste (#59), the CGPreflight permission
     check (#57), and the LaunchAgent autostart registrar (#61) — manual-QA
-    only, like their win32 counterparts. MacHardwareProbe reports no CUDA, so
-    first run bakes the CPU tier into the config.
+    only, like their win32 counterparts. MacHardwareProbe reports no CUDA plus
+    MLX availability and unified memory, so first run bakes an Apple-GPU,
+    Apple-Silicon or CPU tier into the config (#233).
 
     This body executes on the headless macOS CI leg (TestStarterAdapterSets):
     everything here must stay construction-only — no native call happens until

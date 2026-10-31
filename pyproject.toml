@@ -39,6 +39,22 @@ runtime = [
     "pyobjc-framework-Quartz>=10.3; sys_platform == 'darwin'",
     "pyobjc-framework-AVFoundation>=10.3; sys_platform == 'darwin'",
 ]
+# The Apple-GPU (MLX) transcription engine, ADR-0013 amendment / #224. The
+# runtime extra stays in full: faster-whisper is the fallback engine. mlx,
+# mlx-metal and torch (mlx-whisper's hard dep) publish macOS arm64 wheels for
+# macOS 14+ ONLY, so pulling them on macOS 12/13 or Intel fails the whole
+# `uv tool install` (the av-pin failure class above). The marker gates arm64
+# darwin (mlx also ships win/linux wheels now, so `darwin` alone is not enough),
+# making this extra identical to `runtime` everywhere else. A marker cannot say
+# "macOS 14+", so install.sh asks for this extra only on arm64 + macOS >= 14
+# (tests/test_apple_gpu_extra.py enforces both layers). mlx-whisper is pinned
+# exactly; mlx is bounded to the range CI locks (0.30 is the first macOS-14-floor
+# release, 0.32.x the tested one). Adds ~230 MB of install weight.
+apple-gpu = [
+    "dictatem[runtime]",
+    "mlx-whisper==0.4.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "mlx>=0.30,<0.33; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
 runtime-gpu = [
     "dictatem[runtime]",
     "nvidia-cublas-cu12",
@@ -64,6 +80,9 @@ packages = ["src/dictatem"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "real_engine: runs a real transcription engine; opt-in via DICTATEM_REAL_ENGINES=1 (see tests/test_transcriber_contract.py)",
+]
 
 [tool.ruff]
 src = ["src", "tests"]
@@ -113,5 +132,7 @@ exclude = [
     "src/dictatem/permissions/mac_tcc.py",
     "src/dictatem/permissions/qt_dialog.py",
     "src/dictatem/macapp/activation.py",
+    # Apple-GPU engine adapter: mlx / mlx_whisper resolve only on macOS arm64.
+    "src/dictatem/transcribe/mlx_backend.py",
 ]
 typeCheckingMode = "standard"

@@ -93,7 +93,7 @@ src/dictatem/
 ├── interfaces.py        # Protocol definitions
 ├── audio/               # Buffer, silence detection, sounddevice + native mac capture
 ├── hotkey/              # Keyboard/mouse hooks, tap/hold classifier
-├── transcribe/          # Faster-Whisper adapter, model lifecycle
+├── transcribe/          # Engines (faster-whisper, Apple-GPU MLX), backend selection + CPU fallback, lifecycle
 ├── transform/           # Trigger Words: detector, Ollama backend, prompt-file loader
 ├── default_prompts/     # Bundled prompt files copied to ~/.dictatem/prompts/ on first run
 ├── paste/               # Clipboard save/restore, keystroke simulation

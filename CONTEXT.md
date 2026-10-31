@@ -404,6 +404,15 @@ the user pins always overrides the chosen one. `base` is the smallest Tier ever
 chosen automatically; `tiny` is never auto-selected and models stay
 multilingual. See [ADR-0007](docs/adr/0007-hardware-tier-resolved-on-first-run.md).
 
+On a Mac, Apple Silicon on macOS 14+ with the Apple GPU engine installed gets
+the **Apple-GPU** Tier (`large-v3-turbo` on the GPU). With less unified memory
+it gets **Apple-GPU-low** (`small` on the GPU). Apple Silicon without the GPU
+engine gets the **Apple-Silicon** Tier (`small` on CPU), and an Intel Mac gets
+the CPU Tier. If the Apple GPU can't be used, Dictatem runs that session on CPU
+and leaves the config untouched (see
+[ADR-0013](docs/adr/0013-macos-transcription-engine.md) and
+[ADR-0009](docs/adr/0009-hardware-mismatch-falls-back-for-the-session.md)).
+
 Resolving a Tier also yields a tier-appropriate default [Transform](#transform)
 (Ollama) model tag, written into a fresh config. Beyond that suggestion the
 Transform model is not Dictatem's to manage: Ollama is a separate, user-managed
