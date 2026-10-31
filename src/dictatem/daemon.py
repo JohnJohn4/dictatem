@@ -1739,6 +1739,41 @@ def _acquire_single_instance_lock(lock_path: Path) -> object | None:
     return lock
 
 
+def startup_version_line(
+    version: str | None, *, python_version: str, platform_name: str, machine: str
+) -> str:
+    """The one-line build identity logged at daemon startup (#201).
+
+    Pure so the format is unit-tested. *machine* is the interpreter's view of the
+    arch (``platform.machine()``) — on Windows-on-ARM the pinned x64 Python
+    reports ``AMD64`` under emulation, which is exactly what triage needs to see.
+    """
+    shown = f"v{version}" if version else "unknown version (dev checkout?)"
+    return (
+        f"Dictatem {shown} starting — Python {python_version}, "
+        f"{platform_name}, {machine or 'unknown arch'}"
+    )
+
+
+def _log_startup_version() -> None:
+    import platform
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        pkg_version: str | None = version("dictatem")
+    except PackageNotFoundError:
+        pkg_version = None
+    logger.info(
+        "%s",
+        startup_version_line(
+            pkg_version,
+            python_version=platform.python_version(),
+            platform_name=sys.platform,
+            machine=platform.machine(),
+        ),
+    )
+
+
 def _run_daemon(adapters: _PlatformAdapters) -> None:
     """Wire the platform-neutral daemon around *adapters* and run the Qt loop.
 
@@ -1805,6 +1840,8 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # noisy at INFO. Our own load/unload lines tell the user what they need.
     for noisy in ("httpx", "huggingface_hub", "filelock", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # First line of every session's log: which build is this? (#201)
+    _log_startup_version()
 
     # Single-instance guard (#92). Two concurrent daemons each register the
     # global hotkey hook, so every gesture is recorded, transcribed, and pasted
