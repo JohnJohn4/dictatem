@@ -102,6 +102,32 @@ class TestTriggerWordsSection:
         assert "also mean <i>paste</i>" not in html
 
 
+class TestChoosingTriggerWordsSection:
+    """#251: how to pick reliable Trigger Words, and what the startup warning means."""
+
+    def _html(self) -> str:
+        return usage_guide_html(("win", "alt"), platform="win32")
+
+    def test_has_its_own_heading(self) -> None:
+        assert "Choosing trigger words" in self._html()
+
+    def test_recommends_multi_syllable_distinct_words(self) -> None:
+        html = self._html()
+        assert "more than one syllable" in html
+        assert "sound different" in html
+
+    def test_explains_why_bare_paste_needs_help(self) -> None:
+        html = self._html()
+        assert "haste" in html
+        assert "paste_aliases" in html
+
+    def test_explains_the_startup_warning_and_how_to_rename(self) -> None:
+        html = self._html()
+        assert "daemon.log" in html
+        assert "sound alike" in html
+        assert "aliases:" in html  # rename by editing the prompt file's aliases list
+
+
 class TestRecoverySection:
     def test_explains_paste_recovery(self) -> None:
         html = usage_guide_html(("win", "alt"), platform="win32")
