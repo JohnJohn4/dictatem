@@ -37,7 +37,18 @@ jobs:
       # Windows, the PyObjC frameworks on macOS. A failure here IS the signal
       # ADR-0013 wanted CI to catch — the darwin wheel/ABI set not resolving.
       - name: Sync (runtime extra + dev group)
+        if: runner.os != 'macOS'
         run: uv sync --extra runtime
+
+      # macOS syncs the apple-gpu extra instead: the runtime set plus the MLX
+      # engine (mlx-whisper, mlx, mlx-metal, torch), whose wheels are arm64 and
+      # macOS 14+ only. Resolving it on every matrix Python is the ADR-0013
+      # brittle-resolution guard (#224/#230); the suite below then runs with the
+      # engine installed. (On Windows the extra adds nothing beyond runtime;
+      # tests/test_apple_gpu_extra.py enforces that through its markers.)
+      - name: Sync (apple-gpu extra + dev group)
+        if: runner.os == 'macOS'
+        run: uv sync --extra apple-gpu
 
       - name: Lint (ruff)
         run: uv run ruff check .

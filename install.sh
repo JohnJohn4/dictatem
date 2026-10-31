@@ -11,8 +11,10 @@
 # identity shell (ADR-0014), and launches it once. It runs with no interactive
 # prompts so the piped form works.
 #
-# macOS always gets the CPU-lean dependency set — there is no NVIDIA/CUDA on a
-# Mac (ADR-0013) — so install.ps1's GPU auto-detection has no equivalent here.
+# There is no NVIDIA/CUDA on a Mac (ADR-0013), so install.ps1's CUDA detection
+# has no equivalent here. Instead, Apple Silicon on macOS 14+ also gets the MLX
+# (Apple GPU) engine via the `apple-gpu` extra; every other Mac gets the CPU set
+# (see select_dictatem_extra below).
 #
 # It deliberately does NOT download a Whisper model (lazy on first dictation)
 # and does NOT install, start, or pull Ollama (ADR-0008) — it only prints a
@@ -57,11 +59,45 @@ else
     uv_flags=""
 fi
 
+# Pick the engine set (ADR-0013 amendment, #224). Apple Silicon on macOS 14+
+# gets the `apple-gpu` extra: the runtime set plus the MLX engine (mlx-whisper,
+# ~230 MB more), which transcribes on the Apple GPU. Everything else (Intel
+# Macs, macOS 12/13, an unreadable version) keeps `runtime` exactly as before:
+# mlx/mlx-metal/torch ship macOS 14+ arm64 wheels only, so asking for them there
+# would fail the whole install. A PEP 508 marker can't express "macOS 14+", hence
+# this gate. DICTATEM_NO_APPLE_GPU=1 forces `runtime`. faster-whisper is in both
+# sets (it is the fallback engine). Re-running this installer (the #211 update
+# path) adds the extra for existing users; their config is never touched.
+# Args: $1 = `uname -m`, $2 = `sw_vers -productVersion`. Prints the extra name.
+# tests/test_apple_gpu_extra.py runs this function under sh — keep it top-level
+# and self-contained.
+select_dictatem_extra() {
+    if [ "${DICTATEM_NO_APPLE_GPU:-}" = "1" ] || [ "$1" != "arm64" ]; then
+        echo runtime
+        return
+    fi
+    _major="${2%%.*}"
+    case "$_major" in
+        '' | *[!0-9]*) echo runtime ;;
+        *) if [ "$_major" -ge 14 ]; then echo apple-gpu; else echo runtime; fi ;;
+    esac
+}
+
+dictatem_extra="$(select_dictatem_extra "$(uname -m)" "$(sw_vers -productVersion 2>/dev/null || true)")"
+if [ "$dictatem_extra" = "apple-gpu" ]; then
+    echo "Engine set: Apple GPU (MLX) + CPU fallback — Apple Silicon on macOS 14+."
+    echo "  (Adds ~230 MB. Set DICTATEM_NO_APPLE_GPU=1 to install the CPU set only.)"
+elif [ "${DICTATEM_NO_APPLE_GPU:-}" = "1" ]; then
+    echo "Engine set: CPU (faster-whisper) — DICTATEM_NO_APPLE_GPU=1 is set."
+else
+    echo "Engine set: CPU (faster-whisper) — the Apple GPU engine needs Apple Silicon on macOS 14+."
+fi
+
 # A single PEP 508 direct-reference requirement: the extras and the source URL
 # must travel together on one argument. Splitting the URL into `--from` and the
 # `dictatem[extras]` into a positional makes uv treat them as two conflicting
 # requirements for the same package and abort.
-requirement="dictatem[runtime] @ ${source_url}"
+requirement="dictatem[${dictatem_extra}] @ ${source_url}"
 
 # Pin the tool environment to a uv-MANAGED CPython instead of whatever Python
 # the Mac happens to have. Real-Mac QA (#61) showed a discovered python.org
