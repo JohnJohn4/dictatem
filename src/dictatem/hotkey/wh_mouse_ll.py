@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import logging
 import sys
-import threading
 import time
 from typing import TYPE_CHECKING
 
@@ -34,7 +33,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from dictatem.hotkey.classifier import HookDecision, Key, KeyAction
+    from dictatem.hotkey.classifier import Key, KeyAction
 
 if sys.platform != "win32":
     raise ImportError("wh_mouse_ll requires Windows")
@@ -42,31 +41,14 @@ if sys.platform != "win32":
 import ctypes
 import ctypes.wintypes
 
-user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+from dictatem.hotkey.classifier import HookDecision
+
+# Pointer-sized WPARAM/LPARAM, HOOKPROC and the hook thread are shared with
+# wh_keyboard_ll so both hooks are hardened together (#245).
+from dictatem.hotkey.win32_ll_hook import HOOKPROC, LowLevelHookThread, call_next_hook
+from dictatem.hotkey.win32_mouse_keymap import mouse_event_to_key
 
 WH_MOUSE_LL = 14
-
-# On 64-bit Windows, WPARAM/LPARAM are pointer-sized (8 bytes), but
-# ctypes.wintypes.WPARAM/LPARAM are c_ulong/c_long (4 bytes). Using the wrong
-# types causes OverflowError on every event when l_param holds a 64-bit pointer.
-# c_size_t / c_ssize_t are always pointer-sized. (Mirrors wh_keyboard_ll.)
-_WPARAM = ctypes.c_size_t
-_LPARAM = ctypes.c_ssize_t
-
-HOOKPROC = ctypes.CFUNCTYPE(
-    _LPARAM,
-    ctypes.c_int,
-    _WPARAM,
-    _LPARAM,
-)
-
-user32.CallNextHookEx.argtypes = [
-    ctypes.c_void_p,  # hhk
-    ctypes.c_int,     # nCode
-    _WPARAM,          # wParam
-    _LPARAM,          # lParam
-]
-user32.CallNextHookEx.restype = _LPARAM
 
 
 class MSLLHOOKSTRUCT(ctypes.Structure):
@@ -87,67 +69,59 @@ class WHMouseLLHook:
     ``on_mouse_event`` receives ``(key, action, timestamp_ms)`` and returns a
     ``HookDecision``: ``SUPPRESS`` swallows the event (the trigger button is
     completing the combo), ``PASS_THROUGH`` lets it reach the rest of the system.
+
+    ``on_install_failed`` is called ON THE HOOK THREAD with the OS error code
+    when Windows refuses the hook (the failure is also logged) — it must be
+    thread-safe (the daemon enqueues, #245).
     """
 
     def __init__(
-        self, on_mouse_event: Callable[[Key, KeyAction, int], HookDecision]
+        self,
+        on_mouse_event: Callable[[Key, KeyAction, int], HookDecision],
+        *,
+        on_install_failed: Callable[[int], None] | None = None,
     ) -> None:
         self._on_mouse_event = on_mouse_event
-        self._hook_handle: int | None = None
-        self._hook_thread: threading.Thread | None = None
-        self._proc: ctypes.CFUNCTYPE | None = None  # type: ignore[type-arg]
-
-    def install(self) -> None:
-        self._hook_thread = threading.Thread(target=self._run_hook, daemon=True)
-        self._hook_thread.start()
-
-    def uninstall(self) -> None:
-        if self._hook_handle is not None:
-            user32.UnhookWindowsHookEx(self._hook_handle)
-            self._hook_handle = None
-
-    def _run_hook(self) -> None:
-        from dictatem.hotkey.classifier import HookDecision
-        from dictatem.hotkey.win32_mouse_keymap import mouse_event_to_key
-
-        def _ll_callback(n_code: int, w_param: int, l_param: int) -> int:
-            # SAFETY: a thrown exception must never escape the hook proc, and we
-            # must only ever swallow an event we *decided* to suppress — any
-            # error path falls through to CallNextHookEx so a bug can never make
-            # the mouse unusable system-wide.
-            suppress = False
-            try:
-                if n_code >= 0:
-                    ms = ctypes.cast(
-                        l_param, ctypes.POINTER(MSLLHOOKSTRUCT)
-                    ).contents
-                    x_button = (ms.mouseData >> 16) & 0xFFFF
-                    mapped = mouse_event_to_key(w_param, x_button)
-                    if mapped is not None:
-                        key, action = mapped
-                        # Use time.monotonic, not ms.time. ms.time is
-                        # GetTickCount-derived; the Qt tick that drives
-                        # HOLD_START detection passes time.monotonic. A non-zero
-                        # offset between the clocks would make a single click
-                        # fire a spurious HOLD_START. (Mirrors wh_keyboard_ll.)
-                        timestamp_ms = int(time.monotonic() * 1000)
-                        decision = self._on_mouse_event(key, action, timestamp_ms)
-                        suppress = decision is HookDecision.SUPPRESS
-            except Exception:
-                logger.error("Error in mouse hook callback", exc_info=True)
-
-            if suppress:
-                # Returning non-zero without chaining swallows the event, so the
-                # button's normal OS action (e.g. browser-back) does not fire.
-                return 1
-            return user32.CallNextHookEx(self._hook_handle, n_code, w_param, l_param)
-
-        self._proc = HOOKPROC(_ll_callback)
-        self._hook_handle = user32.SetWindowsHookExW(
-            WH_MOUSE_LL, self._proc, None, 0
+        self._runner = LowLevelHookThread(
+            WH_MOUSE_LL, label="mouse", on_install_failed=on_install_failed
         )
 
-        msg = ctypes.wintypes.MSG()
-        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
-            user32.TranslateMessage(ctypes.byref(msg))
-            user32.DispatchMessageW(ctypes.byref(msg))
+    def install(self) -> None:
+        self._runner.start(HOOKPROC(self._ll_callback))
+
+    def uninstall(self) -> None:
+        """Remove the hook and wait for the hook thread to exit."""
+        self._runner.stop()
+
+    def is_running(self) -> bool:
+        return self._runner.is_running()
+
+    def _ll_callback(self, n_code: int, w_param: int, l_param: int) -> int:
+        # SAFETY: a thrown exception must never escape the hook proc, and we
+        # must only ever swallow an event we *decided* to suppress — any
+        # error path falls through to CallNextHookEx so a bug can never make
+        # the mouse unusable system-wide.
+        suppress = False
+        try:
+            if n_code >= 0:
+                ms = ctypes.cast(l_param, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
+                x_button = (ms.mouseData >> 16) & 0xFFFF
+                mapped = mouse_event_to_key(w_param, x_button)
+                if mapped is not None:
+                    key, action = mapped
+                    # Use time.monotonic, not ms.time. ms.time is
+                    # GetTickCount-derived; the Qt tick that drives
+                    # HOLD_START detection passes time.monotonic. A non-zero
+                    # offset between the clocks would make a single click
+                    # fire a spurious HOLD_START. (Mirrors wh_keyboard_ll.)
+                    timestamp_ms = int(time.monotonic() * 1000)
+                    decision = self._on_mouse_event(key, action, timestamp_ms)
+                    suppress = decision is HookDecision.SUPPRESS
+        except Exception:
+            logger.error("Error in mouse hook callback", exc_info=True)
+
+        if suppress:
+            # Returning non-zero without chaining swallows the event, so the
+            # button's normal OS action (e.g. browser-back) does not fire.
+            return 1
+        return call_next_hook(n_code, w_param, l_param)

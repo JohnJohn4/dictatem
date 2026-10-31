@@ -43,6 +43,7 @@ if TYPE_CHECKING:
         Key,
         KeyAction,
     )
+    from dictatem.hotkey.hook_failure import HookFailure
     from dictatem.interfaces import (
         AudioCapture,
         AutostartRegistrar,
@@ -1689,6 +1690,13 @@ class _PlatformAdapters:
     ) = None
     relaunch: Callable[[], bool] | None = None
     relaunch_failed_hint: str | None = None
+    # Hotkey-hook install failure seam (#245): like bind_permission_reporter,
+    # bound once before the hooks install with a thread-safe "this hook was
+    # refused" callback (Windows: SetWindowsHookExW returned NULL). None = the
+    # platform reports hook failures some other way (macOS: Input Monitoring).
+    bind_hook_failure_reporter: (
+        Callable[[Callable[[HookFailure], None]], None] | None
+    ) = None
 
 
 def _make_sounddevice_capture(config: Config, buffer: AudioBuffer) -> AudioCapture:
@@ -2282,6 +2290,17 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     if adapters.bind_permission_reporter is not None:
         adapters.bind_permission_reporter(permission_reports.put)
 
+    # Hotkey-hook install failures (#245): the hook thread reports, the tick
+    # drains into one tray notification + hint. Bound BEFORE the hooks install.
+    from dictatem.hotkey.hook_failure import HookFailureReporter
+
+    hook_failures = HookFailureReporter(
+        show_notification=tray.show_notification,
+        set_hotkey_hint=tray_icon.set_hotkey_hint,
+    )
+    if adapters.bind_hook_failure_reporter is not None:
+        adapters.bind_hook_failure_reporter(hook_failures.report)
+
     bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:
         classifier = HotkeyClassifier(
@@ -2404,6 +2423,10 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         if bridge is not None:
             bridge.tick(now)
         _drain_permission_reports()
+        try:
+            hook_failures.drain()
+        except Exception:
+            logger.error("Error surfacing a hotkey hook failure", exc_info=True)
         overlay.update_level(audio_buffer.current_level())
         daemon.check_loading_overlay(now_ms=now)
         daemon.check_model_download()
@@ -2525,6 +2548,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 def _start_windows_daemon() -> None:
     """Build the Windows adapter set (lazy imports) and run the daemon."""
     from dictatem.hardware.nvidia_probe import NvidiaHardwareProbe
+    from dictatem.hotkey.hook_failure import HookFailure, HookKind
     from dictatem.hotkey.wh_keyboard_ll import WHKeyboardLLHook
     from dictatem.hotkey.wh_mouse_ll import WHMouseLLHook
     from dictatem.paste.win32_clipboard import Win32ClipboardIO
@@ -2537,9 +2561,25 @@ def _start_windows_daemon() -> None:
     # stops a lone Win/Alt chord release activating the menu bar / Start menu.
     keystroke = Win32KeystrokeSender()
 
+    # Hook install failures (#245): the daemon binds its thread-safe reporter
+    # before installing the hooks; the holder lets both hooks report through it.
+    hook_failure_reporter: list[Callable[[HookFailure], None]] = []
+
+    def _bind_hook_failure_reporter(report: Callable[[HookFailure], None]) -> None:
+        hook_failure_reporter[:] = [report]
+
+    def _hook_failed(kind: HookKind) -> Callable[[int], None]:
+        def _on_install_failed(error_code: int) -> None:
+            for report in hook_failure_reporter:
+                report(HookFailure(kind, error_code))
+
+        return _on_install_failed
+
     def _install_hook(handler: Callable[[Key, KeyAction, int], bool]) -> object:
         hook = WHKeyboardLLHook(
-            handler, inject_mask=keystroke.send_modifier_release_mask
+            handler,
+            inject_mask=keystroke.send_modifier_release_mask,
+            on_install_failed=_hook_failed(HookKind.KEYBOARD),
         )
         hook.install()
         return hook
@@ -2547,7 +2587,7 @@ def _start_windows_daemon() -> None:
     def _install_mouse_hook(
         handler: Callable[[Key, KeyAction, int], HookDecision],
     ) -> object:
-        hook = WHMouseLLHook(handler)
+        hook = WHMouseLLHook(handler, on_install_failed=_hook_failed(HookKind.MOUSE))
         hook.install()
         return hook
 
@@ -2563,6 +2603,7 @@ def _start_windows_daemon() -> None:
             install_mouse_hook=_install_mouse_hook,
             check_permissions=None,
             relaunch=spawn_restart,
+            bind_hook_failure_reporter=_bind_hook_failure_reporter,
         )
     )
 

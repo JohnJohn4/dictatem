@@ -1,9 +1,9 @@
 """Tests for WHKeyboardLLHook callback logic.
 
-The hook thread and SetWindowsHookEx are never exercised here — those require
-a real Windows message loop and elevated context.  Instead we extract the
-callback behaviour by driving a real KBDLLHOOKSTRUCT in memory, using a fake
-handler, and patching CallNextHookEx so we can assert it is always called.
+The hook thread and SetWindowsHookEx are never exercised here (see
+test_win32_ll_hook for those).  Instead we drive the real hook proc with a
+KBDLLHOOKSTRUCT in memory, a fake handler, and a patched CallNextHookEx so we
+can assert it is always called.
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from dictatem.hotkey.wh_keyboard_ll import (
     WM_SYSKEYDOWN,
     WHKeyboardLLHook,
 )
-from dictatem.hotkey.win32_keymap import vk_to_key
 
 VK_A = 0x41
 VK_LCONTROL = 0xA2
@@ -45,38 +44,9 @@ def _make_struct(vk: int, time: int = 1000) -> KBDLLHOOKSTRUCT:
 
 
 def _make_callback(handler, inject_mask=None):  # type: ignore[no-untyped-def]
-    """Build a hook and extract its callback without starting the hook thread.
-
-    Mirrors the real ``_ll_callback``, including the #171 neutralizing-keystroke
-    injection (call ``inject_mask`` when the handler returns True)."""
+    """Build a hook and return its real hook proc, without starting the thread."""
     hook = WHKeyboardLLHook(handler, inject_mask=inject_mask)
-
-    captured: dict[str, object] = {}
-
-    def fake_run_hook() -> None:
-        from dictatem.hotkey.classifier import KeyAction
-
-        def _ll_callback(n_code: int, w_param: int, l_param: int) -> int:
-            try:
-                if n_code >= 0:
-                    kb = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
-                    vk = kb.vkCode
-                    is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
-                    action = KeyAction.KEY_DOWN if is_down else KeyAction.KEY_UP
-                    timestamp_ms = kb.time
-                    mask = handler(vk_to_key(vk), action, timestamp_ms)
-                    if mask and hook._inject_mask is not None:
-                        hook._inject_mask()
-            except Exception:
-                pass
-            from dictatem.hotkey import wh_keyboard_ll as _mod
-            return _mod.user32.CallNextHookEx(hook._hook_handle, n_code, w_param, l_param)
-
-        captured["cb"] = _ll_callback
-
-    hook._run_hook = fake_run_hook  # type: ignore[method-assign]
-    fake_run_hook()
-    return captured["cb"], hook
+    return hook._ll_callback, hook
 
 
 # ── Type safety ──────────────────────────────────────────────────────────────
@@ -97,7 +67,7 @@ def test_large_64bit_lparam_does_not_overflow() -> None:
     large_ptr = ctypes.c_ssize_t(ctypes.addressof(struct)).value
     assert large_ptr != 0
 
-    with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
+    with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
         mock_u32.CallNextHookEx.return_value = 0
 
         called_with: list[tuple] = []
@@ -120,7 +90,7 @@ def test_large_64bit_lparam_does_not_overflow() -> None:
 def test_key_down_calls_next_hook() -> None:
     struct = _make_struct(VK_A)
 
-    with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
+    with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
         mock_u32.CallNextHookEx.return_value = 0
         cb, _ = _make_callback(lambda vk, action, ts: None)
         result = cb(0, WM_KEYDOWN, ctypes.addressof(struct))
@@ -132,7 +102,7 @@ def test_key_down_calls_next_hook() -> None:
 def test_key_up_calls_next_hook() -> None:
     struct = _make_struct(VK_A)
 
-    with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
+    with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
         mock_u32.CallNextHookEx.return_value = 0
         cb, _ = _make_callback(lambda vk, action, ts: None)
         cb(0, WM_KEYUP, ctypes.addressof(struct))
@@ -146,9 +116,12 @@ def test_syskeydown_treated_as_keydown() -> None:
     def handler(vk: int, action: KeyAction, ts: int) -> None:
         received.append((vk, action, ts))
 
-    struct = _make_struct(VK_LWIN, time=1234)
+    struct = _make_struct(VK_LWIN)
 
-    with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
+    with (
+        patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32,
+        patch("dictatem.hotkey.wh_keyboard_ll.time.monotonic", return_value=1.234),
+    ):
         mock_u32.CallNextHookEx.return_value = 0
         cb, _ = _make_callback(handler)
         cb(0, WM_SYSKEYDOWN, ctypes.addressof(struct))
@@ -163,7 +136,7 @@ def test_negative_ncode_skips_processing_and_calls_next() -> None:
     def handler(vk: int, action: KeyAction, ts: int) -> None:
         calls.append((vk, action, ts))
 
-    with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
+    with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
         mock_u32.CallNextHookEx.return_value = 0
         cb, _ = _make_callback(handler)
         cb(-1, WM_KEYDOWN, ctypes.addressof(struct))
@@ -184,7 +157,7 @@ def test_handler_exception_still_calls_next_hook() -> None:
     handler = MagicMock(side_effect=RuntimeError("boom"))
     struct = _make_struct(VK_A)
 
-    with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
+    with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
         mock_u32.CallNextHookEx.return_value = 0
         cb, _ = _make_callback(handler)
         result = cb(0, WM_KEYDOWN, ctypes.addressof(struct))
@@ -197,7 +170,7 @@ def test_callback_never_returns_none() -> None:
     """ctypes will pass NULL to Windows if the callback returns None."""
     struct = _make_struct(VK_A)
 
-    with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
+    with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
         mock_u32.CallNextHookEx.return_value = 0
         cb, _ = _make_callback(lambda vk, action, ts: None)
         result = cb(0, WM_KEYDOWN, ctypes.addressof(struct))
@@ -210,7 +183,7 @@ def test_handler_exception_does_not_suppress_key() -> None:
     handler = MagicMock(side_effect=RuntimeError("boom"))
     struct = _make_struct(VK_A)
 
-    with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
+    with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
         mock_u32.CallNextHookEx.return_value = 0
         cb, _ = _make_callback(handler)
         result = cb(0, WM_KEYDOWN, ctypes.addressof(struct))
@@ -227,7 +200,7 @@ def test_inject_mask_called_when_handler_returns_true() -> None:
     injected: list[int] = []
     struct = _make_struct(VK_LWIN)
 
-    with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
+    with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
         mock_u32.CallNextHookEx.return_value = 0
         cb, _ = _make_callback(
             lambda vk, action, ts: True, inject_mask=lambda: injected.append(1)
@@ -242,7 +215,7 @@ def test_inject_mask_not_called_when_handler_returns_false() -> None:
     injected: list[int] = []
     struct = _make_struct(VK_LWIN)
 
-    with patch("dictatem.hotkey.wh_keyboard_ll.user32") as mock_u32:
+    with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
         mock_u32.CallNextHookEx.return_value = 0
         cb, _ = _make_callback(
             lambda vk, action, ts: False, inject_mask=lambda: injected.append(1)
