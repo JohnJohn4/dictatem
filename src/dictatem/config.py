@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from dictatem.interfaces import HardwareProbe
@@ -174,7 +176,47 @@ def load_config(path: Path, probe: HardwareProbe | None = None) -> Config:
         logger.warning("Failed to parse %s: %s — using defaults", path, exc)
         return Config()
 
-    return _build_config(raw)
+    cfg = _build_config(raw)
+    _warn_if_transform_not_local(cfg.transform)
+    return cfg
+
+
+def is_loopback_url(url: object) -> bool:
+    """True when *url* points at this machine (``localhost``, 127.0.0.0/8, ``::1``).
+
+    Pure. Anything unparseable, host-less, or non-string is *not* loopback, so
+    a malformed ``base_url`` errs on the side of a warning.
+    """
+    if not isinstance(url, str):
+        return False
+    try:
+        host = urlsplit(url.strip()).hostname
+    except ValueError:
+        return False
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _warn_if_transform_not_local(transform: TransformConfig) -> None:
+    """Warn when Trigger Words would send dictated text off this machine.
+
+    Firing a Trigger Word POSTs the Last Paste text to ``[transform].base_url``
+    (pre-launch review S-3 / #202). Warn only — never block or rewrite: a user
+    may deliberately run Ollama on another box they own.
+    """
+    if transform.enabled and not is_loopback_url(transform.base_url):
+        logger.warning(
+            "[transform].base_url %r is not a local (loopback) address — "
+            "Trigger Words will send your dictated text to that host. Keep it "
+            "local (e.g. http://localhost:11434) unless you trust that machine.",
+            transform.base_url,
+        )
 
 
 def _bake_first_run_config(probe: HardwareProbe) -> Config:
