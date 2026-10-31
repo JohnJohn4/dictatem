@@ -103,6 +103,18 @@ recovery applies. See
 [ADR-0023](docs/adr/0023-dictation-is-never-lost-clipboard-fallback.md) and
 [ADR-0026](docs/adr/0026-focus-drift-holds-the-dictation-overlay-shows-phase-by-colour.md).
 
+### Dictation Session
+
+The state that belongs to **one** dictation, from record-start to its paste (or
+its cancel): whether a transcription or a [Transform](#transform) result is still
+outstanding, the pending replace count, the record-start foreground identity
+(the focus-drift anchor), and the text waiting to paste. Each session has an
+**epoch**, a monotonically increasing integer: starting a recording begins a new
+session and bumps it; cancel and error recovery end the session, bump it again,
+and clear the fields. Daemon-lifetime state — [Last Paste](#last-paste), the
+[Most-recent dictation](#most-recent-dictation), model warm and preload flags —
+is *not* part of a session; Last Paste in particular survives across them.
+
 ### Trigger Word
 
 A single-word utterance that, instead of being pasted as dictation, invokes an

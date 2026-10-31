@@ -10,6 +10,8 @@ manual-QA.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from dictatem.daemon import DaemonCore
@@ -128,9 +130,8 @@ class TestBufferRetention:
     ) -> None:
         backend._result = "first dictation"
         _cycle(core, start_ms=0, end_ms=1_000)
-        # _last_text (the transient pending payload) is nulled after the paste,
-        # but the Most-recent dictation buffer survives.
-        assert core._last_text is None
+        # The pending paste payload is consumed by the paste, but the
+        # Most-recent dictation buffer survives it.
         assert core._most_recent_dictation == "first dictation "
 
     def test_buffer_tracks_the_newest_dictation(
@@ -268,6 +269,7 @@ class TestBufferPopulatedBeforePaste:
         tray: FakeTrayRenderer,
         transform_backend: FakeTransformBackend,
         monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         # Only the clipboard-contention classes (ClipboardContentionError /
         # OSError) are treated as recoverable. A genuine bug in the paste path
@@ -284,11 +286,18 @@ class TestBufferPopulatedBeforePaste:
             backend=backend, clipboard=clipboard, keystroke=keystroke, tray=tray,
             overlay=FakeOverlayRenderer(), transform_backend=transform_backend,
         )
-        core._last_text = "some text"
-        core._pending_replace_chars = 0
+        backend._result = "some text"
 
-        with pytest.raises(ValueError):
-            core._do_paste(now_ms=0)
+        with caplog.at_level(logging.WARNING, logger="dictatem.daemon"):
+            _cycle(core, start_ms=0, end_ms=1_000)
+
+        # It surfaced as an unhandled error with the ValueError's traceback...
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert any(
+            r.exc_info is not None and r.exc_info[0] is ValueError for r in errors
+        )
+        # ...not as the recoverable-contention warning.
+        assert not any("Paste failed" in r.getMessage() for r in caplog.records)
         assert core._most_recent_dictation == "some text "
 
     def test_successful_paste_leaves_buffer_unchanged_regression(
