@@ -147,17 +147,27 @@ The third outcome of [Trigger Word](#trigger-word) recognition, beside
 dictation and a fire: the short utterance sounds *close to* a Trigger Word but
 Dictatem isn't sure — a weak fuzzy match, a strong match the model was
 unconfident about, or a near-tie between two different actions. Its
-**candidates** are the near-miss actions. Before giving up, Dictatem listens
-once more: a **confirm pass** re-transcribes the same audio, biased toward the
-Trigger Words and with VAD off. If it clearly hears one of the candidate actions
-(any of its Aliases), that Trigger Word fires as normal; the pill stays
-"transcribing" meanwhile, and Esc discards it. Otherwise the Borderline outcome **pastes
+**candidates** are the near-miss actions. Before giving up, Dictatem runs one
+[Confirm pass](#confirm-pass). If that doesn't settle it, the Borderline outcome **pastes
 nothing**: the [Overlay Pill](#overlay-pill) flashes a distinct **"say again"**
 colour, and the [Most-recent dictation](#most-recent-dictation) and [Last
 Paste](#last-paste) are left untouched, so saying `paste` (or the intended
 Trigger Word) again still acts on the right text. The next utterance is judged
 fresh. A genuine one-word dictation that trips it ("Summer.") is dictated inside
 a longer phrase instead. See ADR-0028.
+
+### Confirm pass
+
+The single extra listen a [Borderline](#borderline) gets before the "say again"
+flash: the same short audio is re-transcribed once, biased toward the lexicon's
+[Trigger Words](#trigger-word) and with VAD off. If it is an exact or strong,
+confident match for one of the Borderline's candidate actions (any of its
+[Aliases](#alias)), that Trigger Word fires as normal, rails included. Anything
+else (another action, another Borderline, dictation, empty) ends in "say again".
+The pill stays "transcribing" meanwhile and Esc discards it like any in-flight
+transcription. A broken model (load failure, GPU out of memory after retry)
+is reported the same way as on the first pass, not hidden behind "say again".
+Regular dictation never gets a confirm pass. See ADR-0028.
 
 ### Alias
 

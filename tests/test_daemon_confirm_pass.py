@@ -15,7 +15,7 @@ import logging
 import pytest
 
 from dictatem.daemon import DaemonCore
-from dictatem.exceptions import TranscriptionFailedError
+from dictatem.exceptions import GPUOutOfMemoryError
 from dictatem.state import Event, State, StateMachine
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
 from dictatem.transform.lifecycle import TransformLifecycle
@@ -75,6 +75,11 @@ def transform_backend() -> FakeTransformBackend:
 
 
 @pytest.fixture
+def tray() -> FakeTrayRenderer:
+    return FakeTrayRenderer()
+
+
+@pytest.fixture
 def sm() -> StateMachine:
     return StateMachine(tap_threshold_ms=200)
 
@@ -94,13 +99,14 @@ def core(
     foreground: FakeForegroundTracker,
     transform_backend: FakeTransformBackend,
     recognizer: TriggerWordRecognizer,
+    tray: FakeTrayRenderer,
 ) -> DaemonCore:
     return DaemonCore(
         state_machine=sm,
         audio_capture=FakeAudioCapture(duration_s=1.0),
         lifecycle=TranscribeLifecycle(backend=backend, clock=lambda: 0.0),
         overlay=overlay,
-        tray=FakeTrayRenderer(),
+        tray=tray,
         clipboard=clipboard,
         keystroke=keystroke,
         foreground=foreground,
@@ -232,25 +238,75 @@ class TestConfirmPassOutcomes:
         assert overlay.calls[-1] == ("show_say_again",)
         assert sm.state is State.IDLE
 
-    def test_confirm_pass_error_flashes_say_again(
+    def _first_pass_then(self, core: DaemonCore, backend: FakeTranscriberBackend) -> None:
+        """Record a Borderline and let the first pass finish, confirm pass not yet run."""
+        backend._result = SOME_OF_US
+        _record(core, start_ms=2_000, end_ms=3_000)
+        assert core._transcription_thread is not None
+        core._transcription_thread.join(timeout=5.0)
+
+    def test_unexpected_confirm_pass_error_flashes_say_again(
         self,
         core: DaemonCore,
         sm: StateMachine,
         backend: FakeTranscriberBackend,
         keystroke: FakeKeystrokeSender,
         overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
     ) -> None:
         _dictate_hello(core, keystroke)
-        backend._result = SOME_OF_US
-        _record(core, start_ms=2_000, end_ms=3_000)
-        assert core._transcription_thread is not None
-        core._transcription_thread.join(timeout=5.0)
-        backend.queue_error(TranscriptionFailedError("GPU out of memory after retry"))
+        self._first_pass_then(core, backend)
+        backend.queue_error(RuntimeError("decoder hiccup"))
         core.drain_transcription_for_test(now_ms=3_000)
 
         assert len(backend.command_calls) == 1
         assert keystroke.paste_count == 1
         assert overlay.calls[-1] == ("show_say_again",)
+        assert tray.notifications == []
+        assert sm.state is State.IDLE
+
+    def test_gpu_out_of_memory_after_retry_is_surfaced_like_the_first_pass(
+        self,
+        core: DaemonCore,
+        sm: StateMachine,
+        backend: FakeTranscriberBackend,
+        keystroke: FakeKeystrokeSender,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+    ) -> None:
+        _dictate_hello(core, keystroke)
+        self._first_pass_then(core, backend)
+        backend.queue_error(GPUOutOfMemoryError("first"))
+        backend.queue_error(GPUOutOfMemoryError("retry"))
+        core.drain_transcription_for_test(now_ms=3_000)
+
+        assert len(backend.command_calls) == 2  # the lifecycle retried once
+        assert keystroke.paste_count == 1
+        assert ("show_say_again",) not in overlay.calls
+        assert tray.notifications == [
+            ("Transcription Failed", "GPU memory exhausted; transcription failed.")
+        ]
+        assert sm.state is State.IDLE
+
+    def test_model_load_failure_is_surfaced_like_the_first_pass(
+        self,
+        core: DaemonCore,
+        sm: StateMachine,
+        backend: FakeTranscriberBackend,
+        keystroke: FakeKeystrokeSender,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+    ) -> None:
+        _dictate_hello(core, keystroke)
+        self._first_pass_then(core, backend)
+        # The model goes away between passes and can no longer be loaded.
+        backend.unload_model()
+        backend.fail_load_always(RuntimeError("CUDA driver missing"))
+        core.drain_transcription_for_test(now_ms=3_000)
+
+        assert keystroke.paste_count == 1
+        assert ("show_say_again",) not in overlay.calls
+        assert len(tray.notifications) == 1
         assert sm.state is State.IDLE
 
 

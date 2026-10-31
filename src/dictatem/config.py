@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-import string
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+from dictatem.transform.alias import normalise_alias
+
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from dictatem.interfaces import HardwareProbe
 
 logger = logging.getLogger(__name__)
@@ -47,6 +50,22 @@ _POSITIVE_INT_FIELDS: dict[str, set[str]] = {
     "logging": {"rotation_days"},
     "behaviour": {"silence_timeout_s", "max_recording_seconds", "model_timeout_s"},
     "transform": {"last_paste_ttl_s"},
+}
+
+
+def _normalise_aliases(aliases: tuple[str, ...]) -> tuple[str, ...]:
+    """Normalise like Prompt File aliases; drop blanks and duplicates (#250)."""
+    out: list[str] = []
+    for alias in aliases:
+        norm = normalise_alias(alias)
+        if norm and norm not in out:
+            out.append(norm)
+    return tuple(out)
+
+
+# Fields whose valid value is normalised before use: section -> key -> normaliser.
+_FIELD_NORMALISERS: dict[str, dict[str, Callable[[Any], Any]]] = {
+    "trigger_words": {"paste_aliases": _normalise_aliases},
 }
 
 
@@ -476,19 +495,10 @@ def _check_field(
             key=name,
             message=f"Invalid value for {name}: {value!r} — using default {default!r}",
         )
-    if section == "trigger_words" and key == "paste_aliases":
-        value = _normalise_aliases(value)
+    normalise = _FIELD_NORMALISERS.get(section, {}).get(key)
+    if normalise is not None:
+        value = normalise(value)
     return value, None
-
-
-def _normalise_aliases(aliases: tuple[str, ...]) -> tuple[str, ...]:
-    """Normalise like Prompt File aliases; drop blanks and duplicates (#250)."""
-    out: list[str] = []
-    for alias in aliases:
-        norm = alias.strip().strip(string.punctuation).lower()
-        if norm and norm not in out:
-            out.append(norm)
-    return tuple(out)
 
 
 def _value_is_valid(section: str, key: str, value: Any) -> bool:

@@ -24,10 +24,10 @@ from __future__ import annotations
 
 import enum
 import re
-import string
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from dictatem.transform.alias import normalise_alias
 from dictatem.transform.phonetic import phonetic_key, similarity
 
 if TYPE_CHECKING:
@@ -170,14 +170,14 @@ class TriggerWordRecognizer:
         # form they expect (e.g. "summarize", "Summarize.") without each
         # caller having to know our match rule.
         self._transforms: dict[str, str] = {
-            _normalise(k): v for k, v in prompt_aliases.items() if _normalise(k)
+            normalise_alias(k): v for k, v in prompt_aliases.items() if normalise_alias(k)
         }
         # User aliases for the built-in `paste` action ([trigger_words].
         # paste_aliases, #250): alias -> built-in action word.
         self._builtin_aliases: dict[str, str] = {w: w for w in BUILTIN_ACTION_WORDS}
         for alias in paste_aliases:
-            if _normalise(alias):
-                self._builtin_aliases.setdefault(_normalise(alias), PASTE_ACTION)
+            if normalise_alias(alias):
+                self._builtin_aliases.setdefault(normalise_alias(alias), PASTE_ACTION)
         self._fuzzy_matching = fuzzy_matching
         # Every exact Alias (built-ins + Prompt File Aliases, armed or not):
         # an utterance that *starts* with one and goes on ("summarize this",
@@ -253,7 +253,7 @@ class TriggerWordRecognizer:
         (ADR-0024 / ADR-0028). Weak matches, unconfident strong matches and
         cross-action ties are :class:`Borderline` (#248).
         """
-        tokens = [t for t in (_normalise(t) for t in utterance.text.split()) if t]
+        tokens = [t for t in (normalise_alias(t) for t in utterance.text.split()) if t]
         if not tokens or len(tokens) > FUZZY_MAX_TOKENS or not utterance.is_short:
             return Dictation()
         if len(tokens) > 1 and tokens[0] in self._exact_aliases:
@@ -301,8 +301,10 @@ def shadowed_builtin_aliases(
     — built-in matching runs first — so its Transform can never fire. The
     daemon warns on load (#139).
     """
-    builtin = BUILTIN_ACTION_WORDS | {_normalise(a) for a in paste_aliases if _normalise(a)}
-    return sorted({a for a in aliases if _normalise(a) in builtin})
+    builtin = BUILTIN_ACTION_WORDS | {
+        normalise_alias(a) for a in paste_aliases if normalise_alias(a)
+    }
+    return sorted({a for a in aliases if normalise_alias(a) in builtin})
 
 
 def _action_of(target: TriggerTarget) -> str:
@@ -328,8 +330,5 @@ def _single_token_key(text: str) -> str | None:
     # Multi-token utterances can never be an exact Trigger Word.
     if not stripped or any(ch.isspace() for ch in stripped):
         return None
-    return _normalise(stripped) or None
+    return normalise_alias(stripped) or None
 
-
-def _normalise(token: str) -> str:
-    return token.strip().strip(string.punctuation).lower()

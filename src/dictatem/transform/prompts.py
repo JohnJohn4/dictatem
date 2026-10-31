@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import logging
 import shutil
-import string
 from dataclasses import dataclass
 from pathlib import Path
+
+from dictatem.transform.alias import normalise_alias
 
 logger = logging.getLogger(__name__)
 
@@ -111,9 +112,6 @@ def _strip_quotes(token: str) -> str:
     return token
 
 
-def _normalise_alias(alias: str) -> str:
-    return alias.strip().strip(string.punctuation).lower()
-
 
 @dataclass(frozen=True)
 class LoadedPrompts:
@@ -164,7 +162,7 @@ def load_prompts(directory: Path) -> LoadedPrompts:
             continue
 
         for alias in parsed.aliases:
-            key = _normalise_alias(alias)
+            key = normalise_alias(alias)
             if not key:
                 logger.warning(
                     "Prompt file %s: alias %r normalises to empty — skipping that alias",
