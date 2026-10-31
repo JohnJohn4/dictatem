@@ -871,3 +871,80 @@ class TestCancelDuringTransform:
         # Only the first dictation pasted; no follow-up.
         assert keystroke.paste_count == 1
         assert keystroke.total_backspaces == 0
+
+
+# ── Busy nudge (#240) ───────────────────────────────────────────────
+
+
+class TestBusyNudge:
+    """A hotkey press while Dictatem is working shows the busy caption and
+    changes nothing else: no new recording, no cancel, the result still lands."""
+
+    def test_press_during_transcription_nudges_and_result_still_pastes(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        audio: FakeAudioCapture,
+        overlay: FakeOverlayRenderer,
+        keystroke: FakeKeystrokeSender,
+        sm: StateMachine,
+    ) -> None:
+        backend._result = "hello world"
+        backend.block_transcribe()
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=1_000)
+        assert sm.state is State.TRANSCRIBING
+        starts_before = audio.start_count
+
+        # The user presses again (twice) while the transcription is in flight.
+        for t in (1_200, 1_400):
+            core.on_hotkey_event(Event.KEY_DOWN, now_ms=t)
+            core.on_hotkey_event(Event.KEY_UP, now_ms=t + 50)
+
+        assert overlay.calls.count(("show_busy_nudge",)) == 2
+        assert audio.start_count == starts_before  # nothing recorded
+        assert sm.state is State.TRANSCRIBING
+
+        backend.release_transcribe()
+        core.drain_transcription_for_test(now_ms=2_000)
+        assert keystroke.paste_count == 1
+        assert sm.state is State.IDLE
+
+    def test_press_during_trigger_fire_transform_nudges_and_fire_lands(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        audio: FakeAudioCapture,
+        overlay: FakeOverlayRenderer,
+        keystroke: FakeKeystrokeSender,
+        sm: StateMachine,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = "summarize"
+        transform_backend.queue_result("CONDENSED")
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=2_000)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=2_200)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=3_000)
+        if core._transcription_thread is not None:
+            core._transcription_thread.join(timeout=5.0)
+        core.check_transcription_result(now_ms=3_000)
+        assert transform_backend.calls  # the Transform is under way
+        starts_before = audio.start_count
+
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=3_100)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=3_150)
+
+        assert overlay.calls.count(("show_busy_nudge",)) == 1
+        assert audio.start_count == starts_before
+        assert sm.state is State.TRANSCRIBING
+
+        if core._transform_thread is not None:
+            core._transform_thread.join(timeout=5.0)
+        core.check_transform_result(now_ms=3_200)
+        assert keystroke.total_backspaces == 17  # len("the verbose text ")
+        assert keystroke.typed_texts == ["CONDENSED "]
+        assert sm.state is State.IDLE

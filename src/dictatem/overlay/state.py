@@ -82,6 +82,14 @@ PILL_MARGIN: int = 16
 # appears; the count cycles 1 -> 2 -> 3 -> 1 so the pill reads as live.
 LOADING_DOT_INTERVAL_S: float = 0.4
 
+# The busy nudge (#240 / review F-14): a hotkey press while Dictatem is working
+# shows this caption over the processing phase for a moment, then reverts.
+BUSY_CAPTION: str = "Still working — Esc cancels"
+BUSY_NUDGE_S: float = 1.5
+_BUSY_PHASES: frozenset[OverlayPhase] = frozenset(
+    {OverlayPhase.TRANSCRIBING, OverlayPhase.COMPUTING, OverlayPhase.LOADING}
+)
+
 
 class OverlayState:
     """Pure state machine for the recording overlay pill.
@@ -110,6 +118,8 @@ class OverlayState:
         self._transition_start: float = 0.0
         self._loading_label: str = "Model Loading"
         self._loading_start: float = 0.0
+        # Clock time the busy caption expires at; 0 = not showing (#240).
+        self._busy_until: float = 0.0
 
     @property
     def phase(self) -> OverlayPhase:
@@ -121,6 +131,7 @@ class OverlayState:
         # gesture they just made (#96 / ADR-0026). The parameter is kept so the
         # OverlayRenderer contract still distinguishes the two record entrypoints.
         self._color = PillColor.ACCENT
+        self._busy_until = 0.0
         self._phase = OverlayPhase.FADING_IN
         self._transition_start = self._clock()
 
@@ -150,12 +161,30 @@ class OverlayState:
         dots = int(elapsed / LOADING_DOT_INTERVAL_S) % 3 + 1
         return f"{self._loading_label}{'.' * dots}"
 
+    def show_busy_nudge(self) -> None:
+        """Acknowledge a hotkey press made while working (#240 / review F-14).
+
+        Shows :data:`BUSY_CAPTION` over the current processing phase for
+        :data:`BUSY_NUDGE_S`; another press restarts the window. The phase
+        itself is untouched, so the pill reverts on its own. Ignored outside a
+        processing phase — there is nothing to be "still" doing.
+        """
+        if self._phase in _BUSY_PHASES:
+            self._busy_until = self._clock() + BUSY_NUDGE_S
+
+    def current_busy_caption(self) -> str | None:
+        """The busy caption while a nudge is live, else ``None``."""
+        if self._phase in _BUSY_PHASES and self._clock() < self._busy_until:
+            return BUSY_CAPTION
+        return None
+
     def flash_error(self) -> None:
         self._color = PillColor.ERROR
         self._phase = OverlayPhase.ERROR_FLASH
         self._transition_start = self._clock()
 
     def hide(self) -> None:
+        self._busy_until = 0.0
         self._phase = OverlayPhase.FADING_OUT
         self._transition_start = self._clock()
 

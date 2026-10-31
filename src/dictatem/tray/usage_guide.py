@@ -147,6 +147,13 @@ def _dictating_section(theme: GuideTheme, combo: str, keys: Sequence[str]) -> st
         f"is <b>{c}</b></p>"
         + _keycaps(theme, keys or [combo], combo)
         + f'<table cellspacing="0" cellpadding="0">{table}</table>'
+        # #240: a press mid-work gets a "Still working" caption, not a new take.
+        + _p(
+            theme,
+            f"{c} is ignored while Dictatem is working on your last dictation — "
+            "the pill briefly shows <i>Still working</i>. <b>Esc</b> cancels.",
+            muted=True,
+        )
     )
 
 

@@ -135,6 +135,25 @@ class QtOverlayWidget(QWidget):
             self._shown_bars[i] = shown + (target - shown) * k
         return self._shown_bars
 
+    def _draw_caption(
+        self,
+        painter: QPainter,
+        text: str,
+        colour: QColor,
+        point_size: float,
+        h_align: Qt.AlignmentFlag,
+    ) -> None:
+        painter.setPen(colour)
+        font = QFont(painter.font())
+        font.setPointSizeF(point_size)
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        painter.drawText(
+            self.rect().adjusted(18, 0, -14, 0),
+            Qt.AlignmentFlag.AlignVCenter | h_align,
+            text,
+        )
+
     def paintEvent(self, event: object) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -146,18 +165,26 @@ class QtOverlayWidget(QWidget):
         painter.setPen(QPen(_RIM, 1.0))
         painter.drawRoundedRect(body, radius, radius)
 
+        # The busy nudge (#240): a hotkey press while working swaps the pill's
+        # content for a short caption, tinted in the processing phase's colour
+        # so the phase still reads. It reverts on its own when the window ends.
+        busy = self._state.current_busy_caption()
+        if busy is not None:
+            loading = self._state.phase == OverlayPhase.LOADING
+            col = _CAPTION if loading else _PHASE_HUES[self._state.current_color()]
+            self._draw_caption(painter, busy, col, 9.0, Qt.AlignmentFlag.AlignHCenter)
+            painter.end()
+            return
+
         # While a model loads, the pill is a single animated caption — no
         # waveform (there is no recording yet to visualise).
         if self._state.phase == OverlayPhase.LOADING:
-            painter.setPen(_CAPTION)
-            font = QFont(painter.font())
-            font.setPointSizeF(10.0)
-            font.setWeight(QFont.Weight.DemiBold)
-            painter.setFont(font)
-            painter.drawText(
-                self.rect().adjusted(18, 0, -14, 0),
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            self._draw_caption(
+                painter,
                 self._state.current_loading_text(),
+                _CAPTION,
+                10.0,
+                Qt.AlignmentFlag.AlignLeft,
             )
             painter.end()
             return

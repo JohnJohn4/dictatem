@@ -206,16 +206,50 @@ class TestAutoRepeatSuppression:
         assert sm.state is State.PTT_REC
         assert cmds == []
 
-    def test_key_down_while_transcribing_is_ignored(self) -> None:
-        sm = StateMachine()
+
+class TestBusyNudge:
+    """A hotkey press while working nudges the user and changes nothing (#240)."""
+
+    def _enter_transcribing(self, sm: StateMachine) -> None:
         sm.handle(Event.KEY_DOWN, now_ms=0)
         sm.handle(Event.KEY_UP, now_ms=50)
         sm.handle(Event.KEY_DOWN, now_ms=1000)
         assert sm.state is State.TRANSCRIBING
 
-        cmds = sm.handle(Event.KEY_DOWN, now_ms=1050)
+    def test_key_down_while_transcribing_emits_only_the_busy_nudge(self) -> None:
+        sm = StateMachine()
+        self._enter_transcribing(sm)
+
+        cmds = sm.handle(Event.KEY_DOWN, now_ms=1500)
         assert sm.state is State.TRANSCRIBING
-        assert cmds == []
+        assert cmds == [Command.BUSY_NUDGE]
+
+    def test_repeated_presses_each_nudge_and_stay_transcribing(self) -> None:
+        sm = StateMachine()
+        self._enter_transcribing(sm)
+
+        for t in (1500, 1600, 1700):
+            assert sm.handle(Event.KEY_DOWN, now_ms=t) == [Command.BUSY_NUDGE]
+            assert sm.handle(Event.KEY_UP, now_ms=t + 50) == []
+        assert sm.state is State.TRANSCRIBING
+
+    def test_result_after_a_nudge_still_pastes(self) -> None:
+        sm = StateMachine()
+        self._enter_transcribing(sm)
+        sm.handle(Event.KEY_DOWN, now_ms=1500)
+        sm.handle(Event.KEY_UP, now_ms=1550)
+
+        cmds = sm.handle(Event.TRANSCRIPTION_DONE, now_ms=2000)
+        assert sm.state is State.IDLE
+        assert cmds == [Command.PASTE]
+
+    def test_esc_after_a_nudge_still_cancels(self) -> None:
+        sm = StateMachine()
+        self._enter_transcribing(sm)
+        sm.handle(Event.KEY_DOWN, now_ms=1500)
+
+        assert sm.handle(Event.ESC, now_ms=1600) == [Command.CANCEL]
+        assert sm.state is State.IDLE
 
 
 class TestEscFromAnyActiveState:
@@ -412,7 +446,7 @@ class TestEnumCompleteness:
     def test_all_commands_defined(self) -> None:
         expected = {
             "RECORD_START", "RECORD_STOP_AND_TRANSCRIBE", "CANCEL", "PASTE",
-            "FLASH_ERROR", "START_TAP_TIMER", "CANCEL_TAP_TIMER",
+            "FLASH_ERROR", "START_TAP_TIMER", "CANCEL_TAP_TIMER", "BUSY_NUDGE",
         }
         assert set(Command.__members__) == expected
 

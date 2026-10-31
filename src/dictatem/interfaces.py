@@ -335,6 +335,13 @@ class OverlayRenderer(Protocol):
         caption); this is the resident-and-generating case."""
         ...
 
+    def show_busy_nudge(self) -> None:
+        """Briefly caption the pill "Still working — Esc cancels" over the
+        current processing phase, then revert — the hotkey was pressed while
+        Dictatem is transcribing or running a Transform (#240 / review F-14).
+        Never changes the phase or repositions the pill."""
+        ...
+
     def show_error(self) -> None:
         """Flash the overlay to indicate an error (e.g. empty result)."""
         ...

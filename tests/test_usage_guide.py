@@ -33,6 +33,12 @@ class TestDictatingSection:
         assert "release" in html
         assert "let go" in html
 
+    def test_says_the_hotkey_is_ignored_while_working_and_esc_cancels(self) -> None:
+        # #240: a press mid-transcription shows a busy caption, not a new take.
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        assert "ignored while Dictatem is working" in html
+        assert "<b>Esc</b> cancels" in html
+
     def test_mentions_the_overlay_pill(self) -> None:
         html = usage_guide_html(("win", "alt"), platform="win32")
         assert "pill" in html
