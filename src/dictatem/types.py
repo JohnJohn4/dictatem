@@ -24,6 +24,9 @@ class HardwareProfile:
 
     cuda_available: bool
     total_vram_mb: int | None
+    # An Apple-Silicon Mac (arm64): no CUDA, but its CPU runs a larger Whisper
+    # model fast enough for push-to-talk, so it gets its own tier.
+    apple_silicon: bool = False
 
 
 @dataclass(frozen=True)
