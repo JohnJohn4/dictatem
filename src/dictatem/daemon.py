@@ -712,11 +712,19 @@ class DaemonCore:
                 self._recover_to_idle()
             elif kind == "model_error":
                 self._transcription_active = False
-                logger.error("Model unavailable; check log", exc_info=data)  # type: ignore[arg-type]
-                self._tray.show_notification(
-                    "Model Unavailable",
-                    "Model unavailable; check log",
+                # The lifecycle attaches the pure classifier's diagnosis (#241).
+                diagnosis = getattr(data, "diagnosis", None)
+                reason = diagnosis.reason.name if diagnosis is not None else "UNKNOWN"
+                logger.error(
+                    "Model load failed (reason=%s)", reason, exc_info=data  # type: ignore[arg-type]
                 )
+                if diagnosis is not None:
+                    self._tray.show_notification(diagnosis.title, diagnosis.message)
+                else:
+                    self._tray.show_notification(
+                        "Model Unavailable",
+                        "Model unavailable; check log",
+                    )
                 self._recover_to_idle()
             elif kind == "unexpected_error":
                 self._transcription_active = False
@@ -2006,6 +2014,9 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     )
     lifecycle = TranscribeLifecycle(
         backend=backend,
+        model_name=effective_model,
+        device=effective_device,
+        compute_type=effective_compute_type,
         idle_timeout_s=config.model.idle_unload_minutes * 60,
         min_transcription_chars=config.model.min_transcription_chars,
     )

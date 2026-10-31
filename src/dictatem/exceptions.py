@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from dictatem.transcribe.load_failure import ModelLoadDiagnosis
     from dictatem.transform.failure import OllamaFailure
 
 
@@ -31,8 +32,16 @@ class TranscriptionFailedError(Exception):
 class ModelLoadError(Exception):
     """Raised when the transcription model fails to load.
 
-    Corrupt download, missing CUDA libs, etc.
+    Corrupt download, missing CUDA libs, etc. ``TranscribeLifecycle`` wraps
+    every load exception in one, keeping the original as ``__cause__`` and
+    attaching the pure classifier's ``diagnosis`` (reason + user-facing title
+    and message, #241). ``diagnosis`` is ``None`` only when raised elsewhere
+    (e.g. by a test fake).
     """
+
+    def __init__(self, message: str, *, diagnosis: ModelLoadDiagnosis | None = None) -> None:
+        super().__init__(message)
+        self.diagnosis = diagnosis
 
 
 class TransformFailedError(Exception):

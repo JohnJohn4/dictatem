@@ -8,7 +8,12 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-from dictatem.exceptions import GPUOutOfMemoryError, TranscriptionFailedError
+from dictatem.exceptions import (
+    GPUOutOfMemoryError,
+    ModelLoadError,
+    TranscriptionFailedError,
+)
+from dictatem.transcribe.load_failure import classify_model_load_failure
 from dictatem.types import EmptyResult
 
 if TYPE_CHECKING:
@@ -33,8 +38,16 @@ class TranscribeLifecycle:
         clock: Callable[[], float] = time.monotonic,
         idle_timeout_s: float = 1800.0,
         min_transcription_chars: int = 3,
+        model_name: str = "large-v3-turbo",
+        device: str = "cuda",
+        compute_type: str = "float16",
     ) -> None:
         self._backend = backend
+        # The effective (post-ADR-0009-reconcile) hardware triple, used only to
+        # word a classified load failure (#241).
+        self._model_name = model_name
+        self._device = device
+        self._compute_type = compute_type
         self._clock = clock
         self._idle_timeout_s = idle_timeout_s
         self._min_chars = min_transcription_chars
@@ -225,6 +238,18 @@ class TranscribeLifecycle:
                 logger.info("Running deferred unload")
                 self._unload_now()
 
+    def _load_error(self, exc: Exception) -> ModelLoadError:
+        """Wrap a load exception in a classified ``ModelLoadError`` (#241)."""
+        diagnosis = classify_model_load_failure(
+            exc,
+            device=self._device,
+            compute_type=self._compute_type,
+            model_name=self._model_name,
+        )
+        return ModelLoadError(
+            f"Model load failed ({diagnosis.reason.name}): {exc}", diagnosis=diagnosis
+        )
+
     def _unload_now(self) -> None:
         """Unload the backend. Caller holds ``_state_lock``."""
         if not self._backend.is_loaded:
@@ -241,6 +266,13 @@ class TranscribeLifecycle:
             if not self._backend.is_loaded:
                 start = self._clock()
                 logger.info("Loading model...")
-                self._backend.load_model()
+                try:
+                    self._backend.load_model()
+                except ModelLoadError as exc:
+                    if exc.diagnosis is not None:
+                        raise
+                    raise self._load_error(exc) from exc
+                except Exception as exc:
+                    raise self._load_error(exc) from exc
                 elapsed = self._clock() - start
                 logger.info("Model loaded in %.1fs", elapsed)
