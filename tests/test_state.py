@@ -177,6 +177,13 @@ class TestTranscribing:
         assert Command.CANCEL in cmds
         assert Command.PASTE not in cmds
 
+    def test_borderline_flashes_say_again_no_paste(self) -> None:
+        sm = StateMachine()
+        self._enter_transcribing_via_toggle(sm)
+        cmds = sm.handle(Event.BORDERLINE, now_ms=2000)
+        assert sm.state is State.IDLE
+        assert cmds == [Command.FLASH_SAY_AGAIN]
+
     def test_empty_result_flashes_error_no_paste(self) -> None:
         sm = StateMachine()
         self._enter_transcribing_via_toggle(sm)
@@ -439,14 +446,15 @@ class TestEnumCompleteness:
         expected = {
             "KEY_DOWN", "KEY_UP", "ESC", "TIMER_EXPIRED",
             "SILENCE_TIMEOUT", "MAX_DURATION", "TRANSCRIPTION_DONE",
-            "EMPTY_RESULT",
+            "EMPTY_RESULT", "BORDERLINE",
         }
         assert set(Event.__members__) == expected
 
     def test_all_commands_defined(self) -> None:
         expected = {
             "RECORD_START", "RECORD_STOP_AND_TRANSCRIBE", "CANCEL", "PASTE",
-            "FLASH_ERROR", "START_TAP_TIMER", "CANCEL_TAP_TIMER", "BUSY_NUDGE",
+            "FLASH_ERROR", "FLASH_SAY_AGAIN", "START_TAP_TIMER", "CANCEL_TAP_TIMER",
+            "BUSY_NUDGE",
         }
         assert set(Command.__members__) == expected
 

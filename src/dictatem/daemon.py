@@ -30,9 +30,11 @@ from dictatem.state import Command, Event, State
 from dictatem.transform.last_paste import LastPaste
 from dictatem.transform.recognizer import (
     PASTE_ACTION,
+    Borderline,
     BuiltinAction,
     Fire,
     TransformTarget,
+    TriggerTarget,
     TriggerWordRecognizer,
     Utterance,
 )
@@ -72,6 +74,14 @@ if TYPE_CHECKING:
     from dictatem.upgrade.core import UpgradeDecision
 
 logger = logging.getLogger(__name__)
+
+
+def _target_name(target: TriggerTarget) -> str:
+    """A loggable action name for a Trigger Word target: the built-in action
+    or the Transform's Alias. Configuration, not dictated content (#248)."""
+    if isinstance(target, BuiltinAction):
+        return target.name
+    return target.alias
 
 
 def _add_rotating_log_file() -> logging.handlers.TimedRotatingFileHandler | None:
@@ -149,6 +159,10 @@ class _OverlayAdapter:
         # Like show_error: the pill is already visible from transcribing, so this
         # only flips the phase — no reposition, no activation (#239).
         self._state.show_held()
+
+    def show_say_again(self) -> None:
+        # Like show_error: flips the already-visible pill's phase only (#248).
+        self._state.flash_say_again()
 
     def hide(self) -> None:
         self._state.hide()
@@ -617,6 +631,9 @@ class DaemonCore:
         elif cmd is Command.FLASH_ERROR:
             self._overlay.show_error()
             self._tray.set_idle()
+        elif cmd is Command.FLASH_SAY_AGAIN:
+            self._overlay.show_say_again()
+            self._tray.set_idle()
         elif cmd is Command.START_TAP_TIMER:
             pass
         elif cmd is Command.CANCEL_TAP_TIMER:
@@ -822,6 +839,9 @@ class DaemonCore:
                 decision = self._trigger_recognizer.decide(
                     utterance, transforms_armed=self._transforms_armed()
                 )
+                if isinstance(decision, Borderline):
+                    self._handle_borderline(decision, utterance, now_ms=now_ms)
+                    return
                 if isinstance(decision, Fire) and isinstance(
                     decision.target, BuiltinAction
                 ):
@@ -931,6 +951,33 @@ class DaemonCore:
             speech,
             confidence,
         )
+
+    def _handle_borderline(
+        self, decision: Borderline, utterance: Utterance, *, now_ms: int
+    ) -> None:
+        """Close to a Trigger Word but not sure: paste nothing, say again (#248).
+
+        Closes the transcription leg with the distinct say-again flash. Nothing
+        is pasted or typed, and the Most-recent dictation and Last Paste are
+        left untouched, so an exact "paste" afterwards still recovers the right
+        text (ADR-0023 / ADR-0028). Logs the outcome kind, candidate action
+        names, score band and confidence — never the heard text (S-2 / #188).
+        """
+        conf = utterance.confidence
+        confidence = (
+            f"avg_logprob={conf.avg_logprob:.2f} no_speech_prob={conf.no_speech_prob:.2f}"
+            if conf is not None
+            else "confidence=unknown"
+        )
+        logger.info(
+            "Trigger Word Borderline: candidates=%s band=%s %s",
+            ",".join(_target_name(t) for t in decision.candidates),
+            decision.band.value,
+            confidence,
+        )
+        self._session.transcription_outstanding = False
+        commands = self._sm.handle(Event.BORDERLINE, now_ms=now_ms)
+        self._execute_commands(commands, now_ms=now_ms)
 
     def _handle_paste_action(self, *, now_ms: int) -> None:
         """Re-paste the Most-recent dictation — the built-in ``paste`` recovery.

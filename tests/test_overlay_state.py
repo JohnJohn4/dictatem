@@ -572,6 +572,52 @@ class TestHeld:
         assert state.phase == OverlayPhase.HELD
 
 
+class TestSayAgain:
+    """flash_say_again() — "heard something close to a Trigger Word, say it
+    again" (#248): its own hue, settling exactly like the error flash."""
+
+    def _say_again_after_transcribing(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.show_transcribing()
+        state.flash_say_again()
+
+    def test_enters_say_again_phase_at_full_opacity(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._say_again_after_transcribing(state, clock)
+        assert state.phase == OverlayPhase.SAY_AGAIN_FLASH
+        assert state.current_opacity() == 1.0
+
+    def test_has_its_own_colour(self, state: OverlayState, clock: FakeClock) -> None:
+        self._say_again_after_transcribing(state, clock)
+        assert state.current_color() == PillColor.SAY_AGAIN
+
+    def test_hue_is_distinct_from_error_processing_and_computing(self) -> None:
+        from dictatem.overlay.state import PILL_HEX
+
+        others = {PILL_HEX[c] for c in PillColor if c is not PillColor.SAY_AGAIN}
+        assert PILL_HEX[PillColor.SAY_AGAIN] not in others
+
+    def test_settles_like_the_error_flash(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._say_again_after_transcribing(state, clock)
+        clock.advance_ms(299)
+        state.tick()
+        assert state.phase == OverlayPhase.SAY_AGAIN_FLASH
+        clock.advance_ms(1)
+        state.tick()
+        assert state.phase == OverlayPhase.FADING_OUT
+        assert state.current_color() == PillColor.SAY_AGAIN
+        clock.advance_ms(401)
+        state.tick()
+        assert state.phase == OverlayPhase.HIDDEN
+
+
 class TestImportSafety:
     def test_overlay_state_has_no_pyside6_imports(self) -> None:
         before = set(sys.modules.keys())
