@@ -2409,9 +2409,9 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     )
     lifecycle = TranscribeLifecycle(
         backend=backend,
-        model_name=effective_model,
-        device=effective_device,
-        compute_type=effective_compute_type,
+        model_name=selection.model,
+        device=selection.device,
+        compute_type=selection.compute_type,
         idle_timeout_s=config.model.idle_unload_minutes * 60,
         min_transcription_chars=config.model.min_transcription_chars,
     )
