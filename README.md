@@ -46,7 +46,8 @@ and run it once you're satisfied.
 ### macOS
 
 Requires **macOS 12+** (Apple Silicon or Intel). Transcription runs on the CPU
-([ADR-0013](docs/adr/0013-macos-transcription-engine.md)).
+([ADR-0013](docs/adr/0013-macos-transcription-engine.md)); Apple Silicon Macs get
+the more accurate `small` model, Intel Macs `base`.
 
 Run in **Terminal**:
 

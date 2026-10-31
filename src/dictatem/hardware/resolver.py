@@ -15,8 +15,12 @@ GPU-high      CUDA, >= 6 GB          large-v3-turbo   cuda     float16
 GPU-mid       CUDA, 3-6 GB           small            cuda     int8_float16
 GPU-low       CUDA, < 3 GB           base             cuda     int8_float16
 GPU-unknown   CUDA, VRAM unknown     small            cuda     int8_float16
+Apple-Silicon arm64 Mac (no CUDA)     small            cpu      int8
 CPU           no CUDA                base             cpu      int8
 ============  =====================  ===============  =======  ==============
+
+Apple-Silicon CPUs run ``small`` int8 fast enough for push-to-talk, a clear
+accuracy step up from ``base``; a Metal/MLX tier remains an ADR-0013 follow-up.
 
 ``base`` is the smallest auto-selected model; ``tiny`` is never auto-selected.
 Models stay multilingual (no ``.en`` suffix). All tiers default to the small
@@ -73,6 +77,13 @@ _TIER_TABLE: dict[str, ResolvedHardware] = {
         model="small",
         device="cuda",
         compute_type="int8_float16",
+        transform_model=_TRANSFORM_MODEL,
+    ),
+    "Apple-Silicon": ResolvedHardware(
+        tier="Apple-Silicon",
+        model="small",
+        device="cpu",
+        compute_type="int8",
         transform_model=_TRANSFORM_MODEL,
     ),
     "CPU": ResolvedHardware(
@@ -138,7 +149,7 @@ class HardwareTierResolver:
     def _classify(profile: HardwareProfile) -> str:
         """Return the tier name for *profile*. Pure, total over all profiles."""
         if not profile.cuda_available:
-            return "CPU"
+            return "Apple-Silicon" if profile.apple_silicon else "CPU"
         vram = profile.total_vram_mb
         if vram is None:
             # CUDA present but VRAM unreadable: assume a modest card.
