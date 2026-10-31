@@ -23,6 +23,7 @@ from dictatem.hardware.resolver import tier_row
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from dictatem.hardware.resolver import RuntimeFallbackReason
     from dictatem.interfaces import TranscriberBackend
 
 BackendKind = Literal["faster-whisper", "mlx"]
@@ -94,7 +95,7 @@ def build_transcriber(
     language: str | None,
     vad_filter: bool,
     vocabulary: list[str],
-    on_fallback: Callable[[], None] | None = None,
+    on_fallback: Callable[[RuntimeFallbackReason], None] | None = None,
 ) -> TranscriberBackend:
     """Construct the (unloaded) backend for *selection*.
 

@@ -95,7 +95,7 @@ class TestBuildTranscriber:
                 language=None,
                 vad_filter=True,
                 vocabulary=[],
-                on_fallback=lambda: None,
+                on_fallback=lambda _reason: None,
             )
             assert not isinstance(backend, FallbackTranscriber)
 

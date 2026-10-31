@@ -122,9 +122,10 @@ _TIER_TABLE: dict[str, ResolvedHardware] = {
 # Why a session fell back (#231): the configured device's hardware is absent.
 # Machine-readable so the notification can name the cause.
 FallbackReason = Literal["cuda-absent", "mlx-unavailable"]
-# Why a running session switched engines (#232): the MLX engine failed to load
-# or transcribe. Not a reconcile outcome, so it is kept out of FallbackReason.
-RuntimeFallbackReason = Literal["mlx-load-failed"]
+# Why a running session switched engines (#232): the MLX engine failed to load,
+# or failed while transcribing. Not a reconcile outcome, so it is kept out of
+# FallbackReason.
+RuntimeFallbackReason = Literal["mlx-load-failed", "mlx-transcribe-failed"]
 
 
 @dataclass(frozen=True)
@@ -165,6 +166,12 @@ _FALLBACK_BODIES: dict[FallbackReason | RuntimeFallbackReason, str] = {
         "The Apple GPU engine (MLX) failed to load — your dictation and the "
         "rest of this session run on CPU. Your config is unchanged; the next "
         "launch tries the GPU again. See the log for the cause."
+    ),
+    "mlx-transcribe-failed": (
+        "The Apple GPU engine (MLX) failed while transcribing — this dictation "
+        "was re-run on CPU, and the rest of this session runs there too. Your "
+        "config is unchanged; the next launch tries the GPU again. See the log "
+        "for the cause."
     ),
 }
 

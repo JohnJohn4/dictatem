@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 
     from dictatem.audio.buffer import AudioBuffer
     from dictatem.config import Config
+    from dictatem.hardware.resolver import RuntimeFallbackReason
     from dictatem.hotkey.classifier import (
         HookDecision,
         HotkeyClassifier,
@@ -1300,15 +1301,16 @@ class DaemonCore:
         except Exception:
             logger.error("Error starting first-run model fetch", exc_info=True)
 
-    def on_transcriber_fallback(self) -> None:
+    def on_transcriber_fallback(self, reason: RuntimeFallbackReason) -> None:
         """The MLX engine failed and the session switched to CPU (#232).
 
         Thread-safe: called by the fallback composite from whichever thread hit
-        the failure. Queues the one "Running on CPU" notification for the tick.
+        the failure. *reason* says whether MLX failed to load or failed while
+        transcribing. Queues the one "Running on CPU" notification for the tick.
         """
         from dictatem.hardware.resolver import fallback_notice
 
-        notice = fallback_notice("mlx-load-failed")
+        notice = fallback_notice(reason)
         self._pending_notifications.put((notice.title, notice.body))
 
     def check_notifications(self) -> None:
@@ -2052,7 +2054,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         language=config.model.language,
         vad_filter=config.model.vad_filter,
         vocabulary=vocabulary,
-        on_fallback=lambda: daemon.on_transcriber_fallback(),
+        on_fallback=lambda reason: daemon.on_transcriber_fallback(reason),
     )
     lifecycle = TranscribeLifecycle(
         backend=backend,
