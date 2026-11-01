@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from dictatem.config import (
@@ -23,6 +24,8 @@ from tests.fakes import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 
 def _core(
@@ -57,12 +60,34 @@ class TestStartupNotification:
         assert len(tray.notifications) == 1
         _title, body = tray.notifications[0]
         assert "[hotkey].tap_threshold_ms" in body
-        assert "not changed" in body
+        assert "Open config file" in body
 
-    def test_valid_config_gives_no_notification(self) -> None:
+    def test_full_detail_goes_to_the_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The toast is kept short enough not to truncate (#280); every key
+        # and the "file was not changed" promise live in daemon.log instead.
+        core, _tray = _core()
+        with caplog.at_level(logging.WARNING, logger="dictatem.daemon"):
+            core.notify_config_problems(ConfigLoadReport(problems=[
+                ConfigProblem("[hotkey].tap_threshold_ms", "Wrong type"),
+                ConfigProblem("[audio].sample_rate", "Invalid value"),
+                ConfigProblem("[overlay].position", "Invalid value"),
+            ]))
+        text = caplog.text
+        assert "[hotkey].tap_threshold_ms" in text
+        assert "[audio].sample_rate" in text
+        assert "[overlay].position" in text
+        assert "not changed" in text
+
+    def test_valid_config_gives_no_notification(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         core, tray = _core()
-        core.notify_config_problems(ConfigLoadReport())
+        with caplog.at_level(logging.WARNING, logger="dictatem.daemon"):
+            core.notify_config_problems(ConfigLoadReport())
         assert tray.notifications == []
+        assert caplog.records == []
 
 
 class TestStartAtLoginWithUnreadableConfig:
