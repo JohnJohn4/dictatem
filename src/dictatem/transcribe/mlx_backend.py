@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 
+from dictatem.transcribe.language import LanguageSelector
 from dictatem.transcribe.mlx_models import (
     keep_speech,
     mlx_command_bias,
@@ -68,13 +69,16 @@ class MlxBackend:
         self,
         model_name: str = "large-v3-turbo",
         compute_type: str = "float16",
-        language: str | None = None,
+        language_selector: LanguageSelector | None = None,
         vad_filter: bool = True,
         vocabulary: list[str] | None = None,
     ) -> None:
         self._model_name = model_name
         self._compute_type = compute_type
-        self._language = language
+        # Language selection (#273), shared with the CPU fallback engine.
+        self._languages = (
+            language_selector if language_selector is not None else LanguageSelector()
+        )
         self._vad_filter = vad_filter
         self._vocabulary = vocabulary or []
         # mlx-whisper has no `hotwords`: Vocabulary always rides initial_prompt.
@@ -123,7 +127,9 @@ class MlxBackend:
         clipped onset isn't trimmed further.
         """
         hint = mlx_command_bias(trigger_words)
-        return self._on_worker(lambda: self._transcribe(audio, vad_filter=False, hint=hint))
+        return self._on_worker(
+            lambda: self._transcribe(audio, vad_filter=False, hint=hint, confirm_pass=True)
+        )
 
     def empty_cache(self) -> None:
         self._on_worker(self._clear_mlx_cache)
@@ -182,29 +188,82 @@ class MlxBackend:
 
         mx.clear_cache()
 
+    def _detect_probabilities(self, speech: np.ndarray) -> dict[str, float] | None:
+        """Whisper's per-language probabilities for *speech* (#273).
+
+        The same steps ``mlx_whisper.transcribe`` runs when ``language`` is
+        unset (mlx-whisper 0.4.x): log-mel of the first 30 s, then
+        ``model.detect_language``, which returns the full ``{code: prob}``
+        distribution, so the Preferred Languages restriction works exactly as on
+        faster-whisper. ``None`` on an English-only model or any failure (the
+        selector then uses the fallback).
+        """
+        try:
+            import mlx.core as mx
+            from mlx_whisper.audio import N_FRAMES, N_SAMPLES, log_mel_spectrogram, pad_or_trim
+            from mlx_whisper.transcribe import ModelHolder
+
+            dtype = mx.float16 if self._fp16 else mx.float32
+            model = ModelHolder.get_model(self._model_path, dtype)
+            if not model.is_multilingual:
+                return None
+            mel = log_mel_spectrogram(speech, n_mels=model.dims.n_mels, padding=N_SAMPLES)
+            segment = pad_or_trim(mel, N_FRAMES, axis=-2).astype(dtype)
+            _tokens, probs = model.detect_language(segment)
+            return {str(code): float(p) for code, p in probs.items()}
+        except Exception:
+            logger.debug("MLX language detection failed; using the fallback", exc_info=True)
+            return None
+
     def _transcribe(
-        self, audio: AudioChunk, *, vad_filter: bool, hint: dict[str, str]
+        self,
+        audio: AudioChunk,
+        *,
+        vad_filter: bool,
+        hint: dict[str, str],
+        confirm_pass: bool = False,
     ) -> TranscriptionResult:
         if not self._loaded or self._model_path is None:
             return EmptyResult()
         samples = np.asarray(audio, dtype=np.float32)
-        if vad_filter:
+        selector = self._languages
+        detects = selector.policy.detects and not confirm_pass
+        speech: np.ndarray | None = None
+        if vad_filter or detects:
             # mlx-whisper has no VAD: pre-trim with the Silero VAD bundled in
             # faster-whisper (always installed as the fallback engine), the
-            # same silence-hallucination guard as the CPU path.
+            # same silence-hallucination guard as the CPU path. Language
+            # detection measures (and listens to) the same speech.
             from faster_whisper.vad import get_speech_timestamps
 
-            samples = keep_speech(samples, get_speech_timestamps(samples))
+            speech = keep_speech(samples, get_speech_timestamps(samples))
+        if vad_filter and speech is not None:
+            samples = speech
             if samples.size == 0:
                 # Same as faster-whisper's vad_filter on silence: an empty
                 # Transcript (no segments, so unknown confidence; no speech).
                 return Transcript("", confidence=None, speech_duration_s=0.0)
 
+        if confirm_pass:
+            # The confirm pass re-transcribes the previous pass's audio: reuse
+            # that pass's language (#273).
+            language = selector.confirm_pass_language()
+        elif not detects or speech is None:
+            language = selector.choose(None, None).language
+        else:
+            duration = speech.size / 16_000
+            probabilities = (
+                self._detect_probabilities(speech)
+                if selector.needs_detection(duration)
+                else None
+            )
+            language = selector.choose(probabilities, duration).language
+
         import mlx_whisper
 
         kwargs: dict[str, Any] = {
             "path_or_hf_repo": self._model_path,
-            "language": self._language,
+            "language": language,
             "fp16": self._fp16,
             "verbose": None,
             **hint,
