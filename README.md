@@ -240,7 +240,7 @@ Right-click the tray icon (Windows) or click the menu-bar icon (macOS) for:
 - **Global hotkey** — activate from any window; push-to-talk or hands-free toggle.
 - **On-device transcription** — Faster-Whisper, GPU-accelerated on NVIDIA and, via mlx-whisper, on Apple-Silicon Macs (macOS 14+); CPU elsewhere.
 - **Offline after setup** — the model downloads once on first run; every dictation after that needs no network.
-- **Smart paste** — saves and restores your clipboard and window focus around each paste, and never clutters clipboard history. The whole clipboard survives a dictation — screenshots, files copied in Explorer or Finder, rich text and HTML — except very large contents (over 64 MB), where only the text is kept.
+- **Smart paste** — saves and restores your clipboard and window focus around each paste, and never clutters clipboard history. On Windows the whole clipboard survives a dictation — screenshots, files copied in Explorer, rich text and HTML — except very large contents (over 64 MB), where only the text is kept. (On macOS only clipboard **text** is preserved yet; images and copied files are not.)
 - **Trigger Words** — rewrite the last paste in place via a local Ollama model.
 - **Custom vocabulary & replacements** — bias recognition toward your jargon, and rewrite words deterministically (see [Customising](#customising)).
 - **Overlay pill** — corner indicator with a live waveform; encodes recording phase by colour.
