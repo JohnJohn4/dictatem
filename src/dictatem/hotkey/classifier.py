@@ -106,12 +106,20 @@ class HotkeyClassifier:
         # Mouse buttons whose DOWN was suppressed; their matching UP is
         # suppressed too, to keep the down/up pair balanced (ADR-0020).
         self._suppressed_mouse_down: set[Key] = set()
-        # --- Win+Alt menu/Start neutralizing keystroke (#171) ---
-        # Set per key-up: whether the hook should inject a neutralizing keystroke
-        # after this release (read via ``pending_mask``). The native layer taps a
-        # *generic* Ctrl, which feeds back as ``Key.OTHER`` (inert here, exactly
-        # like the paste rail's Ctrl+V), so it never perturbs the combo — even a
-        # Ctrl-containing one — and no guard against that is needed.
+        # --- Alt/Win menu/Start mask (#171, #177) ---
+        # Per side-effect key (Alt/Meta) currently down: whether its press
+        # session is still "lone" (no non-combo keyboard key went down since it
+        # did), and whether the hotkey combo was held at some point during that
+        # session (a Dictatem session — only those are masked, so a user's own
+        # lone Alt still opens the menu bar). Decided at THAT key's own key-up
+        # and read via ``pending_mask``.
+        #
+        # The native mask is injected with Dictatem's injection tag, and the
+        # Windows hook drops tagged events before they reach ``process_event``
+        # (``win32_keymap.is_own_injection``) — so neither the mask nor the
+        # replayed key-up nor the paste rail's Ctrl+V can perturb the combo.
+        self._session_lone: dict[Key, bool] = {}
+        self._session_dictated: set[Key] = set()
         self._pending_mask = False
 
     def set_active(self, active: bool) -> None:
@@ -125,17 +133,23 @@ class HotkeyClassifier:
 
     @property
     def pending_mask(self) -> bool:
-        """Whether the just-processed event should be followed by a neutralizing
-        keystroke (#171).
+        """Whether the just-processed KEY-UP must be swallowed and replayed behind
+        a mask key (#171, #177).
 
         A lone Alt-up activates the menu bar and a lone Win-up pops the Start
-        menu; on a staggered Win+Alt chord release this can move the caret and
-        misfire the next paste. When releasing a combo modifier from an *armed*
-        dictation while another **side-effect** modifier (Alt/Meta) is still
-        held, the daemon injects an innocuous Ctrl tap to mark that still-held
-        modifier's key session as "not lone", so its eventual release no longer
-        triggers the OS side-effect. Reflects only the most recent
-        ``process_event`` call (reset at its start)."""
+        menu, which steals keyboard focus so the next Ctrl+V lands nowhere. True
+        when *this* event is the key-up of a combo Alt/Meta key whose press
+        session (a) saw the hotkey combo held — a Dictatem session, armed or
+        just ended — and (b) is still lone (no non-combo keyboard key went down
+        during it). The native hook then swallows the key-up and re-emits
+        ``[mask down, mask up, same key-up]`` so the OS sees the session as not
+        lone. Deciding at the key's own key-up (rather than when the combo
+        breaks) is what makes it robust to both a fast tap — whose key-ups are
+        already queued together — and a long-delayed second release (#177).
+
+        Conservative on purpose: masking a session the OS wouldn't have treated
+        as lone is harmless (the mask key is unassigned), whereas missing one
+        pops the menu. Reflects only the most recent ``process_event`` call."""
         return self._pending_mask
 
     def process_event(
@@ -161,12 +175,17 @@ class HotkeyClassifier:
     def _on_key_down(
         self, key: Key, timestamp_ms: int
     ) -> tuple[HookDecision, HotkeyEvent | None]:
+        self._track_session_on_key_down(key)
         if key in self._keys_down:
             return HookDecision.PASS_THROUGH, None
 
         was_combo = self.combo_held
         self._keys_down.add(key)
         is_combo = self.combo_held
+        if key in SIDE_EFFECT_KEYS and self._is_trigger_button(key):
+            self._session_lone[key] = True
+        if is_combo:
+            self._mark_sessions_dictated()
 
         if not was_combo and is_combo:
             self._combo_pressed_at = timestamp_ms
@@ -212,10 +231,11 @@ class HotkeyClassifier:
             self._suppressed_mouse_down.discard(key)
             mouse_decision = HookDecision.SUPPRESS
 
-        # Decide the neutralizing keystroke for this release (#171): only when
-        # THIS release breaks a held combo and a side-effect modifier is still
-        # down (about to become lone).
-        self._pending_mask = self._compute_keyup_mask(key, was_combo, is_combo)
+        # Decide the menu/Start mask for this release (#171/#177) at the
+        # side-effect key's OWN key-up, then close its session.
+        self._pending_mask = self._compute_keyup_mask(key)
+        self._session_lone.pop(key, None)
+        self._session_dictated.discard(key)
 
         if was_combo and not is_combo and self._combo_pressed_at is not None:
             pressed_at = self._combo_pressed_at
@@ -231,35 +251,36 @@ class HotkeyClassifier:
 
         return mouse_decision, None
 
-    def _compute_keyup_mask(
-        self, released_key: Key, was_combo: bool, is_combo: bool
-    ) -> bool:
-        """Whether releasing *released_key* should trigger a neutralizing tap (#171).
+    def _compute_keyup_mask(self, released_key: Key) -> bool:
+        """Whether *released_key*'s key-up must be masked (see ``pending_mask``).
 
-        Emit one only when this release **breaks** a held combo (``was_combo and
-        not is_combo``) while a **side-effect** modifier (Alt/Meta) is still held:
-        that still-held key is about to become lone, so a Ctrl tap now (while it is
-        still down) marks its session "not lone" and stops its eventual release
-        activating the menu bar / Start menu. Gating on the *break* — not merely
-        "a side-effect key is still down" — means releasing one side of a doubled
-        modifier mid-hold (combo still held) injects nothing. Only keyboard combo
-        modifiers mask: a mouse release has no menu side-effect and its hook
-        discards the flag anyway."""
-        if not (was_combo and not is_combo):
+        Only a configured Alt/Meta combo key, whose session was a Dictatem
+        session (combo held during it) and is still lone. Mouse buttons and
+        Ctrl/Shift never mask: they have no lone-release side-effect."""
+        if released_key not in SIDE_EFFECT_KEYS:
             return False
-        if not self._is_combo_keyboard_modifier(released_key):
+        if not self._is_trigger_button(released_key):
             return False
-        return self._side_effect_combo_key_still_down()
-
-    def _is_combo_keyboard_modifier(self, key: Key) -> bool:
-        """True if *key* is a configured combo modifier that is a keyboard key
-        (not a mouse button)."""
-        return key not in MOUSE_KEYS and self._is_trigger_button(key)
-
-    def _side_effect_combo_key_still_down(self) -> bool:
-        """True if a configured Alt/Meta combo key is still held — the key whose
-        eventual lone release we are pre-neutralizing."""
-        return any(
-            key in SIDE_EFFECT_KEYS and self._is_trigger_button(key)
-            for key in self._keys_down
+        return released_key in self._session_dictated and self._session_lone.get(
+            released_key, False
         )
+
+    def _track_session_on_key_down(self, key: Key) -> None:
+        """A non-combo keyboard key going down (including auto-repeat, and every
+        ``Key.OTHER`` — which aggregates all unmapped keys) ends the loneness of
+        every Alt/Meta session in progress: the OS won't fire the menu/Start
+        side-effect on their release (e.g. Alt+Tab mid-hold). Combo modifiers
+        and mouse buttons deliberately do NOT break loneness — whether the OS
+        counts them is uncertain, and over-masking is harmless."""
+        if key in MOUSE_KEYS or self._is_trigger_button(key):
+            return
+        for held in self._session_lone:
+            self._session_lone[held] = False
+
+    def _mark_sessions_dictated(self) -> None:
+        """The combo is held: every Alt/Meta combo key down now is in a Dictatem
+        session, until its own key-up (so a long-delayed second release is still
+        masked, #177)."""
+        for held in self._keys_down:
+            if held in SIDE_EFFECT_KEYS and self._is_trigger_button(held):
+                self._session_dictated.add(held)

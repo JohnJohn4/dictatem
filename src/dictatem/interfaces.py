@@ -101,6 +101,17 @@ class KeystrokeSender(Protocol):
         """
         ...
 
+    def held_modifiers(self) -> frozenset[str]:
+        """Return the modifier keys logically down right now.
+
+        Names come from ``{"alt", "win", "shift", "ctrl"}``; the set is empty
+        when none is held. The paste pipeline polls this before injecting
+        anything, so a still-held hotkey can't turn Ctrl+V into Ctrl+Alt+V
+        (#269). An adapter whose injected events carry explicit modifier flags
+        (macOS) may always return an empty set.
+        """
+        ...
+
 
 @runtime_checkable
 class ForegroundTracker(Protocol):

@@ -73,6 +73,19 @@ class MacKeystrokeSender:
         except Exception:
             logger.error("Error checking the Accessibility grant", exc_info=True)
 
+    def held_modifiers(self) -> frozenset[str]:
+        """Always "none held" on macOS (#269).
+
+        Unlike Win32 SendInput, every CGEvent this adapter posts carries an
+        EXPLICIT flag set (``CGEventSetFlags``: Command only for the paste,
+        0 for backspaces/text), so a physically held Option/Control/Shift does
+        not leak into the injected keystroke. Polling
+        ``CGEventSourceFlagsState`` would only add a wait (and an untested
+        PyObjC call on the paste path) for no correctness gain, so the paste
+        pipeline's release wait is a deliberate no-op here.
+        """
+        return frozenset()
+
     def send_paste(self) -> None:
         self._check_access()
         # Synthetic Cmd+V. The Command flag must be set on BOTH the down and

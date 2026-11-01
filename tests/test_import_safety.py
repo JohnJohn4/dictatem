@@ -44,6 +44,12 @@ DICTATEM_MODULES = [
     "dictatem.logpaths",
     "dictatem.paste",
     "dictatem.paste.pipeline",
+    # Held-modifier wait before injecting a paste (#269): pure, injected I/O.
+    "dictatem.paste.modifier_wait",
+    # AppUserModelID decisions (toast attribution); winreg lives in the adapter.
+    "dictatem.process.app_identity",
+    # Pure VK map + own-injection / masked-replay decisions (#171/#177).
+    "dictatem.hotkey.win32_keymap",
     # Pure pasteboard-type mapping for the macOS clipboard adapter (#244).
     "dictatem.paste.mac_pasteboard_types",
     "dictatem.state",

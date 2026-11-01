@@ -556,22 +556,23 @@ class TestHotkeyBridgeMouse:
 
 
 class TestHotkeyBridgeMask:
-    """The keyboard hook learns whether to inject a neutralizing keystroke from
-    enqueue_key_event's return (#171). The mouse path never masks.
+    """The keyboard hook learns whether to swallow-and-replay a lone Alt/Win
+    key-up behind the mask key from enqueue_key_event's return (#171/#177).
+    The mouse path never masks.
     """
 
-    def test_enqueue_returns_mask_on_staggered_win_alt_release(self) -> None:
+    def test_enqueue_returns_mask_for_each_lone_win_alt_release(self) -> None:
         classifier = _clf.HotkeyClassifier(tap_threshold_ms=200)  # win+alt default
         bridge = _HotkeyBridge(
             classifier=classifier, callback=_EventCollector().on_hotkey_event
         )
         bridge.enqueue_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_DOWN, 0)
         bridge.enqueue_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_DOWN, 10)
-        # Win released first while Alt is still held → mask; the final Alt-up → no.
+        # Each side-effect key is masked at its OWN key-up, in either order.
         mask_win = bridge.enqueue_key_event(_clf.Key.LEFT_META, _clf.KeyAction.KEY_UP, 500)
         mask_alt = bridge.enqueue_key_event(_clf.Key.LEFT_ALT, _clf.KeyAction.KEY_UP, 520)
         assert mask_win is True
-        assert mask_alt is False
+        assert mask_alt is True
 
     def test_enqueue_key_down_never_masks(self) -> None:
         classifier = _clf.HotkeyClassifier(tap_threshold_ms=200)

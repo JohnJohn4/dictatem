@@ -17,6 +17,23 @@ class ClipboardContentionError(Exception):
     """Raised when the clipboard cannot be opened after all retry attempts."""
 
 
+class ModifiersHeldError(Exception):
+    """Raised by the paste pipeline when a modifier key (Alt, Win, Shift, Ctrl)
+    is still held after the bounded release wait, BEFORE anything is injected.
+
+    Nothing reached the target (no clipboard write, no keystrokes, no focus
+    restore), so the caller can hold the dictation for recovery. ``held`` names
+    the modifiers still down, for logging only.
+    """
+
+    def __init__(self, held: frozenset[str], waited_s: float) -> None:
+        super().__init__(
+            f"modifier(s) still held after {waited_s:.2f}s: {', '.join(sorted(held))}"
+        )
+        self.held = held
+        self.waited_s = waited_s
+
+
 class AudioCaptureError(Exception):
     """Raised when audio capture fails (mic disconnected, permission denied, etc.)."""
 

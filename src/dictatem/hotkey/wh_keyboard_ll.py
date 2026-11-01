@@ -31,7 +31,11 @@ import ctypes
 import ctypes.wintypes
 
 from dictatem.hotkey.classifier import KeyAction
-from dictatem.hotkey.win32_keymap import vk_to_key
+from dictatem.hotkey.win32_keymap import (
+    is_own_injection,
+    swallow_after_masked_replay,
+    vk_to_key,
+)
 
 # The pointer-sized WPARAM/LPARAM, HOOKPROC and the hook thread live in the
 # shared plumbing module (#245); _WPARAM/_LPARAM are re-exported for tests.
@@ -71,15 +75,17 @@ class WHKeyboardLLHook:
     def __init__(
         self,
         on_key_event: Callable[[Key, KeyAction, int], bool],
-        inject_mask: Callable[[], None] | None = None,
+        replay_masked_release: Callable[[int, int, int], bool] | None = None,
         *,
         on_install_failed: Callable[[int], None] | None = None,
     ) -> None:
         self._on_key_event = on_key_event
-        # Optional neutralizing-keystroke injector (#171): called after a key-up
-        # for which the handler returns True, so a lone Win/Alt release on a chord
-        # cannot activate the menu bar / Start menu. None disables masking.
-        self._inject_mask = inject_mask
+        # Optional menu-mask replayer (#171/#177): called as (vk, scan, flags)
+        # for a key-up the handler flags (returns True) — a lone Alt/Win release
+        # ending a Dictatem combo session. It re-emits [mask, mask-up, key-up];
+        # only if it reports full success is the original key-up swallowed, so a
+        # key is never left stuck. None disables masking.
+        self._replay_masked_release = replay_masked_release
         self._runner = LowLevelHookThread(
             WH_KEYBOARD_LL, label="keyboard", on_install_failed=on_install_failed
         )
@@ -98,10 +104,18 @@ class WHKeyboardLLHook:
         # SAFETY: always call through to the next hook, even on errors.
         # Returning without calling CallNextHookEx swallows the key
         # system-wide, rendering the keyboard unusable until the process
-        # exits.
+        # exits. The ONE exception is a masked Alt/Win key-up, swallowed only
+        # after an identical key-up was successfully re-injected (#171/#177).
         try:
             if n_code >= 0:
                 kb = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                extra = ctypes.cast(kb.dwExtraInfo, ctypes.c_void_p).value
+                if is_own_injection(kb.flags, extra):
+                    # Our own Ctrl+V / masked key-up replay / typed text: never
+                    # let it drive the classifier (an injected generic Ctrl is
+                    # reported as VK_LCONTROL, so with Ctrl in the combo it would
+                    # fake a hotkey press/release). Still passed through below.
+                    return call_next_hook(n_code, w_param, l_param)
                 vk = kb.vkCode
                 is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
                 action = KeyAction.KEY_DOWN if is_down else KeyAction.KEY_UP
@@ -112,13 +126,19 @@ class WHKeyboardLLHook:
                 # spurious HOLD_START → PTT_REC → instant stop.
                 timestamp_ms = int(time.monotonic() * 1000)
                 mask = self._on_key_event(vk_to_key(vk), action, timestamp_ms)
-                # Neutralizing keystroke for a lone Win/Alt chord release
-                # (#171). Injected here (the other combo modifier is still
-                # down, so the injected key lands within its key session) and
-                # passed through to the system below. Best-effort: an injection
-                # hiccup must never block the real key from reaching the app.
-                if mask and self._inject_mask is not None:
-                    self._inject_mask()
+                # Menu/Start mask for a lone Alt/Win release (#171/#177): swallow
+                # THIS key-up and replay it behind the mask key — but only once
+                # the replay (including the key-up itself) was fully injected.
+                replay = self._replay_masked_release
+                if (
+                    mask
+                    and not is_down
+                    and replay is not None
+                    and swallow_after_masked_replay(
+                        lambda: replay(vk, kb.scanCode, kb.flags)
+                    )
+                ):
+                    return 1
         except Exception:
             logger.error("Error in keyboard hook callback", exc_info=True)
 
