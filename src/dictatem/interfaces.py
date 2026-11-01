@@ -114,6 +114,24 @@ class KeystrokeSender(Protocol):
 
 
 @runtime_checkable
+class InjectionDiagnostics(Protocol):
+    """Optional KeystrokeSender extension: log one diagnostic line per injection.
+
+    The paste pipeline calls :meth:`report_injection` right after a regular
+    paste's Ctrl+V and after a Trigger Fire's typed text (#269). Implemented
+    only by the Windows adapter; senders without it are simply not asked.
+    """
+
+    def report_injection(self, target_id: int, kind: str) -> None:
+        """Log window/input state for the injection just sent into *target_id*.
+
+        *kind* is ``"paste"`` or ``"trigger-fire"``. Must log no dictated text.
+        Best-effort: the pipeline also guards it, so it can never break a paste.
+        """
+        ...
+
+
+@runtime_checkable
 class ForegroundTracker(Protocol):
     """Track and restore the foreground identity (``target_id``).
 

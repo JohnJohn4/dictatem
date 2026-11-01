@@ -323,3 +323,36 @@ def test_foreign_injection_still_reaches_handler() -> None:
         cb(0, WM_KEYDOWN, ctypes.addressof(struct))
 
     assert len(received) == 1
+
+
+# ── Passive observer feeding the paste rail's input timeline (#269) ─────────
+
+
+def _observed_run(struct: KBDLLHOOKSTRUCT, w_param: int, observer, handler=None):  # type: ignore[no-untyped-def]
+    received: list[object] = []
+    with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
+        mock_u32.CallNextHookEx.return_value = 0
+        hook = WHKeyboardLLHook(
+            handler or (lambda *a: received.append(a) or False), observe_key=observer
+        )
+        result = hook._ll_callback(0, w_param, ctypes.addressof(struct))
+    return result, mock_u32.CallNextHookEx.call_count, received
+
+
+def test_observer_sees_user_and_own_events() -> None:
+    seen: list[tuple[int, bool, bool]] = []
+    _observed_run(_make_struct(VK_LWIN), WM_KEYUP, lambda *a: seen.append(a))
+    _observed_run(
+        _tagged_struct(VK_LWIN, DICTATEM_INJECTION_TAG), WM_KEYUP, lambda *a: seen.append(a)
+    )
+    _observed_run(_make_struct(VK_A), WM_SYSKEYDOWN, lambda *a: seen.append(a))
+    assert seen == [(VK_LWIN, False, False), (VK_LWIN, False, True), (VK_A, True, False)]
+
+
+def test_observer_failure_does_not_affect_the_key() -> None:
+    def boom(*_a: object) -> None:
+        raise RuntimeError("observer blew up")
+
+    result, next_calls, received = _observed_run(_make_struct(VK_A), WM_KEYDOWN, boom)
+    assert len(received) == 1  # the classifier still got the key
+    assert next_calls == 1 and result != 1

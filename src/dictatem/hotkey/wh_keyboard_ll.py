@@ -78,6 +78,7 @@ class WHKeyboardLLHook:
         replay_masked_release: Callable[[int, int, int], bool] | None = None,
         *,
         on_install_failed: Callable[[int], None] | None = None,
+        observe_key: Callable[[int, bool, bool], None] | None = None,
     ) -> None:
         self._on_key_event = on_key_event
         # Optional menu-mask replayer (#171/#177): called as (vk, scan, flags)
@@ -86,6 +87,12 @@ class WHKeyboardLLHook:
         # only if it reports full success is the original key-up swallowed, so a
         # key is never left stuck. None disables masking.
         self._replay_masked_release = replay_masked_release
+        # Optional passive observer (#269): called as (vk, is_down, own_injection)
+        # for EVERY event, including Dictatem's own tagged injections, so the
+        # paste rail knows when the user last released a modifier and when a
+        # masked key-up replay has come back through the hook. Must be cheap;
+        # its failures are contained and never affect the key.
+        self._observe_key = observe_key
         self._runner = LowLevelHookThread(
             WH_KEYBOARD_LL, label="keyboard", on_install_failed=on_install_failed
         )
@@ -110,14 +117,16 @@ class WHKeyboardLLHook:
             if n_code >= 0:
                 kb = ctypes.cast(l_param, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
                 extra = ctypes.cast(kb.dwExtraInfo, ctypes.c_void_p).value
-                if is_own_injection(kb.flags, extra):
+                vk = kb.vkCode
+                is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
+                own = is_own_injection(kb.flags, extra)
+                self._notify_observer(vk, is_down, own)
+                if own:
                     # Our own Ctrl+V / masked key-up replay / typed text: never
                     # let it drive the classifier (an injected generic Ctrl is
                     # reported as VK_LCONTROL, so with Ctrl in the combo it would
                     # fake a hotkey press/release). Still passed through below.
                     return call_next_hook(n_code, w_param, l_param)
-                vk = kb.vkCode
-                is_down = w_param in (WM_KEYDOWN, WM_SYSKEYDOWN)
                 action = KeyAction.KEY_DOWN if is_down else KeyAction.KEY_UP
                 # Use time.monotonic, not kb.time. kb.time is
                 # GetTickCount-derived; the Qt tick that drives
@@ -143,3 +152,12 @@ class WHKeyboardLLHook:
             logger.error("Error in keyboard hook callback", exc_info=True)
 
         return call_next_hook(n_code, w_param, l_param)
+
+    def _notify_observer(self, vk: int, is_down: bool, own: bool) -> None:
+        observe = self._observe_key
+        if observe is None:
+            return
+        try:
+            observe(vk, is_down, own)
+        except Exception:
+            logger.debug("Keyboard hook observer failed", exc_info=True)
