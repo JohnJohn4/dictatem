@@ -71,7 +71,7 @@ class TestSelectBackend:
 
 class TestBuildTranscriber:
     def _build(self, sel: BackendSelection) -> TranscriberBackend:
-        return build_transcriber(sel, language=None, vad_filter=True, vocabulary=[])
+        return build_transcriber(sel, vad_filter=True, vocabulary=[])
 
     def test_faster_whisper_selection_builds_an_unloaded_faster_whisper_backend(
         self,
@@ -104,7 +104,6 @@ class TestBuildTranscriber:
             sel = select_backend(_resolved(device, "small", "int8"))
             backend = build_transcriber(
                 sel,
-                language=None,
                 vad_filter=True,
                 vocabulary=[],
                 on_fallback=lambda _reason: None,

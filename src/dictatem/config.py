@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+from dictatem.transcribe.language import (
+    is_valid_language_code,
+    is_valid_language_setting,
+    normalise_language_code,
+    normalise_language_list,
+)
 from dictatem.transform.alias import normalise_alias
 
 if TYPE_CHECKING:
@@ -67,6 +73,10 @@ def _normalise_aliases(aliases: tuple[str, ...]) -> tuple[str, ...]:
 # Fields whose valid value is normalised before use: section -> key -> normaliser.
 _FIELD_NORMALISERS: dict[str, dict[str, Callable[[Any], Any]]] = {
     "trigger_words": {"paste_aliases": _normalise_aliases},
+    "model": {
+        "language": normalise_language_code,
+        "languages": normalise_language_list,
+    },
 }
 
 
@@ -81,7 +91,12 @@ class ModelConfig:
     name: str = "large-v3-turbo"
     compute_type: str = "float16"
     device: str = "cuda"
+    # Transcription language (#273). Unset = English, no detection; a Whisper
+    # code pins it; "auto" detects any language. A non-empty ``languages`` (the
+    # Preferred Languages) wins and detects only among them. The
+    # sure-or-fall-back rule lives in dictatem.transcribe.language.
     language: str | None = None
+    languages: tuple[str, ...] = ()
     vad_filter: bool = True
     idle_unload_minutes: int = 30
     min_transcription_chars: int = 3
@@ -163,6 +178,24 @@ _COMMENTED_WHEN_DEFAULT: dict[str, str] = {
         '# ("haste" -> paste). Uncomment and set fuzzy_matching = false for\n'
         "# exact-only matching, or list words to treat as `paste` in paste_aliases\n"
         '# (e.g. paste_aliases = ["haste"]).'
+    ),
+}
+
+
+# Empty list settings left out of a written config (so the default stays
+# "unset"); _SECTION_EXAMPLES shows them commented-out instead.
+_OMITTED_WHEN_EMPTY: frozenset[tuple[str, str]] = frozenset({("model", "languages")})
+
+
+# Commented examples appended to a written section while *predicate(section)*
+# holds: discoverable settings the app never pins.
+_SECTION_EXAMPLES: dict[str, tuple[Callable[[Any], bool], str]] = {
+    "model": (
+        lambda model: model.language is None and not model.languages,
+        "# Transcription language: English unless set. Pin another Whisper code\n"
+        '# (language = "zh"), detect any language (language = "auto"), or detect\n'
+        "# only among your Preferred Languages (this wins over `language`):\n"
+        '# languages = ["en", "zh"]',
     ),
 }
 
@@ -537,6 +570,10 @@ def _value_is_valid(section: str, key: str, value: Any) -> bool:
         return value in VALID_OVERLAY_POSITIONS
     if section == "logging" and key == "level":
         return value.lower() in VALID_LOG_LEVELS
+    if section == "model" and key == "language":
+        return is_valid_language_setting(value)
+    if section == "model" and key == "languages":
+        return all(is_valid_language_code(v) for v in value)
     return True
 
 
@@ -555,7 +592,12 @@ def _serialize_toml(cfg: Config) -> str:
             value = getattr(section_obj, f.name)
             if value is None:
                 continue
+            if (section_name, f.name) in _OMITTED_WHEN_EMPTY and not value:
+                continue
             lines.append(f"{prefix}{f.name} = {_toml_value(value)}")
+        example = _SECTION_EXAMPLES.get(section_name)
+        if example is not None and example[0](section_obj):
+            lines.append(example[1])
         lines.append("")
     return "\n".join(lines)
 

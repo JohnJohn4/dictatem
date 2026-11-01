@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
     from dictatem.hardware.resolver import RuntimeFallbackReason
     from dictatem.interfaces import TranscriberBackend
+    from dictatem.transcribe.language import LanguageSelector
     from dictatem.types import ResolvedHardware
 
 BackendKind = Literal["faster-whisper", "mlx"]
@@ -106,7 +107,7 @@ def cpu_fallback_selection() -> BackendSelection:
 def build_transcriber(
     selection: BackendSelection,
     *,
-    language: str | None,
+    language_selector: LanguageSelector | None = None,
     vad_filter: bool,
     vocabulary: list[str],
     on_fallback: Callable[[RuntimeFallbackReason], None] | None = None,
@@ -122,6 +123,9 @@ def build_transcriber(
     :func:`cpu_fallback_selection` engine, re-runs the same audio there, and
     calls *on_fallback* once. ``cuda`` / ``cpu`` are built exactly as before
     (no composite, and *on_fallback* is unused).
+
+    *language_selector* (#273) is shared by the MLX engine and its CPU
+    fallback, so the session's language state survives an engine switch.
     """
     if selection.kind == "mlx":
         from dictatem.transcribe.fallback import FallbackTranscriber
@@ -131,13 +135,13 @@ def build_transcriber(
             primary=MlxBackend(
                 model_name=selection.model,
                 compute_type=selection.compute_type,
-                language=language,
+                language_selector=language_selector,
                 vad_filter=vad_filter,
                 vocabulary=vocabulary,
             ),
             fallback_factory=lambda: build_transcriber(
                 cpu_fallback_selection(),
-                language=language,
+                language_selector=language_selector,
                 vad_filter=vad_filter,
                 vocabulary=vocabulary,
             ),
@@ -150,7 +154,7 @@ def build_transcriber(
         model_name=selection.model,
         compute_type=selection.compute_type,
         device=selection.device,
-        language=language,
+        language_selector=language_selector,
         vad_filter=vad_filter,
         vocabulary=vocabulary,
     )

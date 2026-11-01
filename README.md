@@ -295,6 +295,8 @@ tap_threshold_ms = 200          # below this = toggle tap; above = push-to-talk 
 name = "large-v3-turbo"         # auto-picked from your hardware on first run
 device = "cuda"                 # cuda, cpu, or mlx (Apple GPU; see macOS above)
 idle_unload_minutes = 30        # free the model's memory after this much idle time
+# language = "zh"               # unset = English; a Whisper code pins it; "auto" detects
+# languages = ["en", "zh"]      # Preferred Languages: detect only among these
 
 [behaviour]
 silence_timeout_s = 60          # auto-stop a toggle recording after this much silence
@@ -314,6 +316,30 @@ paste_aliases = []              # extra words that mean `paste`, e.g. ["haste"]
 
 `[audio].sample_rate` is fixed at `16000` (the transcriber needs 16 kHz). Any
 other value is reported and ignored.
+
+### Language
+
+**Dictatem transcribes in English unless you tell it otherwise.** (Earlier
+builds guessed the language on every clip, and a one-word clip like "Summer."
+could come out in French or Greek.) Under `[model]`:
+
+| Setting | What happens |
+|---|---|
+| no `language` key (default) | English, no detection. |
+| `language = "zh"` | Always that language. Use a [Whisper language code](https://github.com/openai/whisper/blob/main/whisper/tokenizer.py) (`en`, `zh`, `de`, `ja`, `yue`, …). |
+| `language = "auto"` | Detect the language of each clip, across every language. |
+| `languages = ["en", "zh"]` | Your **Preferred Languages**: detect, but choose only among these. Takes precedence over `language`. |
+
+Detection is **sure or fall back**. A clip with less than about 1.5 s of speech
+is never detected, and a detection that is less than 60% sure (counted only
+among your Preferred Languages, if set) isn't trusted. Either way the clip uses
+the fallback: the last language confidently detected this session (if it's
+allowed), else the first of your Preferred Languages, else (for `"auto"`) your
+Windows or macOS display language, else English. So for one-word clips and
+short Trigger Words, put the language you use most first in `languages`. An
+unknown code is reported at startup like any other config problem and the
+default is used. The log records each clip's chosen language and why (the code
+only, never the text).
 
 **Config problems are reported, and Dictatem never changes your file.** Every
 value is checked against its type. A whole number is fine for a decimal setting

@@ -252,6 +252,22 @@ recognition hints: they influence how audio is *heard*, and do not by themselves
 rewrite the transcribed text (contrast [Replacement](#replacement)). Keeping the
 list focused matters — an over-long list can degrade recognition.
 
+### Preferred Languages
+
+The small set of languages a user dictates in, declared as
+`[model].languages = ["en", "zh"]` (#273). When set, the transcription language
+of each clip is **detected only among them** (Whisper's per-language
+probabilities restricted to the set and renormalised); it takes precedence over
+`[model].language`. Detection is **sure or fall back**: a clip with too little
+speech (under 1.5 s) is never detected, and a winner below the confidence
+threshold (0.6) is not trusted, so the clip uses the **fallback language**: the
+last language confidently detected this session if allowed, else the first
+Preferred Language (else, for `language = "auto"`, the OS display language, else
+English). Without Preferred Languages or `language`, Dictatem transcribes in
+English with no detection. The decision is pure (`dictatem.transcribe.language`);
+the engines only gather probabilities. The [Confirm pass](#confirm-pass) reuses
+the language of the pass it re-checks.
+
 ### Replacement
 
 A **deterministic, post-transcription substitution** applied to regular

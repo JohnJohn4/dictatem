@@ -68,6 +68,7 @@ if TYPE_CHECKING:
     from dictatem.overlay.state import OverlayState
     from dictatem.permissions.mapper import MacPermission, PermissionGuidance
     from dictatem.state import StateMachine
+    from dictatem.transcribe.language import LanguageSelector
     from dictatem.transcribe.latency_monitor import LatencyMonitor
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
     from dictatem.transcribe.replacements import Replacement
@@ -2185,6 +2186,42 @@ def log_trigger_lexicon_warnings(
         )
 
 
+def _build_language_selector(
+    config: Config,
+    read_os_ui_language: Callable[[], str | None] | None = None,
+) -> LanguageSelector:
+    """The session's :class:`LanguageSelector` from ``[model]`` (#273).
+
+    The OS UI language is read only for ``language = "auto"`` without
+    Preferred Languages — the one mode whose fallback can reach it. Logs the
+    mode and codes once (configuration, not dictated content).
+    """
+    from dictatem.transcribe.language import AUTO, LanguageSelector, language_policy
+
+    model = config.model
+    os_ui: str | None = None
+    if not model.languages and model.language == AUTO:
+        if read_os_ui_language is None:
+            from dictatem.transcribe.os_language import read_os_ui_language as reader
+        else:
+            reader = read_os_ui_language
+        os_ui = reader()
+    policy = language_policy(model.language, model.languages, os_ui_language=os_ui)
+    if policy.pinned is not None:
+        logger.info("Transcription language: %s (pinned, no detection)", policy.pinned)
+    elif policy.preferred:
+        logger.info(
+            "Transcription language: detect among Preferred Languages %s",
+            ",".join(policy.preferred),
+        )
+    else:
+        logger.info(
+            "Transcription language: auto-detect (OS UI language %s)",
+            policy.os_ui_language or "unknown",
+        )
+    return LanguageSelector(policy)
+
+
 def startup_version_line(
     version: str | None, *, python_version: str, platform_name: str, machine: str
 ) -> str:
@@ -2433,9 +2470,10 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # the Apple-Silicon CPU row, and on_fallback queues one tray notification.
     # The lambda late-binds `daemon` (built below); it can only fire on a model
     # load or transcription, which never happen before the daemon exists.
+    language_selector = _build_language_selector(config)
     backend = build_transcriber(
         selection,
-        language=config.model.language,
+        language_selector=language_selector,
         vad_filter=config.model.vad_filter,
         vocabulary=vocabulary,
         on_fallback=lambda reason: daemon.on_transcriber_fallback(reason),
