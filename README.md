@@ -65,15 +65,14 @@ else, including the local Transform (Ollama) model. On an 8 GB Mac the smaller
 into `~/.dictatem/config.toml` once and never re-made, so an existing config
 keeps whatever it already says.
 
-**Apple GPU engine (beta, opt-in).** On **Apple Silicon with macOS 14 or
-later** you can also install the Apple GPU (MLX) transcription engine, which is
-much faster for the larger models and adds about **230 MB** to the download
-(torch, mlx, mlx-metal and friends). It is opt-in while it is being tested on
-real Macs: run the one-liner with `DICTATEM_APPLE_GPU=1` in front of `sh`
-(`… | DICTATEM_APPLE_GPU=1 sh`). Intel Macs and macOS 12/13 can't use it (its
-wheels need macOS 14+ on Apple Silicon) and always get the CPU set. The
-installer prints which engine set it chose. Re-running the installer later adds
-the engine without touching your config.
+On **Apple Silicon with macOS 14 or later**, the installer also installs the
+Apple GPU (MLX) transcription engine, which adds about **230 MB** to the
+download (torch, mlx, mlx-metal and friends). Intel Macs and macOS 12/13 skip
+it, because its wheels need macOS 14+ on Apple Silicon, and get the CPU set
+exactly as before. The installer prints which engine set it chose. To skip the
+GPU engine on a qualifying Mac, run the one-liner with
+`DICTATEM_NO_APPLE_GPU=1` in front of `sh` (`… | DICTATEM_NO_APPLE_GPU=1 sh`).
+Re-running the installer later adds the engine without touching your config.
 
 **Existing installs: opting into the Apple GPU.** A config written before the GPU
 engine arrived stays on the CPU. With the engine installed (re-run the

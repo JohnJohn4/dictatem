@@ -7,9 +7,8 @@ as the ``av`` pin in the runtime extra). Two layers keep that from happening:
 
 * the extra's own requirements are marker-guarded to darwin + arm64, so on any
   other platform the extra resolves to exactly the runtime extra; and
-* ``install.sh`` asks for the extra only when opted in with ``DICTATEM_APPLE_GPU=1``
-  on arm64 with macOS major >= 14 (a PEP 508 marker cannot express the OS
-  version). Opt-in until real-Mac QA (v0.7.0 owner decision).
+* ``install.sh`` asks for the extra only on arm64 with macOS major >= 14 (a PEP
+  508 marker cannot express the OS version), honouring ``DICTATEM_NO_APPLE_GPU``.
 
 Both layers are enforced here: the extra statically, the gate behaviourally by
 running the installer's own selection function under ``sh``.
@@ -107,12 +106,20 @@ _SH = shutil.which("sh")
 
 @pytest.mark.skipif(_SH is None, reason="needs a POSIX sh")
 class TestInstallShGate:
-    def _select(self, arch: str, version: str, opt_in: str | None = "1") -> str:
+    def _select(
+        self,
+        arch: str,
+        version: str,
+        opt_out: str | None = None,
+        legacy_opt_in: str | None = None,
+    ) -> str:
         assert _SH is not None
         script = f'{_gate_function()}\n{_FUNC} "$1" "$2"\n'
         env = {"PATH": "/usr/bin:/bin"}
-        if opt_in is not None:
-            env["DICTATEM_APPLE_GPU"] = opt_in
+        if opt_out is not None:
+            env["DICTATEM_NO_APPLE_GPU"] = opt_out
+        if legacy_opt_in is not None:
+            env["DICTATEM_APPLE_GPU"] = legacy_opt_in
         result = subprocess.run(
             [_SH, "-c", script, "gate", arch, version],
             capture_output=True,
@@ -134,13 +141,20 @@ class TestInstallShGate:
     def test_intel_mac_gets_runtime(self, version: str) -> None:
         assert self._select("x86_64", version) == "runtime"
 
-    def test_without_opt_in_apple_silicon_gets_runtime(self) -> None:
-        # v0.7.0: the Apple GPU engine is opt-in until real-Mac QA (#230-#233).
-        assert self._select("arm64", "15.3", opt_in=None) == "runtime"
+    def test_opt_out_forces_runtime(self) -> None:
+        assert self._select("arm64", "15.3", opt_out="1") == "runtime"
 
-    def test_opt_in_other_than_1_is_ignored(self) -> None:
-        assert self._select("arm64", "15.3", opt_in="") == "runtime"
-        assert self._select("arm64", "15.3", opt_in="yes") == "runtime"
+    def test_opt_out_other_than_1_is_ignored(self) -> None:
+        assert self._select("arm64", "15.3", opt_out="") == "apple-gpu"
+
+    @pytest.mark.parametrize("value", ["1", "0", ""])
+    def test_legacy_opt_in_is_a_no_op(self, value: str) -> None:
+        # v0.7.0's `DICTATEM_APPLE_GPU=1` opt-in must keep working in copied
+        # commands: it neither blocks the default nor overrides the opt-out.
+        assert self._select("arm64", "15.3", legacy_opt_in=value) == "apple-gpu"
+        assert self._select("x86_64", "15.3", legacy_opt_in=value) == "runtime"
+        assert self._select("arm64", "13.6", legacy_opt_in=value) == "runtime"
+        assert self._select("arm64", "15.3", opt_out="1", legacy_opt_in=value) == "runtime"
 
 
 class TestInstallShWiring:
