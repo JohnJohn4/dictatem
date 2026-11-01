@@ -430,5 +430,8 @@ Part 10 = #193/PR #211 via QA-only branch `qa/193-fake-old-version` (v0.6.0 + #2
 never merge), which now offers v0.7.0. **Not covered:** the opt-in real-engine contract
 run (`DICTATEM_REAL_ENGINES=1 uv run pytest tests/test_transcriber_contract.py -m
 real_engine`) needs a dev clone on the Mac — run it in a coordinator session with the
-tester, or ask them separately. When Parts 8–9 pass, make the `apple-gpu` extra
-default-on again (revert the opt-in in `install.sh` + `tests/test_apple_gpu_extra.py`).</sub>
+tester, or ask them separately. When Parts 8–9 pass, merge the draft PR that makes
+the `apple-gpu` extra default-on again (reverts the opt-in in `install.sh`,
+`tests/test_apple_gpu_extra.py` and the README; linked from #281). The Part 8 command
+stays valid: it is pinned to the v0.7.0 script, and later scripts ignore
+`DICTATEM_APPLE_GPU=1`.</sub>
