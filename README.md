@@ -12,7 +12,8 @@ flowchart LR
 ```
 
 Transcription is GPU-accelerated on Windows (NVIDIA) and on Apple-Silicon Macs
-with macOS 14+, and runs on the CPU elsewhere.
+with macOS 14+ (an opt-in beta engine, see [macOS](#macos)), and runs on the CPU
+elsewhere.
 
 **Jump to install → [Windows](#windows) · [macOS](#macos)**
 
@@ -54,7 +55,7 @@ transcription tier for your Mac
 |---|---|---|
 | Apple Silicon, macOS 14+, **12 GB or more** memory | `Apple-GPU` | Apple GPU (MLX), `large-v3-turbo` |
 | Apple Silicon, macOS 14+, under 12 GB (or memory unreadable) | `Apple-GPU-low` | Apple GPU (MLX), `small` |
-| Apple Silicon without the GPU engine (macOS 12/13, or opted out) | `Apple-Silicon` | CPU, `small` |
+| Apple Silicon without the GPU engine (macOS 12/13, or not opted in) | `Apple-Silicon` | CPU, `small` |
 | Intel | `CPU` | CPU, `base` |
 
 The memory split exists because the Apple GPU shares memory with everything
@@ -145,11 +146,11 @@ driven entirely by a global hotkey — **Win+Alt** on Windows, **Option+Command
 | Action | Gesture |
 |---|---|
 | **Push-to-talk** | **Hold** the hotkey, speak, release |
-| **Toggle record** | **Tap** the hotkey to start; tap again (or pause) to stop |
+| **Toggle record** | **Tap** the hotkey to start; tap again (or stay silent) to stop |
 | **Cancel** | Press **Esc** |
 
-A tap starts hands-free recording that auto-stops **and transcribes** after a
-stretch of silence (a long pause finishes your dictation rather than discarding
+A tap starts hands-free recording that auto-stops **and transcribes** after
+60 s of silence (`[behaviour].silence_timeout_s`; a long pause finishes your dictation rather than discarding
 it); a hold records only while held. Transcribed text is pasted into the focused
 window automatically. Press **Esc** to cancel without transcribing. While
 recording, a small **pill** appears in the corner of the active screen with a
@@ -173,8 +174,10 @@ flowchart LR
 ```
 
 Two triggers ship by default — **`polish`** (clean up filler and false starts)
-and **`summarize`** (condense to notes). This feature is **off until you set up
-[Ollama](#trigger-words-setup-ollama)** yourself. Add your own triggers by
+and **`summarize`** (condense to notes). This feature **needs
+[Ollama](#trigger-words-setup-ollama)**, which you set up yourself; until then a
+trigger word only shows a notification saying what's missing (set
+`[transform].enabled = false` to turn the feature off). Add your own triggers by
 dropping a markdown prompt file into `~/.dictatem/prompts/`.
 
 Trigger words tolerate small mishearings when said on their own: a quick
@@ -224,10 +227,11 @@ To rename a trigger word, edit the `aliases: [...]` line of its prompt file in
 
 ### Tray / menu-bar menu
 
-Right-click the icon for: **Start/Stop Recording**, **Copy last dictation**,
-**Preload / Unload Model**, **Open config file…**, **How to use Dictatem…** (a
-live in-app guide), **Check for updates…**, **Show Log**, **Restart**,
-**Quit**.
+Right-click the tray icon (Windows) or click the menu-bar icon (macOS) for:
+**Start recording** / **Stop recording**, **Copy last dictation**,
+**Preload model** / **Unload model**, **Start at login**, **Show log**,
+**Open config file…**, **How to use Dictatem…** (a live in-app guide),
+**Restart**, **Check for updates…**, **Quit**.
 
 ---
 
@@ -252,8 +256,8 @@ no accounts, and no background listener — audio is transcribed in memory and i
 **never written to disk**. Here is the *complete* list of times Dictatem touches
 the network:
 
-- **One-time model download** — the Faster-Whisper weights are fetched from
-  Hugging Face at setup / on your first dictation. After that, transcription is
+- **One-time model download** — the transcription model weights (Faster-Whisper,
+  or MLX on the Apple GPU) are fetched from Hugging Face at setup / on your first dictation. After that, transcription is
   fully offline.
 - **Manual update check** — only when you click **Check for updates…**
   in the tray; it asks `api.github.com` for the latest release number and sends
@@ -358,13 +362,14 @@ config file…**, then use **Restart**.
 Dictatem doesn't hold the model in memory at startup. The load **starts the
 instant you arm a dictation**, so it overlaps the seconds you spend talking — a
 short utterance hides it entirely. If you stop before it finishes, the pill shows
-a **"Loading…"** caption and transcribes automatically once ready (no need to
+a **"Loading Dict. Model…"** caption (**"Downloading model…"** during the
+first-run download) and transcribes automatically once ready (no need to
 press the hotkey again). After `[model].idle_unload_minutes` of inactivity the
 model **unloads** to free its memory (~3 GB of VRAM on a GPU) and reloads on your
 next dictation.
 
 Want an instant first response instead? Set `preload_model = true` under
-`[startup]`, raise `idle_unload_minutes`, or use **Preload Model** in the tray menu.
+`[startup]`, raise `idle_unload_minutes`, or use **Preload model** in the tray menu.
 
 ### Customising
 
@@ -393,8 +398,8 @@ one-time steps:
 3. **Pull the model** — `ollama pull gemma4:e2b` (or whatever you set in
    `[transform].model_name`). Confirm with `ollama list`.
 
-Until all three are done, firing a trigger leaves your document untouched and the
-overlay flashes a message telling you which step is missing.
+Until all three are done, firing a trigger leaves your document untouched, the
+pill flashes the error colour, and a notification tells you which step is missing.
 
 ---
 
@@ -428,7 +433,8 @@ uv tool uninstall dictatem  # removes the tool
 ```
 
 The same two steps apply on macOS (in Terminal) — step 1 also removes
-`~/Applications/Dictatem.app` and its LaunchAgent. Your config under
+`~/Applications/Dictatem.app` and its LaunchAgent, but it doesn't stop the
+running daemon there, so choose **Quit** from the menu-bar menu first. Your config under
 `~/.dictatem` is left untouched.
 
 ---
@@ -503,7 +509,8 @@ again before a manual re-install (the tray update re-detects instead).
 <details>
 <summary><strong>Trigger Words don't fire</strong></summary>
 
-Dictatem diagnoses this from Ollama's network response and flashes the cause:
+Dictatem diagnoses this from Ollama's network response and names the cause in a
+notification:
 
 | What's wrong | Fix |
 |---|---|
@@ -513,7 +520,8 @@ Dictatem diagnoses this from Ollama's network response and flashes the cause:
 
 A Trigger Fire also only runs if the focused window is still the one you pasted
 into and the paste is younger than `[transform].last_paste_ttl_s` (default 5 min).
-Switching windows or waiting too long discards the trigger silently.
+Switching windows or waiting too long discards the trigger: the pill flashes the
+error colour and nothing is changed.
 
 If the wrong trigger runs, check `daemon.log` for a startup warning that two
 trigger words sound alike, and rename one (see
