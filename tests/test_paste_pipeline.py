@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from dictatem.exceptions import ClipboardContentionError
-from dictatem.paste.pipeline import _RETRY_DELAY_S, paste
+from dictatem.paste.clipboard_snapshot import ClipboardSnapshot
+from dictatem.paste.pipeline import _RETRY_DELAY_S, normalize_pasted_text, paste
 from tests.fakes import FakeClipboardIO, FakeForegroundTracker, FakeKeystrokeSender
 
 if TYPE_CHECKING:
@@ -21,7 +22,7 @@ class TestPasteCallSequence:
 
     def test_expected_call_ordering(self) -> None:
         clip = FakeClipboardIO()
-        clip._content = "original"
+        clip.text = "original"
         ks = FakeKeystrokeSender()
         fg = FakeForegroundTracker(target_id=42)
 
@@ -70,6 +71,95 @@ class TestPasteCallSequence:
         paste("text", clipboard=clip, keystroke=ks, foreground=fg)
 
         assert order.index("restore_fg") < order.index("send_paste")
+
+
+class TestControlCharacterStripping:
+    """S-4 / #199: no control character may reach the target window.
+
+    Trigger Fire *types* its output, so a surviving ``\\r`` is Enter in a shell
+    and ESC starts a terminal escape sequence.
+    """
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("rm -rf x\rmore", "rm -rf x more "),  # lone CR is not Enter
+            ("a\tb", "a b "),  # typed Tab would move focus / complete
+            ("a\vb\fc", "a b c "),
+            ("a\u2028b\u2029c", "a b c "),  # Unicode line/paragraph separators
+            ("a\x85b", "a b "),  # NEL
+            ("a\r\nb", "a b "),  # CRLF stays a single space
+        ],
+    )
+    def test_break_controls_become_spaces(self, raw: str, expected: str) -> None:
+        assert normalize_pasted_text(raw) == expected
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("hi\x1b[31mred", "hi[31mred "),  # ESC removed, sequence defanged
+            ("a\x00b\x07c", "abc "),  # NUL, BEL
+            ("a\x7fb", "ab "),  # DEL
+            ("a\x9b31mb", "a31mb "),  # C1 CSI (8-bit escape introducer)
+            ("a\x08b", "ab "),  # backspace
+        ],
+    )
+    def test_other_controls_removed(self, raw: str, expected: str) -> None:
+        assert normalize_pasted_text(raw) == expected
+
+    def test_no_control_survives_any_codepoint(self) -> None:
+        controls = "".join(
+            chr(cp) for cp in [*range(0x20), 0x7F, *range(0x80, 0xA0), 0x2028, 0x2029]
+        )
+        out = normalize_pasted_text(f"x{controls}y")
+        assert out.startswith("x")
+        assert out.endswith("y ")
+        assert all(c == " " or c.isprintable() for c in out)
+
+    def test_plain_unicode_text_untouched(self) -> None:
+        assert normalize_pasted_text(" Café — naïve 日本 ") == "Café — naïve 日本 "
+
+    def test_typed_trigger_fire_path_is_sanitised(self) -> None:
+        ks = FakeKeystrokeSender()
+        paste(
+            "ok\rnow",
+            clipboard=FakeClipboardIO(),
+            keystroke=ks,
+            foreground=FakeForegroundTracker(),
+            replace_chars=3,
+        )
+        assert ks.typed_texts == ["ok now "]
+
+
+ACUTE = chr(0x301)  # combining acute accent
+E_ACUTE = chr(0xE9)  # precomposed e-acute
+
+
+class TestNfcNormalization:
+    """#242 / F-5: pasted text is NFC-composed so decomposed accents land as
+    the single characters most apps expect, and the Backspace Unit count of
+    the Last Paste matches what is on screen."""
+
+    def test_decomposed_accent_is_composed(self) -> None:
+        assert normalize_pasted_text("cafe" + ACUTE) == "caf" + E_ACUTE + " "
+
+    def test_already_composed_text_unchanged(self) -> None:
+        assert normalize_pasted_text("caf" + E_ACUTE) == "caf" + E_ACUTE + " "
+
+    def test_accent_split_by_a_stripped_control_still_composes(self) -> None:
+        # The control is removed first, so the mark meets its base.
+        assert normalize_pasted_text("e\x00" + ACUTE) == E_ACUTE + " "
+
+    def test_typed_trigger_fire_path_is_composed(self) -> None:
+        ks = FakeKeystrokeSender()
+        paste(
+            "cafe" + ACUTE,
+            clipboard=FakeClipboardIO(),
+            keystroke=ks,
+            foreground=FakeForegroundTracker(),
+            replace_chars=3,
+        )
+        assert ks.typed_texts == ["caf" + E_ACUTE + " "]
 
 
 class TestInputNormalization:
@@ -132,13 +222,13 @@ class TestClipboardRestore:
 
     def test_original_text_restored(self) -> None:
         clip = FakeClipboardIO()
-        clip._content = "my precious data"
+        clip.text = "my precious data"
         ks = FakeKeystrokeSender()
         fg = FakeForegroundTracker()
 
         paste("new text", clipboard=clip, keystroke=ks, foreground=fg)
 
-        assert clip._content == "my precious data"
+        assert clip.text == "my precious data"
 
     def test_none_clipboard_restored(self) -> None:
         clip = FakeClipboardIO()
@@ -147,17 +237,64 @@ class TestClipboardRestore:
 
         paste("text", clipboard=clip, keystroke=ks, foreground=fg)
 
-        assert clip._content is None
+        assert clip.text is None
 
     def test_restore_is_last_clipboard_call(self) -> None:
         clip = FakeClipboardIO()
-        clip._content = "saved"
+        clip.text = "saved"
         ks = FakeKeystrokeSender()
         fg = FakeForegroundTracker()
 
         paste("text", clipboard=clip, keystroke=ks, foreground=fg)
 
-        assert clip.calls[-1] == ("restore", "saved")
+        assert clip.calls[-1][0] == "restore"
+        assert clip.text == "saved"
+
+
+# A non-text clipboard (a screenshot offered as PNG + DIB). The pipeline must
+# carry it through untouched — it never inspects a Clipboard Snapshot.
+_SCREENSHOT = ClipboardSnapshot(entries=((49300, b"PNG-bytes"), (8, b"BM-dib-bytes")))
+
+
+class TestOpaqueSnapshot:
+    """The saved clipboard is an opaque Clipboard Snapshot, restored as-is (#243)."""
+
+    def test_non_text_snapshot_restored_after_paste(self) -> None:
+        clip = FakeClipboardIO()
+        clip.held = _SCREENSHOT
+
+        paste("note", clipboard=clip, keystroke=FakeKeystrokeSender(),
+              foreground=FakeForegroundTracker())
+
+        assert clip.held is _SCREENSHOT
+        assert clip.calls[-1] == ("restore", _SCREENSHOT)
+
+    def test_non_text_snapshot_restored_by_deferred_callback(self) -> None:
+        clip = FakeClipboardIO()
+        clip.held = _SCREENSHOT
+        scheduled: list[tuple[float, Callable[[], None]]] = []
+
+        paste(
+            "note",
+            clipboard=clip,
+            keystroke=FakeKeystrokeSender(),
+            foreground=FakeForegroundTracker(),
+            schedule_restore=lambda d, c: scheduled.append((d, c)),
+        )
+
+        # Our text is on the clipboard until the deferred restore fires...
+        assert clip.text == "note "
+        scheduled[0][1]()
+        # ...then the very same snapshot object goes back.
+        assert clip.held is _SCREENSHOT
+
+    def test_empty_snapshot_restores_empty_clipboard(self) -> None:
+        clip = FakeClipboardIO()
+
+        paste("note", clipboard=clip, keystroke=FakeKeystrokeSender(),
+              foreground=FakeForegroundTracker())
+
+        assert clip.held.is_empty
 
 
 class TestDeferredRestore:
@@ -170,7 +307,7 @@ class TestDeferredRestore:
 
     def test_restore_deferred_until_scheduled_callback_fires(self) -> None:
         clip = FakeClipboardIO()
-        clip._content = "precious"
+        clip.text = "precious"
         ks = FakeKeystrokeSender()
         fg = FakeForegroundTracker()
         scheduled: list[tuple[float, Callable[[], None]]] = []
@@ -186,20 +323,20 @@ class TestDeferredRestore:
         # Ctrl+V was sent, but the restore is deferred — our text is still on
         # the clipboard for the target to read.
         assert ks.paste_count == 1
-        assert clip._content == "new "
-        assert ("restore", "precious") not in clip.calls
+        assert clip.text == "new "
+        assert not any(c[0] == "restore" for c in clip.calls)
         assert len(scheduled) == 1
         delay_s, callback = scheduled[0]
         assert delay_s > 0
 
         # Firing the scheduled callback performs the restore.
         callback()
-        assert clip._content == "precious"
-        assert clip.calls[-1] == ("restore", "precious")
+        assert clip.text == "precious"
+        assert clip.calls[-1][0] == "restore"
 
     def test_typed_path_ignores_scheduler(self) -> None:
         clip = FakeClipboardIO()
-        clip._content = "precious"
+        clip.text = "precious"
         ks = FakeKeystrokeSender()
         fg = FakeForegroundTracker()
         scheduled: list[tuple[float, Callable[[], None]]] = []
@@ -264,14 +401,14 @@ class TestContentionRetry:
 
     def test_clipboard_restored_on_contention_error(self) -> None:
         clip = FakeClipboardIO(open_failures=5)
-        clip._content = "precious"
+        clip.text = "precious"
         ks = FakeKeystrokeSender()
         fg = FakeForegroundTracker()
 
         with pytest.raises(ClipboardContentionError):
             paste("hello", clipboard=clip, keystroke=ks, foreground=fg)
 
-        assert clip._content == "precious"
+        assert clip.text == "precious"
 
     def test_restore_oserror_is_swallowed_not_raised(self) -> None:
         # When restore() loses the race against the target's Ctrl+V
@@ -324,14 +461,14 @@ class TestReplaceChars:
     def test_positive_replace_does_not_touch_clipboard(self) -> None:
         # The whole point of the refactor: typed path leaves clipboard alone.
         clip = FakeClipboardIO()
-        clip._content = "user's precious clipboard"
+        clip.text = "user's precious clipboard"
         ks = FakeKeystrokeSender()
         fg = FakeForegroundTracker()
 
         paste("new", clipboard=clip, keystroke=ks, foreground=fg, replace_chars=4)
 
         assert clip.calls == []  # no save/open/set/close/restore
-        assert clip._content == "user's precious clipboard"
+        assert clip.text == "user's precious clipboard"
 
     def test_backspaces_before_typed_text(self) -> None:
         clip = FakeClipboardIO()

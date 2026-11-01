@@ -5,15 +5,19 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING
 
-from dictatem.types import AudioChunk, EmptyResult, TranscriptionResult
+from dictatem.types import AudioChunk, EmptyResult, Transcript, TranscriptionResult
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
 
 class FakeTranscriberBackend:
-    def __init__(self, result: TranscriptionResult = "fake transcription") -> None:
-        self._result = result
+    def __init__(self, result: TranscriptionResult | str = "fake transcription") -> None:
+        # Scriptable with text alone (a bare str: confidence and speech duration
+        # unknown) or with a full Transcript carrying confidence + post-VAD
+        # speech duration (#246). Tests may reassign ``_result`` mid-test with
+        # either form.
+        self._result: TranscriptionResult | str = result
         self._loaded: bool = False
         # A gate so a test can hold load_model() open (load-on-arm, #161): it
         # lets the test assert the "still loading" pill at transcribe-time, then
@@ -30,6 +34,14 @@ class FakeTranscriberBackend:
         self.unload_count: int = 0
         self.empty_cache_count: int = 0
         self.transcribe_calls: list[AudioChunk] = []
+        # The command-biased confirm pass (#249): each call's audio and the
+        # Trigger Words it was biased toward. ``command_result`` scripts its
+        # result (str or Transcript); ``None`` reuses ``_result``, so by default
+        # a confirm pass hears what the first pass heard.
+        self.command_calls: list[tuple[AudioChunk, tuple[str, ...]]] = []
+        self.command_result: TranscriptionResult | str | None = None
+        self._command_gate = threading.Event()
+        self._command_gate.set()
         self._errors_to_raise: list[Exception] = []
         self._load_errors: list[Exception] = []
         self._progress_callback: Callable[[int, int], None] | None = None
@@ -41,6 +53,10 @@ class FakeTranscriberBackend:
         self._download_errors: list[Exception] = []
         self._download_gate = threading.Event()
         self._download_gate.set()
+        # A gate so a test can hold transcribe() open mid-flight (F-7 / #236)
+        # and fire an idle or tray unload at the in-flight transcription.
+        self._transcribe_gate = threading.Event()
+        self._transcribe_gate.set()
 
     def load_model(self) -> None:
         self.load_count += 1
@@ -69,11 +85,29 @@ class FakeTranscriberBackend:
 
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
         self.transcribe_calls.append(audio)
+        self._transcribe_gate.wait()
         if self._errors_to_raise:
             raise self._errors_to_raise.pop(0)
         if not self._loaded:
             return EmptyResult()
+        if isinstance(self._result, str):
+            return Transcript(self._result)
         return self._result
+
+    def transcribe_command(
+        self, audio: AudioChunk, trigger_words: Sequence[str]
+    ) -> TranscriptionResult:
+        self.command_calls.append((audio, tuple(trigger_words)))
+        self._transcribe_gate.wait()
+        self._command_gate.wait()
+        if self._errors_to_raise:
+            raise self._errors_to_raise.pop(0)
+        if not self._loaded:
+            return EmptyResult()
+        result = self._result if self.command_result is None else self.command_result
+        if isinstance(result, str):
+            return Transcript(result)
+        return result
 
     def empty_cache(self) -> None:
         self.empty_cache_count += 1
@@ -129,3 +163,23 @@ class FakeTranscriberBackend:
     def release_download(self) -> None:
         """Release a download_to_disk() call parked by block_download()."""
         self._download_gate.set()
+
+    def block_transcribe(self) -> None:
+        """Make transcribe() calls block until release_transcribe() (#236).
+
+        transcribe_calls is appended on entry, so a test can confirm the
+        transcription is in flight while it is parked.
+        """
+        self._transcribe_gate.clear()
+
+    def release_transcribe(self) -> None:
+        """Release a transcribe() call parked by block_transcribe()."""
+        self._transcribe_gate.set()
+
+    def block_command(self) -> None:
+        """Hold only transcribe_command() (the confirm pass, #249) open."""
+        self._command_gate.clear()
+
+    def release_command(self) -> None:
+        """Release a transcribe_command() call parked by block_command()."""
+        self._command_gate.set()

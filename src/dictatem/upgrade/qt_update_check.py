@@ -3,10 +3,12 @@
 Runs the GitHub release check on a worker thread so a menu click never freezes
 the tray/overlay, then marshals the pure :class:`~dictatem.upgrade.core.UpgradeDecision`
 back to the Qt main thread (via a queued ``Signal``) to show a notification and,
-when a newer release exists, launch the upgrade.
+when a newer release exists, ask "Install update?" and launch the upgrade only on
+an explicit yes (#200).
 
-The *decision* is pure and unit-tested (``upgrade.core``); the threading/marshal
-and the notify/spawn side effects are manual-QA, so this module is pyright/test
+The *decision* and the confirm-then-start flow are pure and unit-tested
+(``upgrade.core``); the threading/marshal, the dialog, and the notify/spawn side
+effects are manual-QA, so this module is pyright/test
 excluded like the other Qt adapters.
 """
 
@@ -16,16 +18,41 @@ import logging
 import threading
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtWidgets import QMessageBox
 
-from dictatem.upgrade.core import UpgradeKind, decide_upgrade
+from dictatem.upgrade.core import UpgradeKind, apply_upgrade_decision, decide_upgrade
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from dictatem.upgrade.core import UpgradeDecision
+    from dictatem.upgrade.core import UpgradeConfirmation, UpgradeDecision
 
 logger = logging.getLogger(__name__)
+
+
+def ask_install_confirmation(confirmation: UpgradeConfirmation) -> bool:
+    """Modal "Install update?" box (Qt main thread). ``True`` only on Install.
+
+    "Not now" is the default and the Esc/close result, so a stray Enter (or a
+    dictation landing while the box has focus) can never consent by accident.
+    ``exec()`` spins a nested event loop, so the daemon keeps ticking meanwhile.
+    """
+    box = QMessageBox()
+    box.setWindowTitle(confirmation.title)
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setText(confirmation.text)
+    install = box.addButton("Install", QMessageBox.ButtonRole.AcceptRole)
+    not_now = box.addButton("Not now", QMessageBox.ButtonRole.RejectRole)
+    box.setDefaultButton(not_now)
+    box.setEscapeButton(not_now)
+    # A tray app has no main window; keep the question in front of whatever the
+    # user was doing when they clicked the tray item.
+    box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    box.raise_()
+    box.activateWindow()
+    box.exec()
+    return box.clickedButton() is install
 
 
 class UpdateChecker(QObject):
@@ -34,7 +61,16 @@ class UpdateChecker(QObject):
     Construct on the Qt main thread; wire :meth:`check` to the tray Upgrade item.
     The injected callables keep the network and OS work testable/replaceable:
     *fetch_latest_tag* returns the latest tag (or raises), *notify* shows a tray
-    balloon, *start_upgrade* launches the installer for a tag.
+    balloon, *confirm* asks the user before anything is installed (default: the
+    :func:`ask_install_confirmation` dialog), *start_upgrade* launches the
+    installer for a tag.
+
+    *on_update_available*, when given, takes over the "newer release found"
+    outcome entirely (#193): no "Updating… will restart" balloon and no
+    *start_upgrade* — it receives the decision instead (macOS shows a
+    copy-the-command prompt; nothing auto-executes). The checker then goes idle
+    again, since no installer is about to replace this daemon. ``None`` keeps
+    the original in-app behaviour (Windows).
     """
 
     _finished = Signal(object)  # carries an UpgradeDecision across threads
@@ -46,12 +82,16 @@ class UpdateChecker(QObject):
         fetch_latest_tag: Callable[[], str | None],
         notify: Callable[[str, str], None],
         start_upgrade: Callable[[str], None],
+        confirm: Callable[[UpgradeConfirmation], bool] = ask_install_confirmation,
+        on_update_available: Callable[[UpgradeDecision], None] | None = None,
     ) -> None:
         super().__init__()
         self._current_version = current_version
         self._fetch_latest_tag = fetch_latest_tag
         self._notify = notify
         self._start_upgrade = start_upgrade
+        self._confirm = confirm
+        self._on_update_available = on_update_available
         self._busy = False
         self._finished.connect(self._on_finished)
 
@@ -75,9 +115,31 @@ class UpdateChecker(QObject):
 
     def _on_finished(self, decision: UpgradeDecision) -> None:
         # Back on the Qt main thread (queued signal): safe to touch the tray.
-        self._notify("Dictatem", decision.message)
-        if decision.kind is UpgradeKind.UPGRADE_AVAILABLE and decision.tag:
-            self._start_upgrade(decision.tag)
+        if (
+            self._on_update_available is not None
+            and decision.kind is UpgradeKind.UPGRADE_AVAILABLE
+            and decision.tag
+        ):
+            # The handler blocks in a modal dialog; stay busy until it returns
+            # so a second click can't stack a second prompt behind it.
+            try:
+                self._on_update_available(decision)
+            finally:
+                self._busy = False
+            return
+        try:
+            started = apply_upgrade_decision(
+                decision,
+                current_version=self._current_version,
+                confirm=self._confirm,
+                notify=self._notify,
+                start_upgrade=self._start_upgrade,
+            )
+        except Exception:
+            # A dialog/spawn failure must not wedge the tray item forever.
+            logger.error("Update confirm/launch failed", exc_info=True)
+            started = False
+        if started:
             # Stay busy: the installer will stop and replace this daemon shortly;
             # a second check would only race a second installer on the locked dir.
             return

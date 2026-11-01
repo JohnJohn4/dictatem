@@ -10,6 +10,7 @@ import pytest
 
 from dictatem.daemon import DaemonCore
 from dictatem.state import Event, State, StateMachine
+from dictatem.transcribe.fallback import FallbackTranscriber
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
 from dictatem.types import EmptyResult, RecordingMode
 from tests.fakes import (
@@ -589,3 +590,106 @@ class TestTrayAutostartToggle:
             tray=FakeTrayRenderer(),
         )
         core.on_tray_set_autostart(True)  # no raise
+
+
+class TestMlxSessionFallback:
+    """An MLX load failure mid-session still pastes the dictation via the CPU
+    fallback, with exactly one tray notification (#232 / spec #224)."""
+
+    def _core_with_failing_primary(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+    ) -> tuple[DaemonCore, FakeTranscriberBackend]:
+        primary = FakeTranscriberBackend(result="from the gpu")
+        primary.fail_load_always(RuntimeError("[metal] no Metal device"))
+        fallback = FakeTranscriberBackend(result="hello from the cpu")
+        holder: list[DaemonCore] = []
+        composite = FallbackTranscriber(
+            primary=primary,
+            fallback_factory=lambda: fallback,
+            on_fallback=lambda reason: holder[0].on_transcriber_fallback(reason),
+        )
+        core = DaemonCore(
+            state_machine=sm,
+            audio_capture=audio,
+            lifecycle=TranscribeLifecycle(backend=composite, clock=lambda: 0.0),
+            overlay=overlay,
+            tray=tray,
+            clipboard=clipboard,
+            keystroke=keystroke,
+            foreground=foreground,
+        )
+        holder.append(core)
+        return core, fallback
+
+    def test_dictation_after_an_mlx_load_failure_pastes_with_one_notification(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+    ) -> None:
+        core, fallback = self._core_with_failing_primary(
+            sm, audio, overlay, tray, clipboard, keystroke, foreground
+        )
+
+        _do_ptt_cycle(core)
+        _do_ptt_cycle(core)
+
+        assert keystroke.paste_count == 2
+        assert len(fallback.transcribe_calls) == 2
+        assert sm.state is State.IDLE
+        fallback_notices = [n for n in tray.notifications if n[0] == "Running on CPU"]
+        assert len(fallback_notices) == 1
+        assert "config is unchanged" in fallback_notices[0][1]
+        assert tray.notifications == fallback_notices  # no failure notification
+        assert "failed to load" in fallback_notices[0][1]
+
+    def test_an_mlx_transcribe_failure_notice_says_it_failed_while_transcribing(
+        self,
+        sm: StateMachine,
+        audio: FakeAudioCapture,
+        overlay: FakeOverlayRenderer,
+        tray: FakeTrayRenderer,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+    ) -> None:
+        primary = FakeTranscriberBackend(result="from the gpu")
+        primary.queue_error(RuntimeError("[metal] command buffer failed"))
+        fallback = FakeTranscriberBackend(result="hello from the cpu")
+        holder: list[DaemonCore] = []
+        composite = FallbackTranscriber(
+            primary=primary,
+            fallback_factory=lambda: fallback,
+            on_fallback=lambda reason: holder[0].on_transcriber_fallback(reason),
+        )
+        core = DaemonCore(
+            state_machine=sm,
+            audio_capture=audio,
+            lifecycle=TranscribeLifecycle(backend=composite, clock=lambda: 0.0),
+            overlay=overlay,
+            tray=tray,
+            clipboard=clipboard,
+            keystroke=keystroke,
+            foreground=foreground,
+        )
+        holder.append(core)
+
+        _do_ptt_cycle(core)
+
+        assert keystroke.paste_count == 1
+        fallback_notices = [n for n in tray.notifications if n[0] == "Running on CPU"]
+        assert len(fallback_notices) == 1
+        body = fallback_notices[0][1]
+        assert "while transcribing" in body
+        assert "failed to load" not in body

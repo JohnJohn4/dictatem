@@ -125,6 +125,7 @@ class TestEmptyResultSuppression:
         _do_ptt_cycle(core)
 
         assert any(c[0] == "show_error" for c in overlay.calls)
+        assert ("show_held",) not in overlay.calls  # a real failure (#239)
         assert keystroke.paste_count == 0
         assert sm.state is State.IDLE
 
@@ -428,6 +429,37 @@ class TestModelLoadError:
         assert any(r.levelno == logging.ERROR for r in caplog.records)
         assert any(r.exc_info is not None and r.exc_info[0] is not None for r in caplog.records)
         assert sm.state is State.IDLE
+
+    def test_load_failure_gives_classified_notification(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        tray: FakeTrayRenderer,
+        sm: StateMachine,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # A real CTranslate2 load failure (not a pre-wrapped ModelLoadError):
+        # the lifecycle classifies it, so the user sees the actionable
+        # CUDA-missing message, not the generic transcription error (#241).
+        backend.fail_load_always(
+            RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+        )
+
+        with caplog.at_level(logging.ERROR, logger="dictatem.daemon"):
+            _do_ptt_cycle(core)
+
+        titles = [title for title, _msg in tray.notifications]
+        assert "GPU Runtime Missing" in titles
+        assert "Transcription Error" not in titles
+        assert not any("unexpected" in msg.lower() for _t, msg in tray.notifications)
+        assert sm.state is State.IDLE
+        error_records = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert any(
+            "CUDA_MISSING" in r.getMessage()
+            and r.exc_info is not None
+            and r.exc_info[0] is not None
+            for r in error_records
+        )
 
     def test_transient_load_failure_recovered_within_same_dictation(
         self,

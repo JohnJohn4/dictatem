@@ -6,6 +6,8 @@ import logging
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -156,6 +158,37 @@ class TestLoadConfigPartialFile:
         assert cfg.model.compute_type == "float16"  # default
         assert cfg.overlay.position == "top-left"
         assert cfg.overlay.fade_in_ms == 100  # default
+
+
+class TestLoadConfigMlxDevice:
+    """``mlx`` is a valid ``[model].device`` value (Apple-GPU opt-in, #231)."""
+
+    def test_the_three_line_opt_in_loads_as_written_and_the_file_is_unchanged(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "config.toml"
+        original = dedent("""\
+            [model]
+            name = "large-v3-turbo"
+            device = "mlx"
+            compute_type = "float16"
+        """)
+        path.write_text(original)
+        cfg = load_config(path)
+        assert (cfg.model.name, cfg.model.device, cfg.model.compute_type) == (
+            "large-v3-turbo",
+            "mlx",
+            "float16",
+        )
+        # Session fallback never rewrites the user's config (ADR-0009).
+        assert path.read_text() == original
+
+    def test_mlx_survives_a_write_and_reload(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        cfg = Config()
+        cfg.model.device = "mlx"
+        write_config(cfg, path)
+        assert load_config(path).model.device == "mlx"
 
 
 class TestLoadConfigMalformedToml:
@@ -364,6 +397,21 @@ class TestWriteConfig:
         path = tmp_path / "deep" / "nested" / "config.toml"
         write_config(Config(), path)
         assert path.exists()
+
+    def test_whole_number_floats_are_written_as_integers(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "config.toml"
+        cfg = Config()
+        cfg.behaviour.silence_timeout_s = 45.5
+        write_config(cfg, path)
+        content = path.read_text()
+        assert "max_recording_seconds = 300\n" in content
+        assert "silence_timeout_s = 45.5\n" in content
+        reloaded = load_config(path)
+        assert reloaded.behaviour.max_recording_seconds == 300.0
+        assert isinstance(reloaded.behaviour.max_recording_seconds, float)
+        assert reloaded.behaviour.silence_timeout_s == 45.5
 
     def test_none_values_round_trip(self, tmp_path: Path) -> None:
         path = tmp_path / "config.toml"
@@ -626,3 +674,96 @@ class TestHotkeyModifiersValidation:
             "modifiers" in r.message and r.levelname == "WARNING"
             for r in caplog.records
         )
+
+
+class TestTriggerWordsSection:
+    """[trigger_words] — hand-edited, shown commented in the first-run file (#247)."""
+
+    def test_fuzzy_matching_defaults_on(self, tmp_path: Path) -> None:
+        assert load_config(tmp_path / "config.toml").trigger_words.fuzzy_matching is True
+
+    def test_fuzzy_matching_can_be_turned_off(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text("[trigger_words]\nfuzzy_matching = false\n")
+        assert load_config(path).trigger_words.fuzzy_matching is False
+
+    def test_invalid_value_logged_falls_back_and_file_untouched(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture
+    ) -> None:
+        path = tmp_path / "config.toml"
+        original = '[trigger_words]\nfuzzy_matching = "nope"\n'
+        path.write_text(original)
+        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert cfg.trigger_words.fuzzy_matching is True
+        assert any(
+            "fuzzy_matching" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        )
+        assert path.read_text() == original
+
+    def test_first_run_file_shows_the_section_commented(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        load_config(path)
+        lines = path.read_text().splitlines()
+        assert "# [trigger_words]" in lines
+        assert "[trigger_words]" not in lines
+        assert any(
+            line.startswith("#") and "fuzzy_matching" in line for line in lines
+        )
+        assert load_config(path).trigger_words.fuzzy_matching is True
+
+    def test_a_user_opt_out_survives_an_app_rewrite(self, tmp_path: Path) -> None:
+        # The tray's Start-at-login toggle rewrites the whole file.
+        path = tmp_path / "config.toml"
+        path.write_text("[trigger_words]\nfuzzy_matching = false\n")
+        cfg = load_config(path)
+        cfg.startup.autostart = False
+        write_config(cfg, path)
+        assert load_config(path).trigger_words.fuzzy_matching is False
+
+    # --- paste_aliases (#250) ---
+
+    def test_paste_aliases_default_empty(self, tmp_path: Path) -> None:
+        assert load_config(tmp_path / "config.toml").trigger_words.paste_aliases == ()
+
+    def test_paste_aliases_normalised_like_prompt_file_aliases(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text(
+            '[trigger_words]\npaste_aliases = ["Haste.", " insert ", "", "...", "haste"]\n'
+        )
+        assert load_config(path).trigger_words.paste_aliases == ("haste", "insert")
+
+    @pytest.mark.parametrize("value", ['"haste"', "[1, 2]", '["haste", 3]', "true"])
+    def test_invalid_paste_aliases_logged_fall_back_and_file_untouched(
+        self, tmp_path: Path, caplog: logging.LogCaptureFixture, value: str
+    ) -> None:
+        path = tmp_path / "config.toml"
+        original = f"[trigger_words]\npaste_aliases = {value}\n"
+        path.write_text(original)
+        with caplog.at_level(logging.WARNING, logger="dictatem.config"):
+            cfg = load_config(path)
+        assert cfg.trigger_words.paste_aliases == ()
+        assert any(
+            "paste_aliases" in r.message and r.levelname == "WARNING"
+            for r in caplog.records
+        )
+        assert path.read_text() == original
+
+    def test_first_run_file_shows_paste_aliases_commented(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        load_config(path)
+        lines = path.read_text().splitlines()
+        assert any(
+            line.startswith("#") and "paste_aliases" in line for line in lines
+        )
+        assert not any(line.startswith("paste_aliases") for line in lines)
+        assert load_config(path).trigger_words.paste_aliases == ()
+
+    def test_paste_aliases_survive_an_app_rewrite(self, tmp_path: Path) -> None:
+        path = tmp_path / "config.toml"
+        path.write_text('[trigger_words]\npaste_aliases = ["haste"]\n')
+        cfg = load_config(path)
+        cfg.startup.autostart = False
+        write_config(cfg, path)
+        assert load_config(path).trigger_words.paste_aliases == ("haste",)

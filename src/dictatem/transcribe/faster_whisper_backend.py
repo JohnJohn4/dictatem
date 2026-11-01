@@ -5,17 +5,22 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+import numpy as np
 
 from dictatem.exceptions import GPUOutOfMemoryError
-from dictatem.types import EmptyResult
+from dictatem.transcribe.language import LanguageSelector
+from dictatem.types import EmptyResult, SegmentConfidence, Transcript
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping, Sequence
 
     from dictatem.types import AudioChunk, TranscriptionResult
 
 logger = logging.getLogger(__name__)
+
+_SAMPLE_RATE = 16_000
 
 
 def _register_cuda_dll_directories() -> None:
@@ -58,6 +63,38 @@ def _register_cuda_dll_directories() -> None:
     logger.debug("Added CUDA DLL directories to PATH: %s", bin_dirs)
 
 
+def transcript_from_segments(segments: Sequence[Any], info: object) -> Transcript:
+    """Build a :class:`Transcript` from faster-whisper segments + info (#246).
+
+    Text is the segments' texts joined (as before). Confidence is the
+    duration-weighted mean ``avg_logprob`` (plain mean if every segment is
+    zero-length) and the worst ``no_speech_prob``; unknown when there are no
+    segments. Speech duration is ``info.duration_after_vad`` — the post-VAD
+    speech length — or unknown if the info doesn't carry it.
+    """
+    text = "".join(seg.text for seg in segments)
+    confidence: SegmentConfidence | None = None
+    if segments:
+        weights = [max(0.0, float(seg.end) - float(seg.start)) for seg in segments]
+        total = sum(weights)
+        if total <= 0.0:
+            weights = [1.0] * len(segments)
+            total = float(len(segments))
+        avg_logprob = (
+            sum(w * float(seg.avg_logprob) for w, seg in zip(weights, segments, strict=True))
+            / total
+        )
+        no_speech_prob = max(float(seg.no_speech_prob) for seg in segments)
+        confidence = SegmentConfidence(
+            avg_logprob=avg_logprob, no_speech_prob=no_speech_prob
+        )
+    vad_duration = getattr(info, "duration_after_vad", None)
+    speech_duration_s = float(vad_duration) if vad_duration is not None else None
+    return Transcript(
+        text=text, confidence=confidence, speech_duration_s=speech_duration_s
+    )
+
+
 class FasterWhisperBackend:
     """TranscriberBackend implementation using faster-whisper.
 
@@ -70,14 +107,16 @@ class FasterWhisperBackend:
         model_name: str = "large-v3-turbo",
         compute_type: str = "float16",
         device: str = "cuda",
-        language: str | None = None,
+        language_selector: LanguageSelector | None = None,
         vad_filter: bool = True,
         vocabulary: list[str] | None = None,
     ) -> None:
         self._model_name = model_name
         self._compute_type = compute_type
         self._device = device
-        self._language = language
+        # Language selection (#273): the pure decision lives in the selector;
+        # this adapter only gathers the speech duration and probabilities.
+        self._languages = language_selector or LanguageSelector()
         self._vad_filter = vad_filter
         # Vocabulary recognition hints (#126). Fed to faster-whisper as
         # ``hotwords`` when the installed version supports it, else
@@ -87,6 +126,9 @@ class FasterWhisperBackend:
         # the transcribe call is byte-for-byte unchanged.
         self._vocabulary = vocabulary or []
         self._recognition_hint: dict[str, str] = {}
+        # Whether the installed faster-whisper takes ``hotwords``; detected at
+        # load time and reused by the confirm pass's command bias (#249).
+        self._supports_hotwords = False
         self._model: object | None = None
         self._progress_callback: Callable[[int, int], None] | None = None
 
@@ -106,9 +148,9 @@ class FasterWhisperBackend:
         )
         # Detect the capability on the actual model instance, then bake the
         # hint kwargs so every transcribe call reuses them.
-        supports = backend_supports_hotwords(self._model.transcribe)  # type: ignore[union-attr]
+        self._supports_hotwords = backend_supports_hotwords(self._model.transcribe)  # type: ignore[union-attr]
         self._recognition_hint = select_recognition_hint(
-            self._vocabulary, supports_hotwords=supports
+            self._vocabulary, supports_hotwords=self._supports_hotwords
         )
         if self._vocabulary:
             hint_kind = next(iter(self._recognition_hint), "none")
@@ -138,15 +180,97 @@ class FasterWhisperBackend:
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
         if self._model is None:
             return EmptyResult()
+        language = self._choose_language(audio)
+        return self._run(
+            audio, language=language, vad_filter=self._vad_filter, hint=self._recognition_hint
+        )
+
+    def transcribe_command(
+        self, audio: AudioChunk, trigger_words: Sequence[str]
+    ) -> TranscriptionResult:
+        """The Borderline confirm pass (#249): command-biased, VAD off.
+
+        The bias replaces the Vocabulary hint for this one call; VAD is off so
+        a clipped onset isn't trimmed further (review §6.3). It re-transcribes
+        the same audio as the pass before it, so it reuses that pass's
+        language rather than detecting again (#273).
+        """
+        from dictatem.transcribe.vocabulary import select_command_bias
+
+        if self._model is None:
+            return EmptyResult()
+        hint = select_command_bias(trigger_words, supports_hotwords=self._supports_hotwords)
+        language = self._languages.confirm_pass_language()
+        return self._run(audio, language=language, vad_filter=False, hint=hint)
+
+    def _choose_language(self, audio: AudioChunk) -> str:
+        """Gather the selector's inputs for *audio* and return its choice (#273).
+
+        A pinned language needs nothing. Otherwise the Silero VAD bundled with
+        faster-whisper measures the speech; only a long-enough clip on a
+        multilingual model is run through ``detect_language`` (on the speech
+        alone, so leading silence doesn't skew it).
+        """
+        selector = self._languages
+        if not selector.policy.detects:
+            return selector.choose(None, None).language
+        samples = np.asarray(audio, dtype=np.float32)
+        duration: float | None
+        try:
+            speech = self._speech_only(samples)
+            duration = speech.size / _SAMPLE_RATE
+        except Exception:
+            # No speech measure: detect on the whole clip; the threshold decides.
+            logger.debug("VAD for language selection failed", exc_info=True)
+            speech, duration = samples, None
+        probabilities: Mapping[str, float] | None = None
+        if selector.needs_detection(duration):
+            probabilities = self._detect_probabilities(speech)
+        return selector.choose(probabilities, duration).language
+
+    @staticmethod
+    def _speech_only(samples: np.ndarray) -> np.ndarray:
+        from faster_whisper.vad import get_speech_timestamps  # type: ignore[import-not-found]
+
+        from dictatem.transcribe.mlx_models import keep_speech
+
+        return keep_speech(samples, get_speech_timestamps(samples))
+
+    def _detect_probabilities(self, speech: np.ndarray) -> dict[str, float] | None:
+        """Whisper's per-language probabilities for *speech*; ``None`` if unavailable."""
+        model: Any = self._model
+        if not getattr(getattr(model, "model", None), "is_multilingual", True):
+            return None  # an English-only model has no language ID
+        try:
+            _lang, _p, all_probs = model.detect_language(audio=speech)
+        except Exception as exc:
+            if "out of memory" in str(exc).lower():
+                raise GPUOutOfMemoryError(str(exc)) from exc
+            logger.debug("Language detection failed; using the fallback", exc_info=True)
+            return None
+        return {str(code): float(p) for code, p in all_probs}
+
+    def _run(
+        self,
+        audio: AudioChunk,
+        *,
+        language: str,
+        vad_filter: bool,
+        hint: dict[str, str],
+    ) -> TranscriptionResult:
+        if self._model is None:
+            return EmptyResult()
 
         try:
-            segments, _info = self._model.transcribe(  # type: ignore[union-attr]
+            segments, info = self._model.transcribe(  # type: ignore[union-attr]
                 audio,
-                language=self._language,
-                vad_filter=self._vad_filter,
-                **self._recognition_hint,
+                language=language,
+                vad_filter=vad_filter,
+                **hint,
             )
-            return "".join(seg.text for seg in segments)
+            # ``segments`` is a lazy generator — decoding happens while it is
+            # consumed, so an OOM still surfaces inside this ``try``.
+            return transcript_from_segments(list(segments), info)
         except Exception as exc:
             if "out of memory" in str(exc).lower():
                 raise GPUOutOfMemoryError(str(exc)) from exc

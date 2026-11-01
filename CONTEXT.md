@@ -55,9 +55,13 @@ While a mouse button is actively completing the combo it is **suppressed** — i
 does not also fire its usual action (e.g. browser-back) — whereas modifier keys
 always pass through. Because a lone **Alt** release activates the Windows menu bar
 and a lone **Win** release pops the Start menu, releasing a Win+Alt-style chord
-would otherwise let a fractionally-staggered release misfire one of those and
-steal the caret; on Windows the keyboard hook injects a no-op **Ctrl** tap on the
-chord release to neutralise it (#171).
+would otherwise misfire one of those and steal keyboard focus from the next
+paste. So on Windows, when an Alt/Win key that was part of a Dictatem combo
+session is released and nothing else was pressed while it was down, the keyboard
+hook swallows that key-up and re-emits it behind the unassigned mask key `0xE8`.
+Your own lone Alt or Win press, outside dictation, still works normally (#171,
+#177). Dictatem tags every keystroke it injects, and the hook never feeds those
+to the hotkey logic.
 
 `meta` is the canonical cross-platform name for the OS key; `win` is a
 permanent alias kept for existing Windows configs. The default combo is
@@ -103,6 +107,18 @@ recovery applies. See
 [ADR-0023](docs/adr/0023-dictation-is-never-lost-clipboard-fallback.md) and
 [ADR-0026](docs/adr/0026-focus-drift-holds-the-dictation-overlay-shows-phase-by-colour.md).
 
+### Dictation Session
+
+The state that belongs to **one** dictation, from record-start to its paste (or
+its cancel): whether a transcription or a [Transform](#transform) result is still
+outstanding, the pending replace count, the record-start foreground identity
+(the focus-drift anchor), and the text waiting to paste. Each session has an
+**epoch**, a monotonically increasing integer: starting a recording begins a new
+session and bumps it; cancel and error recovery end the session, bump it again,
+and clear the fields. Daemon-lifetime state — [Last Paste](#last-paste), the
+[Most-recent dictation](#most-recent-dictation), model warm and preload flags —
+is *not* part of a session; Last Paste in particular survives across them.
+
 ### Trigger Word
 
 A single-word utterance that, instead of being pasted as dictation, invokes an
@@ -116,10 +132,46 @@ of whether the [Transform](#transform) feature is enabled.
 
 A transcription is recognised as a Trigger Word if, after stripping
 whitespace and ASCII punctuation and lowercasing, it exactly matches a configured
-[Alias](#alias) or a built-in action word. Multi-token utterances never match —
-`"summarize this"` is regular dictation; only the lone word `"summarize"` (or
-`"paste"`, or their [Aliases](#alias)) fires. A user [Prompt File](#prompt-file)
-that re-uses a built-in name (`paste`) is shadowed by the built-in.
+[Alias](#alias) or a built-in action word. Failing that, a **short** utterance
+(about ≤ 2.5 s of speech, ≤ 3 tokens) whose joined tokens *sound like* an Alias
+— strong letter or phonetic-key similarity, an unambiguous winner, and no sign
+the model was unsure — also fires it (fuzzy matching, ADR-0028): `"haste"` fires
+`paste`, `"clean up"` fires `cleanup`. Aliases shorter than about 5 letters are
+matched exactly only. An utterance whose first word is an exact Alias followed
+by more words is always dictation — `"summarize this"` and `"paste it"` are
+regular dictation; only the lone word fires. Fuzzy matching never alters
+dictated text (ADR-0024), and `[trigger_words].fuzzy_matching = false` restores
+exact-only matching. A user [Prompt File](#prompt-file) that re-uses a built-in
+name (`paste`) or a built-in action [Alias](#alias) is shadowed by the built-in.
+A short utterance that only *might* be a Trigger Word is [Borderline](#borderline).
+
+### Borderline
+
+The third outcome of [Trigger Word](#trigger-word) recognition, beside
+dictation and a fire: the short utterance sounds *close to* a Trigger Word but
+Dictatem isn't sure — a weak fuzzy match, a strong match the model was
+unconfident about, or a near-tie between two different actions. Its
+**candidates** are the near-miss actions. Before giving up, Dictatem runs one
+[Confirm pass](#confirm-pass). If that doesn't settle it, the Borderline outcome **pastes
+nothing**: the [Overlay Pill](#overlay-pill) flashes a distinct **"say again"**
+colour, and the [Most-recent dictation](#most-recent-dictation) and [Last
+Paste](#last-paste) are left untouched, so saying `paste` (or the intended
+Trigger Word) again still acts on the right text. The next utterance is judged
+fresh. A genuine one-word dictation that trips it ("Summer.") is dictated inside
+a longer phrase instead. See ADR-0028.
+
+### Confirm pass
+
+The single extra listen a [Borderline](#borderline) gets before the "say again"
+flash: the same short audio is re-transcribed once, biased toward the lexicon's
+[Trigger Words](#trigger-word) and with VAD off. If it is an exact or strong,
+confident match for one of the Borderline's candidate actions (any of its
+[Aliases](#alias)), that Trigger Word fires as normal, rails included. Anything
+else (another action, another Borderline, dictation, empty) ends in "say again".
+The pill stays "transcribing" meanwhile and Esc discards it like any in-flight
+transcription. A broken model (load failure, GPU out of memory after retry)
+is reported the same way as on the first pass, not hidden behind "say again".
+Regular dictation never gets a confirm pass. See ADR-0028.
 
 ### Alias
 
@@ -130,6 +182,13 @@ vs US `"summarize"`) and any other surface forms the user expects to work.
 Aliases are declared in the YAML-style frontmatter of a [Prompt File](#prompt-file)
 and are the single source of truth for matching. The prompt filename is
 purely a human convenience and has no runtime meaning.
+
+The built-in `paste` action can have Aliases too — **built-in action aliases**,
+declared by the user in `[trigger_words].paste_aliases` (normalised the same
+way), so a mishearing their voice consistently produces maps straight to
+`paste`. They behave exactly like the built-in word: exact and fuzzy matching,
+no Transform feature or [Last Paste](#last-paste) needed, and they shadow a
+same-named Prompt File Alias (warned at startup).
 
 ### Prompt File
 
@@ -167,11 +226,22 @@ Transform runs and again at paste time, because the Transform can take up to
 `[transform].model_timeout_s` and focus may drift during it; a mismatch at
 either point discards the fire so backspaces never land in the wrong window.
 
-Replacement is done by sending backspaces equal to the character length of
-the Last Paste (post-normalisation) and pasting the Transform output. The
+Replacement is done by sending one backspace per
+[Backspace Unit](#backspace-unit) of the Last Paste (post-normalisation, which
+includes NFC composition) and pasting the Transform output. The
 Transform output then itself becomes the new [Last Paste](#last-paste),
 which allows trigger words to compose (e.g. running `"summarize"` twice
 further condenses the result).
+
+### Backspace Unit
+
+One user-perceived character of pasted text — an extended grapheme cluster
+(UAX #29), not a code point. A skin-toned emoji, a family ZWJ sequence, a flag,
+a keycap or an accented letter is one Backspace Unit, matching what one
+Backspace deletes in a text field. The [Last Paste](#last-paste) records its
+length in Backspace Units so a [Trigger Fire](#trigger-fire) erases exactly what
+was pasted. Counted by a stdlib-only approximation of UAX #29
+(`dictatem.paste.backspace_units`), not the `regex` package.
 
 ### Vocabulary
 
@@ -181,6 +251,22 @@ transcription recognition** toward those spellings. Declared one per line in
 recognition hints: they influence how audio is *heard*, and do not by themselves
 rewrite the transcribed text (contrast [Replacement](#replacement)). Keeping the
 list focused matters — an over-long list can degrade recognition.
+
+### Preferred Languages
+
+The small set of languages a user dictates in, declared as
+`[model].languages = ["en", "zh"]` (#273). When set, the transcription language
+of each clip is **detected only among them** (Whisper's per-language
+probabilities restricted to the set and renormalised); it takes precedence over
+`[model].language`. Detection is **sure or fall back**: a clip with too little
+speech (under 1.5 s) is never detected, and a winner below the confidence
+threshold (0.6) is not trusted, so the clip uses the **fallback language**: the
+last language confidently detected this session if allowed, else the first
+Preferred Language (else, for `language = "auto"`, the OS display language, else
+English). Without Preferred Languages or `language`, Dictatem transcribes in
+English with no detection. The decision is pure (`dictatem.transcribe.language`);
+the engines only gather probabilities. The [Confirm pass](#confirm-pass) reuses
+the language of the pass it re-checks.
 
 ### Replacement
 
@@ -217,6 +303,26 @@ touches the clipboard at all (it types via `SendInput`), so this concerns only
 the regular-dictation path. See
 [ADR-0023](docs/adr/0023-dictation-is-never-lost-clipboard-fallback.md).
 
+### Clipboard Snapshot
+
+The opaque saved copy of the user's clipboard that the regular-dictation paste
+takes before borrowing the clipboard and writes back afterwards (a
+[clutter-proof](#clutter-proof-clipboard-write) restore). It holds every format
+that could be safely captured, as raw bytes in the clipboard's own order —
+images, file copies, HTML, rich text and plain text — and nothing between `save`
+and `restore` (the paste pipeline, the deferred restore) looks inside it. An
+empty clipboard gives an empty snapshot, which restores to an empty clipboard.
+
+Which formats a snapshot takes is the **Clipboard Capture Plan**, a pure
+decision over the formats on offer (id, name, kind, size): only memory-backed
+formats are captured; handle-based, OS-synthesized, and owner-drawn or
+delayed-render formats are skipped; and the total is held to a fixed size cap.
+Over the cap — or if a format could not be measured in time — only the text is
+kept and a warning names the formats and their sizes, never their content.
+Windows ships full-format snapshots (#243). On macOS (#244) the snapshot is
+every pasteboard item's types — legacy aliases and file promises skipped — and
+restore rebuilds the same items in order; it awaits real-Mac QA.
+
 ## UI surfaces
 
 ### Overlay Pill
@@ -236,6 +342,19 @@ colour while recording, a distinct processing colour while transcribing, and a
 generating). (This replaces the former [Status Dot](#status-dot); see
 [ADR-0026](docs/adr/0026-focus-drift-holds-the-dictation-overlay-shows-phase-by-colour.md).)
 
+When a regular dictation is **held** in the [Most-recent
+dictation](#most-recent-dictation) buffer instead of pasted — the focus-drift
+hold, or a paste that failed — the pill shows its own quiet **"Saved — say
+paste"** signal: a distinct Held colour with that caption, for about a second and
+a half, silent and never refocusing anything. It is *not* the error flash; the
+error flash is kept for genuine failures where nothing is held (an empty result,
+a discarded [Trigger Fire](#trigger-fire), "paste" with nothing to recover, a
+transcription error).
+
+A [Borderline](#borderline) Trigger Word gets its own **"say again"** flash: the
+error flash's timing in a distinct colour — nothing broke and nothing was lost,
+the user just repeats the command.
+
 While a model is still loading or downloading — the first dictation's Whisper
 load, the first [Trigger Word](#trigger-word)'s LLM load, a tray **Preload**, or
 the one-time first-run model **download** — the pill instead shows a text caption
@@ -248,6 +367,15 @@ load; ADR-0026 refines ADR-0016's former "LLM Model Computing" caption to a
 colour). See
 [ADR-0016](docs/adr/0016-overlay-pill-model-loading-state.md) and
 [ADR-0025](docs/adr/0025-cold-start-load-on-arm-fetch-on-first-run.md).
+
+### Busy Nudge
+
+The [Overlay Pill](#overlay-pill)'s brief acknowledgement of a hotkey press made
+while Dictatem is already working (transcribing, computing a
+[Transform](#transform), or loading a model): the pill shows "Still working —
+Esc cancels" over the current phase colour for about a second and a half, then
+reverts on its own. The press is never acted on — it does not start, stop or
+queue anything — so a worried second press can't double a dictation (#240).
 
 ### Status Dot
 
@@ -296,11 +424,35 @@ the user pins always overrides the chosen one. `base` is the smallest Tier ever
 chosen automatically; `tiny` is never auto-selected and models stay
 multilingual. See [ADR-0007](docs/adr/0007-hardware-tier-resolved-on-first-run.md).
 
+On a Mac, Apple Silicon on macOS 14+ with the Apple GPU engine installed gets
+the **Apple-GPU** Tier (`large-v3-turbo` on the GPU). With less unified memory
+it gets **Apple-GPU-low** (`small` on the GPU). Apple Silicon without the GPU
+engine gets the **Apple-Silicon** Tier (`small` on CPU), and an Intel Mac gets
+the CPU Tier. If the Apple GPU can't be used, Dictatem runs that session on CPU
+and leaves the config untouched (see
+[ADR-0013](docs/adr/0013-macos-transcription-engine.md) and
+[ADR-0009](docs/adr/0009-hardware-mismatch-falls-back-for-the-session.md)).
+
 Resolving a Tier also yields a tier-appropriate default [Transform](#transform)
 (Ollama) model tag, written into a fresh config. Beyond that suggestion the
 Transform model is not Dictatem's to manage: Ollama is a separate, user-managed
 process Dictatem only talks to — never installs, pulls, or runs on the user's
 behalf (see [ADR-0008](docs/adr/0008-dictatem-does-not-manage-ollama-lifecycle.md)).
+
+## Configuration
+
+### Config Load Report
+
+The list of problems found while loading `config.toml`: an unreadable or
+unparseable file (with the parser's message and position), or a key with the
+wrong type or an invalid value (which falls back to its default). The daemon
+turns a non-empty report into exactly one startup tray notification; the detail
+goes to the log. Any problem makes the config **read-only for the session**:
+Dictatem writes nothing, not even the Start-at-login toggle (which then applies
+for the session only). An unreadable file also runs the session on the
+[Hardware Tier](#hardware-tier) defaults. Unknown keys and sections
+are not problems; they stay info-only in the log. Dictatem never rewrites the
+file to "fix" it (ADR-0009 / ADR-0022).
 
 ## Flagged ambiguities
 

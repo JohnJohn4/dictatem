@@ -35,6 +35,12 @@ already compares. At paste time:
   focusing the right window and saying "paste" (or via the tray "Copy last
   dictation").
 
+  > **Note (#239, review F-13):** the "saved — say *paste*" signal now exists as
+  > its own pill phase — a distinct **Held** colour with a "Saved — say paste"
+  > caption — rather than reusing the red error flash. It also covers a regular
+  > dictation whose paste *failed* (text held in the buffer). The error flash is
+  > reserved for genuine failures where nothing is held.
+
 Dictatem **never programmatically restores or steals focus** on the regular-
 dictation path. The anchor is a comparison token, not a command to move windows.
 

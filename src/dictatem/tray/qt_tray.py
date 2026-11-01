@@ -22,6 +22,8 @@ from dictatem.config import default_config_path
 from dictatem.logpaths import default_daemon_log_path
 from dictatem.tray.glyph import waveform_bars
 from dictatem.tray.state import MenuItem, TrayState, glyph_tint_rgba
+from dictatem.tray.usage_guide import DARK as _GUIDE_DARK
+from dictatem.tray.usage_guide import LIGHT as _GUIDE_LIGHT
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -29,21 +31,28 @@ if TYPE_CHECKING:
 _MENU_LABELS: dict[MenuItem, str] = {
     # Placeholder; the real text is set from config via set_hotkey_hint (#104).
     MenuItem.HOTKEY_HINT: "Hotkey",
-    MenuItem.START: "Start Recording",
-    MenuItem.STOP: "Stop Recording",
+    MenuItem.START: "Start recording",
+    MenuItem.STOP: "Stop recording",
     MenuItem.COPY_LAST_DICTATION: "Copy last dictation",
-    MenuItem.PRELOAD: "Preload Model",
-    MenuItem.UNLOAD: "Unload Model",
-    MenuItem.AUTOSTART: "Start at Login",
-    MenuItem.SHOW_LOG: "Show Log",
+    MenuItem.PRELOAD: "Preload model",
+    MenuItem.UNLOAD: "Unload model",
+    MenuItem.AUTOSTART: "Start at login",
+    MenuItem.SHOW_LOG: "Show log",
     MenuItem.OPEN_CONFIG: "Open config file…",
     MenuItem.HELP: "How to use Dictatem…",
     MenuItem.RESTART: "Restart",
-    MenuItem.UPGRADE: "Check for Updates…",
+    MenuItem.UPGRADE: "Check for updates…",
     MenuItem.QUIT: "Quit",
     # Placeholder; the real text is set from config via set_version_label (#100).
     MenuItem.VERSION: "Version",
 }
+
+_GUIDE_PAGE_LIGHT = _GUIDE_LIGHT.page
+_GUIDE_PAGE_DARK = _GUIDE_DARK.page
+
+# Visual groups in the menu: recording actions | model | settings & help |
+# app lifecycle. A separator goes before each of these items.
+_SEPARATOR_BEFORE = frozenset({MenuItem.PRELOAD, MenuItem.AUTOSTART, MenuItem.RESTART})
 
 # Draw a native pixmap at each of these side lengths and add them all to the
 # tray QIcon, so the OS picks a purpose-built size. Procedural bars stay crisp
@@ -139,6 +148,7 @@ class QtTrayIcon:
         # Usage Guide (ADR-0019): HTML set once from live config by the daemon,
         # rendered lazily into a single-instance window on first menu click.
         self._usage_guide_html = ""
+        self._usage_guide_dark_html = ""
         self._usage_guide_window: QDialog | None = None
 
         self.on_start: Callable[[], None] | None = None
@@ -198,6 +208,8 @@ class QtTrayIcon:
         }
 
         for item in MenuItem:
+            if item in _SEPARATOR_BEFORE:
+                self._menu.addSeparator()
             action = QAction(_MENU_LABELS[item], self._parent)
             if item is MenuItem.HOTKEY_HINT:
                 # Non-interactive header showing the activation hotkey (#104).
@@ -263,7 +275,7 @@ class QtTrayIcon:
         action.setVisible(bool(text))
         self._version_separator.setVisible(bool(text))
 
-    def set_usage_guide_html(self, html: str) -> None:
+    def set_usage_guide_html(self, html: str, dark_html: str = "") -> None:
         """Set the Usage Guide window's content (ADR-0019).
 
         The daemon builds this once from live config via
@@ -271,10 +283,22 @@ class QtTrayIcon:
         refresh its content in place so a later set is reflected.
         """
         self._usage_guide_html = html
+        self._usage_guide_dark_html = dark_html
         if self._usage_guide_window is not None:
             browser = self._usage_guide_window.findChild(QTextBrowser)
             if browser is not None:
-                browser.setHtml(html)
+                self._fill_usage_guide(browser)
+
+    def _fill_usage_guide(self, browser: QTextBrowser) -> None:
+        """Load the light or dark guide to match the OS scheme right now."""
+        dark = (
+            self._app.styleHints().colorScheme() == Qt.ColorScheme.Dark
+            and bool(self._usage_guide_dark_html)
+        )
+        html = self._usage_guide_dark_html if dark else self._usage_guide_html
+        page = _GUIDE_PAGE_DARK if dark else _GUIDE_PAGE_LIGHT
+        browser.setStyleSheet(f"QTextBrowser {{ background: {page}; border: none; }}")
+        browser.setHtml(html)
 
     def set_autostart_checked(self, checked: bool) -> None:
         """Reflect the current ``config.startup.autostart`` flag in the menu."""
@@ -297,6 +321,15 @@ class QtTrayIcon:
         Visibility survives ``update_state``, which only toggles enablement.
         """
         self._actions[MenuItem.UPGRADE].setVisible(available)
+
+    def set_restart_available(self, available: bool) -> None:
+        """Show or hide the "Restart" item (#212).
+
+        Hidden where the platform has no relauncher wired, so the item is never
+        a silent no-op. Visibility survives ``update_state``, which only toggles
+        enablement.
+        """
+        self._actions[MenuItem.RESTART].setVisible(available)
 
     def update_state(self, state: TrayState) -> None:
         # The tray glyph is static brand identity (ADR-0006); only menu-item
@@ -351,11 +384,12 @@ class QtTrayIcon:
         window = QDialog(self._parent)
         window.setWindowTitle("How to use Dictatem")
         window.setWindowIcon(self._app_icon)
-        window.resize(420, 480)
+        window.resize(500, 640)
 
         browser = QTextBrowser(window)
         browser.setOpenExternalLinks(True)
-        browser.setHtml(self._usage_guide_html)
+        browser.document().setDocumentMargin(26)
+        self._fill_usage_guide(browser)
 
         layout = QVBoxLayout(window)
         layout.setContentsMargins(0, 0, 0, 0)

@@ -2,14 +2,25 @@
 
 from __future__ import annotations
 
+import threading
+from typing import TYPE_CHECKING
+
 import numpy as np
 import pytest
 
-from dictatem.exceptions import GPUOutOfMemoryError, TranscriptionFailedError
+from dictatem.exceptions import (
+    GPUOutOfMemoryError,
+    ModelLoadError,
+    TranscriptionFailedError,
+)
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
-from dictatem.types import EmptyResult
+from dictatem.transcribe.load_failure import LoadFailureReason
+from dictatem.types import EmptyResult, SegmentConfidence, Transcript
 from tests.fakes import FakeTranscriberBackend
 from tests.support import wait_until
+
+if TYPE_CHECKING:
+    from dictatem.types import TranscriptionResult
 
 AUDIO = np.zeros(16000, dtype=np.float32)
 
@@ -143,7 +154,7 @@ class TestPreload:
 
         result = lc.transcribe(AUDIO)
         assert backend.load_count == 1
-        assert result == "fake transcription"
+        assert result == Transcript("fake transcription")
 
     def test_preload_when_already_loaded_is_noop(self) -> None:
         backend = FakeTranscriberBackend()
@@ -310,12 +321,33 @@ class TestEmptyResultDetection:
     def test_valid_text_passes_through(self) -> None:
         backend = FakeTranscriberBackend(result="Hello world")
         lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
-        assert lc.transcribe(AUDIO) == "Hello world"
+        assert lc.transcribe(AUDIO) == Transcript("Hello world")
 
     def test_exactly_min_chars_passes(self) -> None:
         backend = FakeTranscriberBackend(result="Yes")
         lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
-        assert lc.transcribe(AUDIO) == "Yes"
+        assert lc.transcribe(AUDIO) == Transcript("Yes")
+
+    def test_confidence_and_speech_duration_pass_through(self) -> None:
+        heard = Transcript(
+            "summarize",
+            confidence=SegmentConfidence(avg_logprob=-0.4, no_speech_prob=0.1),
+            speech_duration_s=0.7,
+        )
+        backend = FakeTranscriberBackend(result=heard)
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        assert lc.transcribe(AUDIO) == heard
+
+    def test_empty_text_suppressed_even_with_confidence(self) -> None:
+        backend = FakeTranscriberBackend(
+            result=Transcript(
+                " . ",
+                confidence=SegmentConfidence(avg_logprob=-0.2, no_speech_prob=0.0),
+                speech_duration_s=0.4,
+            )
+        )
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        assert lc.transcribe(AUDIO) == EmptyResult()
 
     def test_backend_empty_result_passes_through(self) -> None:
         backend = FakeTranscriberBackend(result=EmptyResult())
@@ -331,7 +363,7 @@ class TestOOMRetry:
         backend.queue_error(GPUOutOfMemoryError("VRAM full"))
 
         result = lc.transcribe(AUDIO)
-        assert result == "recovered text"
+        assert result == Transcript("recovered text")
         assert backend.empty_cache_count == 1
         assert len(backend.transcribe_calls) == 2
 
@@ -431,3 +463,267 @@ class TestImportSafety:
             assert violations == [], (
                 f"lifecycle.py pulled in forbidden module(s): {violations}"
             )
+
+
+class TestUnloadDuringTranscription:
+    """F-7 / #236: an unload never pulls the model out from under an in-flight
+    transcription; it is deferred and runs once the transcription finishes."""
+
+    @staticmethod
+    def _start_blocked_transcription(
+        lc: TranscribeLifecycle, backend: FakeTranscriberBackend
+    ) -> tuple[threading.Thread, list[TranscriptionResult]]:
+        results: list[TranscriptionResult] = []
+        backend.block_transcribe()
+        thread = threading.Thread(
+            target=lambda: results.append(lc.transcribe(AUDIO)), daemon=True
+        )
+        thread.start()
+        wait_until(lambda: len(backend.transcribe_calls) >= 1)
+        return thread, results
+
+    def test_explicit_unload_is_deferred_until_transcription_completes(
+        self,
+    ) -> None:
+        backend = FakeTranscriberBackend(result="hello world")
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        thread, results = self._start_blocked_transcription(lc, backend)
+
+        lc.unload()  # the tray "Unload model" click, mid-transcription
+        assert backend.is_loaded is True
+        assert backend.unload_count == 0
+
+        backend.release_transcribe()
+        thread.join(timeout=2.0)
+
+        assert results == [Transcript("hello world")]
+        assert backend.is_loaded is False
+        assert backend.unload_count == 1
+
+    def test_idle_unload_is_deferred_until_after_transcription(self) -> None:
+        now = [0.0]
+        backend = FakeTranscriberBackend(result="hello world")
+        lc = TranscribeLifecycle(
+            backend=backend, clock=lambda: now[0], idle_timeout_s=1800.0
+        )
+        lc.transcribe(AUDIO)  # model resident, last activity at t=0
+        thread, results = self._start_blocked_transcription(lc, backend)
+
+        now[0] = 30 * 60  # the idle deadline arrives mid-transcription
+        lc.check_idle()
+        assert backend.is_loaded is True
+
+        backend.release_transcribe()
+        thread.join(timeout=2.0)
+        assert results == [Transcript("hello world")]
+        assert backend.is_loaded is True  # idle restarts from the end
+
+        now[0] = 60 * 60  # a full idle period after the transcription ended
+        lc.check_idle()
+        assert backend.is_loaded is False
+        assert backend.unload_count == 1
+
+    def test_long_transcription_does_not_unload_immediately_on_return(
+        self,
+    ) -> None:
+        now = [0.0]
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(
+            backend=backend, clock=lambda: now[0], idle_timeout_s=1800.0
+        )
+        thread, _ = self._start_blocked_transcription(lc, backend)
+
+        now[0] = 45 * 60  # transcribing well past the idle threshold
+        backend.release_transcribe()
+        thread.join(timeout=2.0)
+
+        lc.check_idle()
+        assert backend.is_loaded is True
+
+        now[0] = 45 * 60 + 29 * 60
+        lc.check_idle()
+        assert backend.is_loaded is True
+
+        now[0] = 45 * 60 + 30 * 60
+        lc.check_idle()
+        assert backend.is_loaded is False
+
+    def test_load_after_pending_unload_keeps_model_resident(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        thread, _ = self._start_blocked_transcription(lc, backend)
+
+        lc.unload()  # deferred
+        lc.preload()  # a new load (e.g. load-on-arm) supersedes it
+
+        backend.release_transcribe()
+        thread.join(timeout=2.0)
+
+        assert backend.is_loaded is True
+        assert backend.unload_count == 0
+
+    def test_deferred_unload_is_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        thread, _ = self._start_blocked_transcription(lc, backend)
+
+        with caplog.at_level("INFO", logger="dictatem.transcribe.lifecycle"):
+            lc.unload()
+        assert any("deferred" in r.getMessage().lower() for r in caplog.records)
+
+        backend.release_transcribe()
+        thread.join(timeout=2.0)
+
+    def test_failed_transcription_still_runs_deferred_unload(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        backend.queue_error(GPUOutOfMemoryError())
+        backend.queue_error(GPUOutOfMemoryError())
+        errors: list[BaseException] = []
+
+        def run() -> None:
+            try:
+                lc.transcribe(AUDIO)
+            except TranscriptionFailedError as exc:
+                errors.append(exc)
+
+        backend.block_transcribe()
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        wait_until(lambda: len(backend.transcribe_calls) >= 1)
+
+        lc.unload()
+        backend.release_transcribe()
+        thread.join(timeout=2.0)
+
+        assert len(errors) == 1
+        assert backend.is_loaded is False
+        assert backend.unload_count == 1
+
+
+class TestLoadFailureClassification:
+    """A load failure is wrapped in a classified ModelLoadError (#241)."""
+
+    def _lifecycle(self, backend: FakeTranscriberBackend) -> TranscribeLifecycle:
+        return TranscribeLifecycle(
+            backend=backend,
+            clock=lambda: 0.0,
+            model_name="large-v3-turbo",
+            device="cuda",
+            compute_type="float16",
+        )
+
+    def test_load_error_is_wrapped_with_cause_and_diagnosis(self) -> None:
+        backend = FakeTranscriberBackend()
+        original = RuntimeError(
+            "Library cublas64_12.dll is not found or cannot be loaded"
+        )
+        backend.queue_load_error(original)
+        lc = self._lifecycle(backend)
+
+        with pytest.raises(ModelLoadError) as info:
+            lc.transcribe(AUDIO)
+
+        assert info.value.__cause__ is original
+        assert info.value.diagnosis is not None
+        assert info.value.diagnosis.reason is LoadFailureReason.CUDA_MISSING
+
+    def test_configured_values_reach_the_message(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.queue_load_error(
+            ValueError("Invalid model size 'large-v9', expected one of: tiny")
+        )
+        lc = TranscribeLifecycle(
+            backend=backend, clock=lambda: 0.0, model_name="large-v9"
+        )
+
+        with pytest.raises(ModelLoadError) as info:
+            lc.transcribe(AUDIO)
+
+        assert info.value.diagnosis is not None
+        assert "large-v9" in info.value.diagnosis.message
+
+    def test_failed_load_is_retried_on_next_transcribe(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.queue_load_error(RuntimeError("CUDA failed with error out of memory"))
+        lc = self._lifecycle(backend)
+
+        with pytest.raises(ModelLoadError):
+            lc.transcribe(AUDIO)
+        lc.transcribe(AUDIO)
+
+        assert backend.is_loaded is True
+
+    def test_background_load_failure_stays_log_only(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.queue_load_error(RuntimeError("Library cudnn64_9.dll is not found"))
+        lc = self._lifecycle(backend)
+
+        lc.preload()  # best-effort: must not raise
+        wait_until(lambda: not lc.is_loading)
+
+        assert backend.is_loaded is False
+
+
+class TestCommandTranscription:
+    """The one-off command-biased, VAD-off confirm pass (#249).
+
+    Same load and error semantics as the regular transcribe; only the backend
+    call differs (it carries the Trigger Words to bias toward).
+    """
+
+    def test_trigger_words_reach_the_backend_and_the_result_passes_through(
+        self,
+    ) -> None:
+        backend = FakeTranscriberBackend(result="some of us")
+        backend.command_result = "Summarise."
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+
+        result = lc.transcribe_command(AUDIO, ["summarize", "paste"])
+
+        assert result == Transcript("Summarise.")
+        assert backend.command_calls == [(AUDIO, ("summarize", "paste"))]
+        assert backend.transcribe_calls == []
+
+    def test_loads_the_model_on_demand(self) -> None:
+        backend = FakeTranscriberBackend()
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        lc.transcribe_command(AUDIO, ["paste"])
+        assert backend.load_count == 1
+
+    def test_load_failure_is_classified_like_transcribe(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.queue_load_error(
+            RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+        )
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+
+        with pytest.raises(ModelLoadError) as info:
+            lc.transcribe_command(AUDIO, ["paste"])
+
+        assert info.value.diagnosis is not None
+        assert info.value.diagnosis.reason is LoadFailureReason.CUDA_MISSING
+
+    def test_empty_text_is_suppressed(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.command_result = " . "
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        assert lc.transcribe_command(AUDIO, ["paste"]) == EmptyResult()
+
+    def test_double_oom_raises_transcription_failed(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.queue_error(GPUOutOfMemoryError("oom"))
+        backend.queue_error(GPUOutOfMemoryError("oom"))
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        with pytest.raises(TranscriptionFailedError):
+            lc.transcribe_command(AUDIO, ["paste"])
+
+    def test_single_oom_is_retried(self) -> None:
+        backend = FakeTranscriberBackend()
+        backend.command_result = "paste"
+        backend.queue_error(GPUOutOfMemoryError("oom"))
+        lc = TranscribeLifecycle(backend=backend, clock=lambda: 0.0)
+        assert lc.transcribe_command(AUDIO, ["paste"]) == Transcript("paste")
+        assert backend.empty_cache_count == 1

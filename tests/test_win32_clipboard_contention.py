@@ -24,6 +24,7 @@ if sys.platform != "win32":
 import pywintypes  # type: ignore[import-untyped]  # noqa: E402
 import win32clipboard  # type: ignore[import-untyped]  # noqa: E402
 
+from dictatem.paste.clipboard_snapshot import ClipboardSnapshot  # noqa: E402
 from dictatem.paste.pipeline import _open_with_retry  # noqa: E402
 from dictatem.paste.win32_clipboard import Win32ClipboardIO  # noqa: E402
 
@@ -59,7 +60,7 @@ def test_restore_translates_contention_to_oserror(
 
     monkeypatch.setattr(win32clipboard, "OpenClipboard", deny)
     with pytest.raises(OSError):
-        Win32ClipboardIO().restore("user original")
+        Win32ClipboardIO().restore(ClipboardSnapshot.empty())
 
 
 def test_open_with_retry_retries_real_adapter_contention(

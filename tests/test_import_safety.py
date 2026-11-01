@@ -29,6 +29,9 @@ FORBIDDEN_MODULES = [
     "sounddevice",
     "faster_whisper",
     "ctranslate2",
+    # The Apple-GPU engine (#231): only MlxBackend's worker imports it, at load.
+    "mlx",
+    "mlx_whisper",
 ]
 
 DICTATEM_MODULES = [
@@ -41,10 +44,22 @@ DICTATEM_MODULES = [
     "dictatem.logpaths",
     "dictatem.paste",
     "dictatem.paste.pipeline",
+    # Held-modifier wait before injecting a paste (#269): pure, injected I/O.
+    "dictatem.paste.modifier_wait",
+    # Paste settle decision + per-injection diagnostic line (#269): pure.
+    "dictatem.paste.input_timeline",
+    "dictatem.paste.injection_diagnostics",
+    # AppUserModelID decisions (toast attribution); winreg lives in the adapter.
+    "dictatem.process.app_identity",
+    # Pure VK map + own-injection / masked-replay decisions (#171/#177).
+    "dictatem.hotkey.win32_keymap",
+    # Pure pasteboard-type mapping for the macOS clipboard adapter (#244).
+    "dictatem.paste.mac_pasteboard_types",
     "dictatem.state",
     "dictatem.hardware.mac_probe",
     "dictatem.hotkey.classifier",
     "dictatem.hotkey.mac_keymap",
+    "dictatem.hotkey.hook_failure",
     "dictatem.audio",
     "dictatem.audio.buffer",
     # The resampler is shared with the Windows WASAPI switch (#184); it must stay
@@ -52,15 +67,26 @@ DICTATEM_MODULES = [
     "dictatem.audio.resampler",
     "dictatem.transcribe",
     "dictatem.transcribe.lifecycle",
+    "dictatem.transcribe.backend_selection",
+    "dictatem.transcribe.fallback",
+    "dictatem.transcribe.mlx_models",
+    # Native adapter, but import-safe: mlx is imported lazily at load.
+    "dictatem.transcribe.mlx_backend",
     "dictatem.overlay.state",
     "dictatem.tray",
     "dictatem.tray.state",
+    "dictatem.upgrade.core",
+    "dictatem.upgrade.prompt",
     "dictatem.autostart.launch_agent",
     "dictatem.macapp",
     "dictatem.macapp.bundle",
     "dictatem.macapp.plist",
     "dictatem.permissions",
     "dictatem.permissions.mapper",
+    "dictatem.permissions.reprompt",
+    "dictatem.macapp.relaunch",
+    "dictatem.onboarding",
+    "dictatem.process.restart",
 ]
 
 # A known native adapter per platform. The discovery glob below must surface

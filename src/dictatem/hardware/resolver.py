@@ -15,8 +15,18 @@ GPU-high      CUDA, >= 6 GB          large-v3-turbo   cuda     float16
 GPU-mid       CUDA, 3-6 GB           small            cuda     int8_float16
 GPU-low       CUDA, < 3 GB           base             cuda     int8_float16
 GPU-unknown   CUDA, VRAM unknown     small            cuda     int8_float16
+Apple-GPU     MLX, >= 12 GB          large-v3-turbo   mlx      float16
+Apple-GPU-low MLX, < 12 GB/unknown   small            mlx      float16
+Apple-Silicon arm64 Mac, no MLX      small            cpu      int8
 CPU           no CUDA                base             cpu      int8
 ============  =====================  ===============  =======  ==============
+
+"MLX usable" means Apple Silicon, macOS 14+ and the mlx-whisper engine
+installed (spec #224, ADR-0013 amendment). The 12 GB unified-memory split keeps
+``large-v3-turbo`` (~1.6 GB) off 8 GB Macs, where it would compete with the
+Transform model; unknown memory gets the conservative ``Apple-GPU-low`` row.
+Apple-Silicon CPUs without MLX run ``small`` int8 fast enough for push-to-talk,
+a clear accuracy step up from ``base``.
 
 ``base`` is the smallest auto-selected model; ``tiny`` is never auto-selected.
 Models stay multilingual (no ``.en`` suffix). All tiers default to the small
@@ -27,7 +37,8 @@ GPU can pin a larger tag (e.g. ``gemma4:e4b``) in config.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 
 from dictatem.types import ResolvedHardware
 
@@ -37,6 +48,8 @@ if TYPE_CHECKING:
 # VRAM thresholds in MB. Tunable, not contractual (see issue #36 / ADR-0007).
 VRAM_HIGH_MB = 6 * 1024  # >= this -> GPU-high
 VRAM_MID_MB = 3 * 1024  # >= this (and < HIGH) -> GPU-mid
+# Unified-memory split for the MLX tiers in MB (#233). Tunable, not contractual.
+UNIFIED_MEMORY_HIGH_MB = 12 * 1024  # >= this -> Apple-GPU, else Apple-GPU-low
 
 # The default Transform (Ollama) tag for every tier. `gemma4:e2b` is small enough
 # to run on CPU-only laptops and to co-reside with any Whisper tier on modest
@@ -44,9 +57,22 @@ VRAM_MID_MB = 3 * 1024  # >= this (and < HIGH) -> GPU-mid
 # `gemma4:e2b` is deliberately NOT "corrected" to a standard gemma3 tag.
 _TRANSFORM_MODEL = "gemma4:e2b"
 
+# The auto-selectable Hardware Tiers (the rows of the table above). A Literal,
+# so a misspelt tier name is a type error rather than a runtime KeyError.
+TierName = Literal[
+    "GPU-high",
+    "GPU-mid",
+    "GPU-low",
+    "GPU-unknown",
+    "Apple-GPU",
+    "Apple-GPU-low",
+    "Apple-Silicon",
+    "CPU",
+]
+
 # Resolved settings keyed by tier name. The resolver's only job is to pick a
 # key; this keeps the GPU-mid and GPU-unknown rows identical-by-construction.
-_TIER_TABLE: dict[str, ResolvedHardware] = {
+_TIER_TABLE: dict[TierName, ResolvedHardware] = {
     "GPU-high": ResolvedHardware(
         tier="GPU-high",
         model="large-v3-turbo",
@@ -75,6 +101,27 @@ _TIER_TABLE: dict[str, ResolvedHardware] = {
         compute_type="int8_float16",
         transform_model=_TRANSFORM_MODEL,
     ),
+    "Apple-GPU": ResolvedHardware(
+        tier="Apple-GPU",
+        model="large-v3-turbo",
+        device="mlx",
+        compute_type="float16",
+        transform_model=_TRANSFORM_MODEL,
+    ),
+    "Apple-GPU-low": ResolvedHardware(
+        tier="Apple-GPU-low",
+        model="small",
+        device="mlx",
+        compute_type="float16",
+        transform_model=_TRANSFORM_MODEL,
+    ),
+    "Apple-Silicon": ResolvedHardware(
+        tier="Apple-Silicon",
+        model="small",
+        device="cpu",
+        compute_type="int8",
+        transform_model=_TRANSFORM_MODEL,
+    ),
     "CPU": ResolvedHardware(
         tier="CPU",
         model="base",
@@ -83,6 +130,96 @@ _TIER_TABLE: dict[str, ResolvedHardware] = {
         transform_model=_TRANSFORM_MODEL,
     ),
 }
+
+
+# Why a session fell back (#231): the configured device's hardware is absent.
+# Machine-readable so the notification can name the cause.
+FallbackReason = Literal["cuda-absent", "mlx-unavailable"]
+# Why a running session switched engines (#232): the MLX engine failed to load,
+# or failed while transcribing. Not a reconcile outcome, so it is kept out of
+# FallbackReason.
+RuntimeFallbackReason = Literal["mlx-load-failed", "mlx-transcribe-failed"]
+
+
+@dataclass(frozen=True)
+class Reconciliation:
+    """What :meth:`HardwareTierResolver.reconcile` decided for this session.
+
+    ``fallback_reason`` is ``None`` when the configured values are used as-is.
+    """
+
+    resolved: ResolvedHardware
+    fallback_reason: FallbackReason | None = None
+
+    @property
+    def did_fall_back(self) -> bool:
+        return self.fallback_reason is not None
+
+
+@dataclass(frozen=True)
+class FallbackNotice:
+    """Everything the daemon says about one session fallback to CPU.
+
+    ``title`` / ``body`` are the one tray notification; ``device_label`` names
+    the configured hardware that went missing, for the log line.
+    """
+
+    title: str
+    body: str
+    device_label: str
+
+
+# Reason -> notice. A new reason is one entry here.
+_FALLBACK_NOTICES: dict[FallbackReason | RuntimeFallbackReason, FallbackNotice] = {
+    "cuda-absent": FallbackNotice(
+        title="Running on CPU",
+        body=(
+            "Configured GPU (cuda) isn't available — running on CPU this "
+            "session. Your config is unchanged; restore the GPU to use it again."
+        ),
+        device_label="GPU",
+    ),
+    "mlx-unavailable": FallbackNotice(
+        title="Running on CPU",
+        body=(
+            "The Apple GPU engine (device = \"mlx\") isn't usable on this "
+            "machine — running on CPU this session. Your config is unchanged; "
+            "it needs an Apple-Silicon Mac on macOS 14+ with the apple-gpu "
+            "engine installed (re-run the installer), or set [model].device "
+            "back to \"cpu\"."
+        ),
+        device_label="Apple GPU",
+    ),
+    "mlx-load-failed": FallbackNotice(
+        title="Running on CPU",
+        body=(
+            "The Apple GPU engine (MLX) failed to load — your dictation and the "
+            "rest of this session run on CPU. Your config is unchanged; the next "
+            "launch tries the GPU again. See the log for the cause."
+        ),
+        device_label="Apple GPU",
+    ),
+    "mlx-transcribe-failed": FallbackNotice(
+        title="Running on CPU",
+        body=(
+            "The Apple GPU engine (MLX) failed while transcribing — this "
+            "dictation was re-run on CPU, and the rest of this session runs "
+            "there too. Your config is unchanged; the next launch tries the GPU "
+            "again. See the log for the cause."
+        ),
+        device_label="Apple GPU",
+    ),
+}
+
+
+def fallback_notice(reason: FallbackReason | RuntimeFallbackReason) -> FallbackNotice:
+    """The notice naming why this session fell back to CPU. Pure."""
+    return _FALLBACK_NOTICES[reason]
+
+
+def tier_row(tier: TierName) -> ResolvedHardware:
+    """Return the resolved row for the named *tier* (e.g. ``"CPU"``)."""
+    return _TIER_TABLE[tier]
 
 
 class HardwareTierResolver:
@@ -99,7 +236,7 @@ class HardwareTierResolver:
         model: str,
         compute_type: str,
         profile: HardwareProfile,
-    ) -> tuple[ResolvedHardware, bool]:
+    ) -> Reconciliation:
         """Reconcile a config's pinned transcription values against *profile*.
 
         Guards the absent-GPU crash (see ADR-0009): faster-whisper raises at
@@ -107,12 +244,19 @@ class HardwareTierResolver:
         config pins ``cuda`` but ``profile`` reports no CUDA, fall back to the
         whole CPU tier (``base``/``cpu``/``int8``) for THIS session — flipping
         only the device would leave a cuda compute_type (``float16`` /
-        ``int8_float16``) that also won't run on CPU. Returns
-        ``(resolved, did_fall_back=True)``.
+        ``int8_float16``) that also won't run on CPU. The result carries
+        ``fallback_reason="cuda-absent"``.
+
+        Likewise a config pinning ``mlx`` on a profile without
+        ``mlx_available`` (Intel, macOS < 14, the apple-gpu extra missing, a
+        config copied to Windows) falls back to the whole ``Apple-Silicon`` CPU
+        row on Apple Silicon, or the ``CPU`` row elsewhere, with
+        ``fallback_reason="mlx-unavailable"`` (ADR-0013 amendment).
 
         Otherwise the pinned values are authoritative (ADR-0007): they are
-        returned unchanged as a ``"configured"`` ResolvedHardware with
-        ``did_fall_back=False``. This deliberately does NOT re-tier on VRAM —
+        returned unchanged as a ``"configured"`` ResolvedHardware with no
+        fallback reason. A ``cpu`` config is never upgraded to ``cuda`` or
+        ``mlx``. This deliberately does NOT re-tier on VRAM —
         only the crash is guarded, never a silent downgrade of a present GPU.
         Pure: no I/O, no native imports; the config object/file is never
         mutated.
@@ -122,23 +266,32 @@ class HardwareTierResolver:
         Transform/Ollama model is independent of CUDA (see ADR-0009).
         """
         if device == "cuda" and not profile.cuda_available:
-            return _TIER_TABLE["CPU"], True
-        return (
+            return Reconciliation(_TIER_TABLE["CPU"], "cuda-absent")
+        if device == "mlx" and not profile.mlx_available:
+            row = "Apple-Silicon" if profile.apple_silicon else "CPU"
+            return Reconciliation(_TIER_TABLE[row], "mlx-unavailable")
+        return Reconciliation(
             ResolvedHardware(
                 tier="configured",
                 model=model,
                 device=device,
                 compute_type=compute_type,
                 transform_model="",
-            ),
-            False,
+            )
         )
 
     @staticmethod
-    def _classify(profile: HardwareProfile) -> str:
+    def _classify(profile: HardwareProfile) -> TierName:
         """Return the tier name for *profile*. Pure, total over all profiles."""
         if not profile.cuda_available:
-            return "CPU"
+            if profile.mlx_available:
+                memory = profile.unified_memory_mb
+                if memory is not None and memory >= UNIFIED_MEMORY_HIGH_MB:
+                    return "Apple-GPU"
+                # Below the split, or unknown: the small model leaves headroom
+                # for the Transform model sharing the same unified memory.
+                return "Apple-GPU-low"
+            return "Apple-Silicon" if profile.apple_silicon else "CPU"
         vram = profile.total_vram_mb
         if vram is None:
             # CUDA present but VRAM unreadable: assume a modest card.

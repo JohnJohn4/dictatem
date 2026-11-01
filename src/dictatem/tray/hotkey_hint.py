@@ -63,3 +63,19 @@ def hotkey_hint_label(modifiers: tuple[str, ...], *, platform: str) -> str:
     if not combo:
         return ""
     return f"{combo} to dictate"
+
+
+def hotkey_keys(modifiers: tuple[str, ...], *, platform: str) -> list[str]:
+    """The live chord split into one label per key, for drawing as keycaps.
+
+    The same names and ordering as :func:`format_hotkey` — macOS glyphs in
+    canonical ``⌃⌥⇧⌘`` order with any mouse button last, the configured order
+    elsewhere — so the Usage Guide's keycaps can never disagree with the tray
+    header. Unknown names are dropped; an empty set yields ``[]``.
+    """
+    names = [name.lower() for name in modifiers]
+    if platform == "darwin":
+        glyphs = {_MAC_GLYPHS[name] for name in names if name in _MAC_GLYPHS}
+        keys = [glyph for glyph in _MAC_GLYPH_ORDER if glyph in glyphs]
+        return keys + [_WORD_NAMES[name] for name in names if name in _MOUSE_NAMES]
+    return [_WORD_NAMES[name] for name in names if name in _WORD_NAMES]

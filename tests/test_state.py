@@ -177,6 +177,13 @@ class TestTranscribing:
         assert Command.CANCEL in cmds
         assert Command.PASTE not in cmds
 
+    def test_borderline_flashes_say_again_no_paste(self) -> None:
+        sm = StateMachine()
+        self._enter_transcribing_via_toggle(sm)
+        cmds = sm.handle(Event.BORDERLINE, now_ms=2000)
+        assert sm.state is State.IDLE
+        assert cmds == [Command.FLASH_SAY_AGAIN]
+
     def test_empty_result_flashes_error_no_paste(self) -> None:
         sm = StateMachine()
         self._enter_transcribing_via_toggle(sm)
@@ -184,34 +191,6 @@ class TestTranscribing:
         assert sm.state is State.IDLE
         assert Command.FLASH_ERROR in cmds
         assert Command.PASTE not in cmds
-
-    def test_oom_first_retries(self) -> None:
-        sm = StateMachine()
-        self._enter_transcribing_via_toggle(sm)
-        cmds = sm.handle(Event.OOM, now_ms=2000)
-        assert sm.state is State.TRANSCRIBING
-        assert Command.RETRY_TRANSCRIPTION in cmds
-
-    def test_oom_second_notifies_and_idles(self) -> None:
-        sm = StateMachine()
-        self._enter_transcribing_via_toggle(sm)
-        sm.handle(Event.OOM, now_ms=2000)
-        assert sm.state is State.TRANSCRIBING
-
-        cmds = sm.handle(Event.OOM, now_ms=3000)
-        assert sm.state is State.IDLE
-        assert Command.NOTIFY_ERROR in cmds
-
-    def test_oom_retry_resets_on_new_transcription(self) -> None:
-        sm = StateMachine()
-        self._enter_transcribing_via_toggle(sm)
-        sm.handle(Event.OOM, now_ms=2000)
-        sm.handle(Event.TRANSCRIPTION_DONE, now_ms=3000)
-        assert sm.state is State.IDLE
-
-        self._enter_transcribing_via_toggle(sm)
-        cmds = sm.handle(Event.OOM, now_ms=5000)
-        assert Command.RETRY_TRANSCRIPTION in cmds
 
 
 class TestAutoRepeatSuppression:
@@ -234,16 +213,50 @@ class TestAutoRepeatSuppression:
         assert sm.state is State.PTT_REC
         assert cmds == []
 
-    def test_key_down_while_transcribing_is_ignored(self) -> None:
-        sm = StateMachine()
+
+class TestBusyNudge:
+    """A hotkey press while working nudges the user and changes nothing (#240)."""
+
+    def _enter_transcribing(self, sm: StateMachine) -> None:
         sm.handle(Event.KEY_DOWN, now_ms=0)
         sm.handle(Event.KEY_UP, now_ms=50)
         sm.handle(Event.KEY_DOWN, now_ms=1000)
         assert sm.state is State.TRANSCRIBING
 
-        cmds = sm.handle(Event.KEY_DOWN, now_ms=1050)
+    def test_key_down_while_transcribing_emits_only_the_busy_nudge(self) -> None:
+        sm = StateMachine()
+        self._enter_transcribing(sm)
+
+        cmds = sm.handle(Event.KEY_DOWN, now_ms=1500)
         assert sm.state is State.TRANSCRIBING
-        assert cmds == []
+        assert cmds == [Command.BUSY_NUDGE]
+
+    def test_repeated_presses_each_nudge_and_stay_transcribing(self) -> None:
+        sm = StateMachine()
+        self._enter_transcribing(sm)
+
+        for t in (1500, 1600, 1700):
+            assert sm.handle(Event.KEY_DOWN, now_ms=t) == [Command.BUSY_NUDGE]
+            assert sm.handle(Event.KEY_UP, now_ms=t + 50) == []
+        assert sm.state is State.TRANSCRIBING
+
+    def test_result_after_a_nudge_still_pastes(self) -> None:
+        sm = StateMachine()
+        self._enter_transcribing(sm)
+        sm.handle(Event.KEY_DOWN, now_ms=1500)
+        sm.handle(Event.KEY_UP, now_ms=1550)
+
+        cmds = sm.handle(Event.TRANSCRIPTION_DONE, now_ms=2000)
+        assert sm.state is State.IDLE
+        assert cmds == [Command.PASTE]
+
+    def test_esc_after_a_nudge_still_cancels(self) -> None:
+        sm = StateMachine()
+        self._enter_transcribing(sm)
+        sm.handle(Event.KEY_DOWN, now_ms=1500)
+
+        assert sm.handle(Event.ESC, now_ms=1600) == [Command.CANCEL]
+        assert sm.state is State.IDLE
 
 
 class TestEscFromAnyActiveState:
@@ -372,6 +385,42 @@ class TestFullCycleRoundTrips:
         assert sm.state is State.IDLE
 
 
+class TestReset:
+    """``reset()`` is the public recovery path back to IDLE (#234)."""
+
+    def test_reset_from_every_state_returns_to_idle(self) -> None:
+        reach: dict[State, list[tuple[Event, int]]] = {
+            State.IDLE: [],
+            State.PRESSED: [(Event.KEY_DOWN, 0)],
+            State.TOGGLE_REC: [(Event.KEY_DOWN, 0), (Event.KEY_UP, 50)],
+            State.PTT_REC: [(Event.KEY_DOWN, 0), (Event.TIMER_EXPIRED, 200)],
+            State.TRANSCRIBING: [
+                (Event.KEY_DOWN, 0),
+                (Event.TIMER_EXPIRED, 200),
+                (Event.KEY_UP, 3000),
+            ],
+        }
+        for target, events in reach.items():
+            sm = StateMachine(tap_threshold_ms=200)
+            for ev, at in events:
+                sm.handle(ev, now_ms=at)
+            assert sm.state is target
+            sm.reset()
+            assert sm.state is State.IDLE
+
+    def test_reset_emits_no_commands_and_next_press_starts_fresh(self) -> None:
+        sm = StateMachine(tap_threshold_ms=200)
+        sm.handle(Event.KEY_DOWN, now_ms=0)
+        assert sm.reset() is None
+        # A stray KEY_UP after reset is ignored (the press was forgotten).
+        assert sm.handle(Event.KEY_UP, now_ms=10_000) == []
+        assert sm.state is State.IDLE
+        # A new press is timed from its own KEY_DOWN, not the forgotten one.
+        sm.handle(Event.KEY_DOWN, now_ms=20_000)
+        sm.handle(Event.KEY_UP, now_ms=20_050)
+        assert sm.state is State.TOGGLE_REC
+
+
 class TestConfigurableThresholds:
     def test_custom_tap_threshold(self) -> None:
         sm = StateMachine(tap_threshold_ms=500)
@@ -397,15 +446,15 @@ class TestEnumCompleteness:
         expected = {
             "KEY_DOWN", "KEY_UP", "ESC", "TIMER_EXPIRED",
             "SILENCE_TIMEOUT", "MAX_DURATION", "TRANSCRIPTION_DONE",
-            "EMPTY_RESULT", "OOM",
+            "EMPTY_RESULT", "BORDERLINE",
         }
         assert set(Event.__members__) == expected
 
     def test_all_commands_defined(self) -> None:
         expected = {
             "RECORD_START", "RECORD_STOP_AND_TRANSCRIBE", "CANCEL", "PASTE",
-            "FLASH_ERROR", "START_TAP_TIMER", "CANCEL_TAP_TIMER",
-            "RETRY_TRANSCRIPTION", "NOTIFY_ERROR",
+            "FLASH_ERROR", "FLASH_SAY_AGAIN", "START_TAP_TIMER", "CANCEL_TAP_TIMER",
+            "BUSY_NUDGE",
         }
         assert set(Command.__members__) == expected
 

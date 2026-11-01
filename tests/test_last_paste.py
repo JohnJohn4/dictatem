@@ -8,7 +8,7 @@ from dictatem.transform.last_paste import LastPaste
 def _make(*, target_id: int = 42, pasted_at_ms: int = 1_000) -> LastPaste:
     return LastPaste(
         text="hello world ",
-        char_count=12,
+        backspace_units=12,
         target_id=target_id,
         pasted_at_ms=pasted_at_ms,
     )

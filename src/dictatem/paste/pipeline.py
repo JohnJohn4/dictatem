@@ -4,9 +4,15 @@ from __future__ import annotations
 
 import logging
 import time
+import unicodedata
 from typing import TYPE_CHECKING
 
-from dictatem.exceptions import ClipboardContentionError
+from dictatem.exceptions import ClipboardContentionError, ModifiersHeldError
+from dictatem.interfaces import InjectionDiagnostics
+from dictatem.paste.modifier_wait import (
+    MODIFIER_WAIT_CAP_S,
+    wait_for_modifiers_released,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -34,15 +40,49 @@ _POST_PASTE_SETTLE_S = 0.100
 _RESTORE_DELAY_S = 1.5
 
 
+# Control characters that read as a line or word break become a single space,
+# preserving the long-standing "newline -> space" behaviour. Tab is in this set
+# on purpose: a *typed* Tab (Trigger Fire sends keystrokes) moves focus in a
+# form or triggers shell completion, so it must never reach the target as-is.
+_SPACE_CONTROLS = "\t\n\v\f\r\x85\u2028\u2029"
+
+
+def _build_control_table() -> dict[int, str | None]:
+    # Drop every other C0 control, DEL, and C1 control (incl. 8-bit CSI U+009B):
+    # typed into a terminal these are live keystrokes/escape sequences — a lone
+    # \r is Enter, ESC starts a sequence — bypassing bracketed-paste protection
+    # (pre-launch review S-4 / #199).
+    table: dict[int, str | None] = dict.fromkeys(
+        [*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0)]
+    )
+    for ch in _SPACE_CONTROLS:
+        table[ord(ch)] = " "
+    return table
+
+
+_CONTROL_TABLE = _build_control_table()
+
+
 def normalize_pasted_text(text: str) -> str:
     """Return *text* as it will actually be placed on the clipboard.
 
     Public because the daemon snapshots the post-normalisation form into
     ``LastPaste`` so backspace counts line up with what the user sees.
+
+    Line/word-break controls (``\\r``, ``\\n``, tab, VT, FF, NEL, U+2028/U+2029)
+    become a space (``\\r\\n`` is one space); every other control character is
+    removed, so neither the clipboard paste nor the typed Trigger-Fire path can
+    deliver a keystroke-equivalent control code to the target.
+
+    The result is NFC-composed (after the control strip, so a mark separated
+    from its base by a removed control still composes): decomposed accents
+    land as the single characters apps expect, and the Last Paste's Backspace
+    Unit count matches what is on screen (#242).
     """
+    text = text.replace("\r\n", " ").translate(_CONTROL_TABLE)
+    text = unicodedata.normalize("NFC", text)
     # faster-whisper prefixes transcribed segments with a space; strip both
     # ends so we don't paste double spaces between consecutive transcriptions.
-    text = text.replace("\r\n", " ").replace("\n", " ")
     return text.strip() + " "
 
 
@@ -59,6 +99,53 @@ def _open_with_retry(
             sleep(_RETRY_DELAY_S)
 
 
+def _wait_for_modifier_release(
+    keystroke: KeystrokeSender,
+    *,
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> None:
+    """Block (bounded) until no modifier is held; raise if the cap expires.
+
+    Logs only modifier names and timings — never dictated text.
+    """
+    result = wait_for_modifiers_released(
+        keystroke.held_modifiers, clock=clock, sleep=sleep
+    )
+    if not result.needed:
+        return
+    held = ", ".join(sorted(result.initially_held))
+    if result.released:
+        logger.info(
+            "Paste: waited %d ms for held modifier(s) [%s] to be released",
+            round(result.waited_s * 1000),
+            held,
+        )
+        return
+    logger.warning(
+        "Paste: modifier(s) [%s] still held after %d ms (cap %.1fs); "
+        "nothing injected",
+        ", ".join(sorted(result.still_held)),
+        round(result.waited_s * 1000),
+        MODIFIER_WAIT_CAP_S,
+    )
+    raise ModifiersHeldError(result.still_held, result.waited_s)
+
+
+def _report_injection(keystroke: KeystrokeSender, target_id: int, kind: str) -> None:
+    """Ask a diagnostics-capable sender to log its per-injection line (#269).
+
+    Best-effort and fenced: a diagnostics failure is logged at DEBUG and can
+    never reach (or abort) the paste path.
+    """
+    if not isinstance(keystroke, InjectionDiagnostics):
+        return
+    try:
+        keystroke.report_injection(target_id, kind)
+    except Exception:
+        logger.debug("Paste diagnostics failed", exc_info=True)
+
+
 def paste(
     text: str,
     *,
@@ -69,6 +156,7 @@ def paste(
     target_id: int | None = None,
     schedule_restore: RestoreScheduler | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> None:
     """Paste *text* into the focused window.
 
@@ -93,6 +181,15 @@ def paste(
     clipboard is put back (#66). Without it, the restore runs synchronously
     after a short settle — the legacy path, which can lose that race on slow or
     security-hooked machines.
+
+    Before ANY side effect (clipboard write, focus restore, keystroke), the
+    pipeline waits — bounded by ``MODIFIER_WAIT_CAP_S`` — until no modifier is
+    held (``keystroke.held_modifiers()``), so a still-held hotkey can't turn
+    the injected Ctrl+V into Ctrl+Alt+V / Win+Ctrl+V or corrupt the typed
+    Trigger Fire path (#269). If the cap expires, :class:`ModifiersHeldError`
+    is raised with nothing injected, and the caller holds the dictation for
+    recovery. *clock* and *sleep* drive that wait (injected for tests); it
+    blocks the calling thread, which is why the cap is short.
     """
     normalized = normalize_pasted_text(text)
     if target_id is None:
@@ -104,11 +201,14 @@ def paste(
         replace_chars,
     )
 
+    _wait_for_modifier_release(keystroke, clock=clock, sleep=sleep)
+
     if replace_chars > 0:
         # Typed-replacement path: no clipboard, no settle, no race.
         foreground.restore(target_id)
         keystroke.send_backspaces(replace_chars)
         keystroke.send_text(normalized)
+        _report_injection(keystroke, target_id, "trigger-fire")
         logger.info("Paste: typed-replacement complete")
         return
 
@@ -120,6 +220,7 @@ def paste(
     logger.info("Paste: clipboard set, restoring foreground and sending Ctrl+V")
     foreground.restore(target_id)
     keystroke.send_paste()
+    _report_injection(keystroke, target_id, "paste")
 
     def _restore() -> None:
         # restore() can race the target window's Ctrl+V handler — both call

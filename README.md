@@ -11,7 +11,8 @@ flowchart LR
     T --> P["Pasted into the<br/>focused window"]
 ```
 
-Transcription is GPU-accelerated on Windows (NVIDIA) and runs on the CPU on macOS.
+Transcription is GPU-accelerated on Windows (NVIDIA) and on Apple-Silicon Macs
+with macOS 14+, and runs on the CPU elsewhere.
 
 **Jump to install → [Windows](#windows) · [macOS](#macos)**
 
@@ -45,8 +46,67 @@ and run it once you're satisfied.
 
 ### macOS
 
-Requires **macOS 12+** (Apple Silicon or Intel). Transcription runs on the CPU
-([ADR-0013](docs/adr/0013-macos-transcription-engine.md)).
+Requires **macOS 12+** (Apple Silicon or Intel). On first run Dictatem picks a
+transcription tier for your Mac
+([ADR-0013](docs/adr/0013-macos-transcription-engine.md)):
+
+| Your Mac | Tier | Engine and model |
+|---|---|---|
+| Apple Silicon, macOS 14+, **12 GB or more** memory | `Apple-GPU` | Apple GPU (MLX), `large-v3-turbo` |
+| Apple Silicon, macOS 14+, under 12 GB (or memory unreadable) | `Apple-GPU-low` | Apple GPU (MLX), `small` |
+| Apple Silicon without the GPU engine (macOS 12/13, or opted out) | `Apple-Silicon` | CPU, `small` |
+| Intel | `CPU` | CPU, `base` |
+
+The memory split exists because the Apple GPU shares memory with everything
+else, including the local Transform (Ollama) model. On an 8 GB Mac the smaller
+`small` model leaves room for both. The first run downloads the chosen model
+(about 1.6 GB for `large-v3-turbo`) so your first dictation works offline, and
+`daemon.log` records the tier, model and detected memory. The choice is written
+into `~/.dictatem/config.toml` once and never re-made, so an existing config
+keeps whatever it already says.
+
+On **Apple Silicon with macOS 14 or later**, the installer also installs the
+Apple GPU (MLX) transcription engine, which adds about **230 MB** to the
+download (torch, mlx, mlx-metal and friends). Intel Macs and macOS 12/13 skip
+it, because its wheels need macOS 14+ on Apple Silicon, and get the CPU set
+exactly as before. The installer prints which engine set it chose. To skip the
+GPU engine on a qualifying Mac, run the one-liner with
+`DICTATEM_NO_APPLE_GPU=1` in front of `sh` (`… | DICTATEM_NO_APPLE_GPU=1 sh`).
+Re-running the installer later adds the engine without touching your config.
+
+**Existing installs: opting into the Apple GPU.** A config written before the GPU
+engine arrived stays on the CPU. With the engine installed (re-run the
+installer), switch to the Apple GPU by setting these three lines under `[model]`
+in `~/.dictatem/config.toml`, then choose **Restart** from the menu-bar menu:
+
+```toml
+[model]
+name = "large-v3-turbo"         # or "small" on an 8 GB Mac, or an mlx-community repo id
+device = "mlx"
+compute_type = "float16"
+```
+
+In this case the first dictation fetches the MLX model; after that it loads from
+the cache with no network.
+
+**Pinning back to the CPU.** To run on the CPU instead (on a new install that
+picked an Apple-GPU tier, or after opting in), set these under `[model]` and
+Restart:
+
+```toml
+[model]
+name = "small"
+device = "cpu"
+compute_type = "int8"
+```
+
+Your config is authoritative, so Dictatem keeps it that way. If the GPU engine
+isn't usable on the machine (Intel Mac, macOS 12/13, the engine not installed,
+or a config copied to Windows), Dictatem runs on CPU for that session, shows one notification saying
+why, and leaves your config as it is. **Vocabulary caveat:** the GPU engine has
+no `hotwords` support, so your `vocabulary.md` terms are fed through
+`initial_prompt` instead. They still bias recognition, but more weakly than on
+the CPU engine.
 
 Run in **Terminal**:
 
@@ -55,10 +115,15 @@ curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.4/install.s
 ```
 
 This generates `~/Applications/Dictatem.app` and starts Dictatem in the menu bar
-via a per-user LaunchAgent (which also auto-starts it at login). On first launch
-Dictatem walks you through the two macOS permission grants it needs —
-**Accessibility** (to paste text) and **Input Monitoring** (to hear the hotkey);
-**Microphone** is prompted on your first dictation. See
+via a per-user LaunchAgent (which also auto-starts it at login). The installer
+waits until the menu-bar icon is up — the first launch can take up to a minute.
+**Setup isn't finished yet at that point:** Dictatem then asks for the two macOS
+permissions it needs — **Accessibility** (to paste text) and **Input Monitoring**
+(to hear the hotkey). Turn each on in System Settings, then choose **Restart**
+from the menu-bar menu; the hotkey and paste work only after that restart.
+**Microphone** is prompted on your first dictation. If a permission is still
+missing later, Dictatem tells you when the hotkey or a paste is blocked rather
+than failing silently. See
 [Troubleshooting](#troubleshooting) below for the macOS details that trip people up.
 
 > **macOS support is new.** The core flow is validated on Apple Silicon, but a
@@ -111,11 +176,56 @@ and **`summarize`** (condense to notes). This feature is **off until you set up
 [Ollama](#trigger-words-setup-ollama)** yourself. Add your own triggers by
 dropping a markdown prompt file into `~/.dictatem/prompts/`.
 
+Trigger words tolerate small mishearings when said on their own: a quick
+"paste" heard as "haste", or "polish" heard as "palish", still fires. Anything
+longer than a few words (or a couple of seconds of speech) is always pasted as
+dictation, and dictated text itself is never altered.
+
+If a short word only sounds *close to* a trigger word and Dictatem isn't sure,
+the pill flashes a distinct sky-blue **"say again"** colour and **nothing is
+pasted** — your last dictation is kept, so just say the trigger word again. If a
+real one-word dictation (say, "Summer.") trips it, dictate it inside a longer
+phrase. To match trigger words exactly only, add this to `config.toml`:
+
+```toml
+[trigger_words]
+fuzzy_matching = false
+```
+
+If your voice consistently produces the same mishearing of **"paste"**, map it
+straight to the built-in `paste` action with `paste_aliases`. They work like
+"paste" itself: with Trigger Words (Ollama) off, with no recent paste, and with
+the same mishearing tolerance. A `paste` alias wins over a prompt file with the
+same alias (Dictatem logs a warning at startup). Your `paste` aliases are listed
+in **How to use Dictatem…**.
+
+```toml
+[trigger_words]
+paste_aliases = ["haste", "taste"]
+```
+
+#### Choosing trigger words
+
+Words with more than one syllable that sound different from each other and from
+everyday speech work best: `summarize` beats `sum`. Bare "paste" is short and
+easily misheard ("haste", "taste"), which is why `paste_aliases` exists. Aliases
+under five letters only fire when heard exactly.
+
+At startup Dictatem checks all your trigger words (prompt files, `paste` and your
+`paste_aliases`) and writes to `daemon.log`:
+
+- a **warning** when two words of different actions sound alike (e.g. a
+  `palace` prompt next to `polish`): a misheard one may run the other;
+- a **note** when a word is too short for mishearing tolerance.
+
+To rename a trigger word, edit the `aliases: [...]` line of its prompt file in
+`~/.dictatem/prompts/` (or your `paste_aliases` list) and restart Dictatem.
+
 ### Tray / menu-bar menu
 
 Right-click the icon for: **Start/Stop Recording**, **Copy last dictation**,
 **Preload / Unload Model**, **Open config file…**, **How to use Dictatem…** (a
-live in-app guide), **Check for Updates…** (Windows), **Show Log**, **Restart**,
+live in-app guide), **Check for updates…**, **Show Log**, **Restart**,
 **Quit**.
 
 ---
@@ -123,9 +233,9 @@ live in-app guide), **Check for Updates…** (Windows), **Show Log**, **Restart*
 ## Features
 
 - **Global hotkey** — activate from any window; push-to-talk or hands-free toggle.
-- **On-device transcription** — Faster-Whisper, GPU-accelerated on NVIDIA, CPU on macOS.
+- **On-device transcription** — Faster-Whisper, GPU-accelerated on NVIDIA and, via mlx-whisper, on Apple-Silicon Macs (macOS 14+); CPU elsewhere.
 - **Offline after setup** — the model downloads once on first run; every dictation after that needs no network.
-- **Smart paste** — saves and restores your clipboard **text** and window focus around each paste, and never clutters clipboard history. (Non-text clipboard content — images, copied files — is not preserved yet.)
+- **Smart paste** — saves and restores your clipboard and window focus around each paste, and never clutters clipboard history. On Windows the whole clipboard survives a dictation — screenshots, files copied in Explorer, rich text and HTML — except very large contents (over 64 MB), where only the text is kept. (On macOS only clipboard **text** is preserved yet; images and copied files are not.)
 - **Trigger Words** — rewrite the last paste in place via a local Ollama model.
 - **Custom vocabulary & replacements** — bias recognition toward your jargon, and rewrite words deterministically (see [Customising](#customising)).
 - **Overlay pill** — corner indicator with a live waveform; encodes recording phase by colour.
@@ -144,7 +254,7 @@ the network:
 - **One-time model download** — the Faster-Whisper weights are fetched from
   Hugging Face at setup / on your first dictation. After that, transcription is
   fully offline.
-- **Manual update check (Windows)** — only when you click **Check for Updates…**
+- **Manual update check** — only when you click **Check for updates…**
   in the tray; it asks `api.github.com` for the latest release number and sends
   nothing else. There is no automatic/background check.
 - **Install & upgrade** — the install one-liner fetches `uv`/CPython, Dictatem,
@@ -183,8 +293,10 @@ tap_threshold_ms = 200          # below this = toggle tap; above = push-to-talk 
 
 [model]
 name = "large-v3-turbo"         # auto-picked from your hardware on first run
-device = "cuda"                 # cuda or cpu
+device = "cuda"                 # cuda, cpu, or mlx (Apple GPU; see macOS above)
 idle_unload_minutes = 30        # free the model's memory after this much idle time
+# language = "zh"               # unset = English; a Whisper code pins it; "auto" detects
+# languages = ["en", "zh"]      # Preferred Languages: detect only among these
 
 [behaviour]
 silence_timeout_s = 60          # auto-stop a toggle recording after this much silence
@@ -196,7 +308,49 @@ preload_model = false           # load at startup vs. when you first arm a dicta
 [transform]
 enabled = true                  # master switch for Trigger Words
 model_name = "gemma4:e2b"       # Ollama model tag; must match `ollama list`
+
+[trigger_words]                 # shown commented-out in the first-run file
+fuzzy_matching = true           # false = trigger words must be heard exactly
+paste_aliases = []              # extra words that mean `paste`, e.g. ["haste"]
 ```
+
+`[audio].sample_rate` is fixed at `16000` (the transcriber needs 16 kHz). Any
+other value is reported and ignored.
+
+### Language
+
+**Dictatem transcribes in English unless you tell it otherwise.** (Earlier
+builds guessed the language on every clip, and a one-word clip like "Summer."
+could come out in French or Greek.) Under `[model]`:
+
+| Setting | What happens |
+|---|---|
+| no `language` key (default) | English, no detection. |
+| `language = "zh"` | Always that language. Use a [Whisper language code](https://github.com/openai/whisper/blob/main/whisper/tokenizer.py) (`en`, `zh`, `de`, `ja`, `yue`, …). |
+| `language = "auto"` | Detect the language of each clip, across every language. |
+| `languages = ["en", "zh"]` | Your **Preferred Languages**: detect, but choose only among these. Takes precedence over `language`. |
+
+Detection is **sure or fall back**. A clip with less than about 1.5 s of speech
+is never detected, and a detection that is less than 60% sure (counted only
+among your Preferred Languages, if set) isn't trusted. Either way the clip uses
+the fallback: the last language confidently detected this session (if it's
+allowed), else the first of your Preferred Languages, else (for `"auto"`) your
+Windows or macOS display language, else English. So for one-word clips and
+short Trigger Words, put the language you use most first in `languages`. An
+unknown code is reported at startup like any other config problem and the
+default is used. The log records each clip's chosen language and why (the code
+only, never the text).
+
+**Config problems are reported, and Dictatem never changes your file.** Every
+value is checked against its type. A whole number is fine for a decimal setting
+like `silence_timeout_s`, but `true` is not a number. A wrong or invalid value
+falls back to that key's default. If `config.toml` has a syntax error, this
+session runs on the defaults Dictatem would pick for your hardware on first run.
+Either way you get one tray notification at startup that says what was wrong,
+and the full detail goes to the log. While the file has a problem, the **Start
+at login** toggle applies for that session only and is not saved. Unknown keys
+are ignored quietly; they show up only in the log. Fix the file with **Open
+config file…**, then use **Restart**.
 
 ### Model loading & memory
 
@@ -245,12 +399,19 @@ overlay flashes a message telling you which step is missing.
 
 ## Updating
 
-- **Windows** — right-click the tray icon → **Check for Updates…**. Dictatem
-  compares against the latest GitHub release and, if newer, re-runs the installer
-  for you (safe while running — it stops the old daemon first).
-- **macOS** — re-run the [install one-liner](#macos); it refreshes the tool, the
-  `.app`, and the start-at-login entry together. *(An in-app updater is not yet
-  available on macOS — [#193](https://github.com/JohnJohn4/dictatem/issues/193).)*
+- **Windows** — right-click the tray icon → **Check for updates…**. Dictatem
+  compares against the latest GitHub release and, if newer, asks before
+  re-running the installer for you (safe while running — it stops the old daemon
+  first).
+- **macOS** — click the menu-bar icon → **Check for updates…**. If a newer
+  release exists, Dictatem shows its version and the matching install command —
+  click **Copy Update Command**, paste it into **Terminal**, and press Return.
+  Dictatem never runs the update itself on macOS. The command is just the
+  [install one-liner](#macos) at the newer tag: it stops the old daemon,
+  refreshes the tool, the `.app`, and the start-at-login entry, and restarts
+  Dictatem; your config and permission grants carry over. *(A one-click in-app
+  update on macOS is a planned follow-up to
+  [#193](https://github.com/JohnJohn4/dictatem/issues/193).)*
 
 You can also update either platform by re-running the one-liner with a newer
 version tag in the URL — see the [latest release](https://github.com/JohnJohn4/dictatem/releases/latest).
@@ -272,6 +433,16 @@ The same two steps apply on macOS (in Terminal) — step 1 also removes
 ---
 
 ## Troubleshooting
+
+<details>
+<summary><strong>The pill flashed blue and nothing was pasted</strong></summary>
+
+That's the **"say again"** flash: what you said sounded close to a trigger word
+(e.g. "haste" for **paste**), but Dictatem wasn't sure enough to run it, so it
+pasted nothing rather than typing the wrong word. Your last dictation is
+untouched — say the trigger word again, clearly. If you meant to dictate a single
+word that sounds like a trigger word, say it inside a longer phrase.
+</details>
 
 <details>
 <summary><strong>The tray icon takes a few seconds to appear (or the first dictation lags)</strong></summary>
@@ -301,6 +472,7 @@ again before a manual re-install (the tray update re-detects instead).
   `Dictatem.app` (macOS then suppresses the menu-bar icon), and don't run
   `dictatem` from a bare terminal (macOS would attribute the permission grants to
   your *terminal app*, and the hotkey/paste would silently fail). To restart it:
+  choose **Restart** from the menu-bar menu (it relaunches through launchd), or run
   `launchctl kickstart -k gui/$(id -u)/com.dictatem.daemon`.
 - **Grant `python3.12`, not "Dictatem".** Because the daemon runs as the
   uv-managed CPython, the System Settings privacy panes list the entry as
@@ -311,8 +483,9 @@ again before a manual re-install (the tray update re-detects instead).
   transiently sits on the pasteboard (~1.5 s) before your original clipboard is
   restored, so a clipboard-history app could capture it — see
   [Privacy](#privacy).
-- **Updating is manual** — re-run the install one-liner; there's no in-app
-  updater yet ([#193](https://github.com/JohnJohn4/dictatem/issues/193)).
+- **Updating is copy-and-paste** — **Check for updates…** finds a newer release
+  and gives you the install command to run in Terminal; it never updates itself
+  on macOS (see [Updating](#updating)).
 </details>
 
 <details>
@@ -329,6 +502,10 @@ Dictatem diagnoses this from Ollama's network response and flashes the cause:
 A Trigger Fire also only runs if the focused window is still the one you pasted
 into and the paste is younger than `[transform].last_paste_ttl_s` (default 5 min).
 Switching windows or waiting too long discards the trigger silently.
+
+If the wrong trigger runs, check `daemon.log` for a startup warning that two
+trigger words sound alike, and rename one (see
+[Choosing trigger words](#choosing-trigger-words)).
 </details>
 
 <details>

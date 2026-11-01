@@ -15,8 +15,8 @@ import pytest
 from dictatem.daemon import DaemonCore
 from dictatem.state import Event, State, StateMachine
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
-from dictatem.transform.detector import TriggerDetector
 from dictatem.transform.lifecycle import TransformLifecycle
+from dictatem.transform.recognizer import TriggerWordRecognizer
 from tests.fakes import (
     FakeAudioCapture,
     FakeClipboardIO,
@@ -67,6 +67,7 @@ def _make_core(
     transform_backend: FakeTransformBackend,
     transform_enabled: bool = True,
     aliases: dict[str, str] | None = None,
+    paste_aliases: tuple[str, ...] = (),
 ) -> DaemonCore:
     return DaemonCore(
         state_machine=StateMachine(tap_threshold_ms=200),
@@ -78,7 +79,9 @@ def _make_core(
         keystroke=keystroke,
         foreground=FakeForegroundTracker(target_id=42),
         transform_lifecycle=TransformLifecycle(backend=transform_backend),
-        trigger_detector=TriggerDetector(aliases if aliases is not None else ALIASES),
+        trigger_recognizer=TriggerWordRecognizer(
+            aliases if aliases is not None else ALIASES, paste_aliases=paste_aliases
+        ),
         transform_enabled=transform_enabled,
         last_paste_ttl_s=300.0,
     )
@@ -131,6 +134,41 @@ class TestPasteReRePastes:
         assert keystroke.total_backspaces == 0
         assert keystroke.typed_texts == []
 
+    @pytest.mark.parametrize("heard", ["haste", "Haste.", "Pasta."])
+    def test_lone_near_miss_of_paste_re_pastes_the_most_recent_dictation(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        heard: str,
+    ) -> None:
+        # #247: "paste" misheard as "haste" still re-pastes; the misheard
+        # word never lands in the document.
+        backend._result = "hello world"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = heard
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+        assert _set_texts(clipboard) == ["hello world ", "hello world "]
+        assert keystroke.paste_count == 2
+        assert keystroke.typed_texts == []
+
+    def test_near_miss_of_paste_inside_a_sentence_is_dictation(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        clipboard: FakeClipboardIO,
+    ) -> None:
+        backend._result = "hello world"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = "more haste less speed"
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+        assert _set_texts(clipboard)[-1] == "more haste less speed "
+
     @pytest.mark.parametrize("form", ["paste", "Paste.", "paste?", "PASTE"])
     def test_case_and_punctuation_forms_all_fire(
         self,
@@ -180,6 +218,27 @@ class TestDecoupledFromTransform:
         backend._result = "paste"
         _cycle(core, start_ms=2_000, end_ms=3_000)
         assert _set_texts(clipboard) == ["no transform here ", "no transform here "]
+
+    def test_a_configured_paste_alias_re_pastes_with_transform_disabled(
+        self,
+        backend: FakeTranscriberBackend,
+        clipboard: FakeClipboardIO,
+        keystroke: FakeKeystrokeSender,
+        overlay: FakeOverlayRenderer,
+        transform_backend: FakeTransformBackend,
+    ) -> None:
+        # [trigger_words].paste_aliases (#250): the user's own word for `paste`.
+        core = _make_core(
+            backend=backend, clipboard=clipboard, keystroke=keystroke,
+            overlay=overlay, transform_backend=transform_backend,
+            transform_enabled=False, paste_aliases=("glue",),
+        )
+        backend._result = "no transform here"
+        _cycle(core, start_ms=0, end_ms=1_000)
+        backend._result = "Glue."
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+        assert _set_texts(clipboard) == ["no transform here ", "no transform here "]
+        assert transform_backend.calls == []
 
     def test_works_with_no_prior_last_paste_and_arms_it(
         self,
@@ -240,6 +299,7 @@ class TestEmptyBuffer:
         assert keystroke.paste_count == 0
         assert keystroke.typed_texts == []
         assert any(c[0] == "show_error" for c in overlay.calls)
+        assert ("show_held",) not in overlay.calls  # nothing to recover (#239)
         assert core._most_recent_dictation is None
         assert core._sm.state is State.IDLE
 

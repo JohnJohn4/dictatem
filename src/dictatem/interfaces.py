@@ -10,8 +10,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
+    from dictatem.paste.clipboard_snapshot import ClipboardSnapshot
     from dictatem.types import (
         AudioChunk,
         HardwareProfile,
@@ -37,16 +38,25 @@ class ClipboardIO(Protocol):
         """Release exclusive clipboard access."""
         ...
 
-    def save(self) -> str | None:
-        """Save the current clipboard text content. Returns None if empty."""
+    def save(self) -> ClipboardSnapshot:
+        """Capture the current clipboard as an opaque Clipboard Snapshot.
+
+        Every format the Clipboard Capture Plan deems safely capturable (text,
+        images, file drops, HTML/RTF …), within its size cap; over the cap only
+        text. An empty clipboard gives an empty snapshot. Callers pass the
+        snapshot back to :meth:`restore` untouched (#243).
+        """
         ...
 
     def set_text(self, text: str) -> None:
         """Place *text* on the clipboard."""
         ...
 
-    def restore(self, saved: str | None) -> None:
-        """Restore previously saved clipboard content.
+    def restore(self, saved: ClipboardSnapshot) -> None:
+        """Write a snapshot from :meth:`save` back, every format in order.
+
+        A clipboard-history-excluded write (ADR-0023); an empty snapshot leaves
+        the clipboard empty.
 
         Like :meth:`open`, raises ``OSError`` on contention — the deferred restore
         races the target's paste handler, and the pipeline swallows it (#145/#23).
@@ -88,6 +98,35 @@ class KeystrokeSender(Protocol):
         Used by the Trigger Fire path instead of clipboard+Ctrl+V: avoids
         racing the target window's paste handler over clipboard ownership
         (see #23) and leaves the user's clipboard untouched.
+        """
+        ...
+
+    def held_modifiers(self) -> frozenset[str]:
+        """Return the modifier keys logically down right now.
+
+        Names come from ``{"alt", "win", "shift", "ctrl"}``; the set is empty
+        when none is held. The paste pipeline polls this before injecting
+        anything, so a still-held hotkey can't turn Ctrl+V into Ctrl+Alt+V
+        (#269). An adapter whose injected events carry explicit modifier flags
+        (macOS) may always return an empty set.
+        """
+        ...
+
+
+@runtime_checkable
+class InjectionDiagnostics(Protocol):
+    """Optional KeystrokeSender extension: log one diagnostic line per injection.
+
+    The paste pipeline calls :meth:`report_injection` right after a regular
+    paste's Ctrl+V and after a Trigger Fire's typed text (#269). Implemented
+    only by the Windows adapter; senders without it are simply not asked.
+    """
+
+    def report_injection(self, target_id: int, kind: str) -> None:
+        """Log window/input state for the injection just sent into *target_id*.
+
+        *kind* is ``"paste"`` or ``"trigger-fire"``. Must log no dictated text.
+        Best-effort: the pipeline also guards it, so it can never break a paste.
         """
         ...
 
@@ -201,6 +240,17 @@ class TranscriberBackend(Protocol):
 
     def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
         """Transcribe an audio chunk and return the result."""
+        ...
+
+    def transcribe_command(
+        self, audio: AudioChunk, trigger_words: Sequence[str]
+    ) -> TranscriptionResult:
+        """One-off command-biased, VAD-off transcription (the confirm pass, #249).
+
+        Biased toward *trigger_words* for this call only (the persistent
+        Vocabulary hint is not applied), with VAD disabled so a clipped onset
+        isn't trimmed further.
+        """
         ...
 
     def empty_cache(self) -> None:
@@ -325,8 +375,29 @@ class OverlayRenderer(Protocol):
         caption); this is the resident-and-generating case."""
         ...
 
+    def show_busy_nudge(self) -> None:
+        """Briefly caption the pill "Still working — Esc cancels" over the
+        current processing phase, then revert — the hotkey was pressed while
+        Dictatem is transcribing or running a Transform (#240 / review F-14).
+        Never changes the phase or repositions the pill."""
+        ...
+
     def show_error(self) -> None:
-        """Flash the overlay to indicate an error (e.g. empty result)."""
+        """Flash the overlay to indicate a genuine failure (e.g. empty result, a
+        discarded Trigger Fire, or "paste" with nothing to recover)."""
+        ...
+
+    def show_held(self) -> None:
+        """Show the quiet "Saved — say paste" signal: a regular dictation was
+        held in the Most-recent dictation buffer instead of pasted (focus drift,
+        or a failed paste). Its own colour and caption, distinct from the error
+        flash; silent, and never refocuses anything (#239 / ADR-0026)."""
+        ...
+
+    def show_say_again(self) -> None:
+        """Flash "say again": Dictatem heard something close to a Trigger Word
+        but wasn't sure, and pasted nothing (a Borderline outcome, #248). Same
+        timing as the error flash, its own hue — nothing broke."""
         ...
 
     def hide(self) -> None:

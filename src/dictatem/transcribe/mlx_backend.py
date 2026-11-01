@@ -1,0 +1,272 @@
+"""MlxBackend — mlx-whisper adapter for the Apple-GPU tier (#231, spec #224).
+
+A thin native adapter (macOS arm64 only, real-Mac QA; excluded from pyright like
+the other mac adapters). The decisions it relies on live in the pure
+:mod:`dictatem.transcribe.mlx_models`.
+
+Import-safe on every OS: ``mlx`` / ``mlx_whisper`` (and faster-whisper's VAD)
+are imported lazily inside the methods, so constructing an ``MlxBackend`` or
+importing the daemon on Windows or an Intel Mac never touches MLX.
+
+Every MLX call (load, transcribe, unload, cache clearing) runs on ONE
+backend-owned worker thread, so MLX never sees concurrent or cross-thread use
+under load-on-arm (ADR-0025). The public methods block until the worker is done,
+matching the synchronous ``TranscriberBackend`` contract.
+"""
+
+from __future__ import annotations
+
+import gc
+import logging
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING, Any, TypeVar
+
+import numpy as np
+
+from dictatem.transcribe.language import LanguageSelector
+from dictatem.transcribe.mlx_models import (
+    keep_speech,
+    mlx_command_bias,
+    mlx_recognition_hint,
+    mlx_repo_for,
+    normalise_mlx_compute_type,
+    transcript_from_mlx_result,
+)
+from dictatem.types import EmptyResult, Transcript
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from dictatem.types import AudioChunk, TranscriptionResult
+
+logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
+
+
+def _local_snapshot(repo: str) -> str:
+    """Path of *repo*'s snapshot in the HF cache, fetching only if it's missing.
+
+    The local lookup needs no network, so "offline after setup" holds for the
+    GPU tier (ADR-0025): a cached model loads with ``HF_HUB_OFFLINE=1`` or no
+    connection at all.
+    """
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    try:
+        return snapshot_download(repo, local_files_only=True)
+    except LocalEntryNotFoundError:
+        logger.info("Fetching MLX model %s into the HuggingFace cache", repo)
+        return snapshot_download(repo)
+
+
+class MlxBackend:
+    """TranscriberBackend implementation using mlx-whisper on the Apple GPU."""
+
+    def __init__(
+        self,
+        model_name: str = "large-v3-turbo",
+        compute_type: str = "float16",
+        language_selector: LanguageSelector | None = None,
+        vad_filter: bool = True,
+        vocabulary: list[str] | None = None,
+    ) -> None:
+        self._model_name = model_name
+        self._compute_type = compute_type
+        # Language selection (#273), shared with the CPU fallback engine.
+        self._languages = (
+            language_selector if language_selector is not None else LanguageSelector()
+        )
+        self._vad_filter = vad_filter
+        self._vocabulary = vocabulary or []
+        # mlx-whisper has no `hotwords`: Vocabulary always rides initial_prompt.
+        self._recognition_hint = mlx_recognition_hint(self._vocabulary)
+        self._model_path: str | None = None
+        self._fp16 = True
+        self._loaded = False
+        self._progress_callback: Callable[[int, int], None] | None = None
+        # The worker thread is only started on the first submit.
+        self._worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dictatem-mlx")
+
+    def _on_worker(self, fn: Callable[[], _T]) -> _T:
+        return self._worker.submit(fn).result()
+
+    # -- TranscriberBackend ---------------------------------------------------
+
+    def load_model(self) -> None:
+        self._on_worker(self._load)
+
+    def unload_model(self) -> None:
+        self._on_worker(self._unload)
+
+    def download_to_disk(self) -> None:
+        """Fetch the MLX weights into the HF cache WITHOUT loading them.
+
+        Touches only huggingface_hub (no MLX, no Metal), so it runs on the
+        caller's thread. Idempotent: a cached model returns with no network.
+        """
+        _local_snapshot(mlx_repo_for(self._model_name))
+
+    def transcribe(self, audio: AudioChunk) -> TranscriptionResult:
+        return self._on_worker(
+            lambda: self._transcribe(
+                audio, vad_filter=self._vad_filter, hint=self._recognition_hint
+            )
+        )
+
+    def transcribe_command(
+        self, audio: AudioChunk, trigger_words: Sequence[str]
+    ) -> TranscriptionResult:
+        """The Borderline confirm pass (#249): command-biased, VAD off.
+
+        mlx-whisper has no ``hotwords``, so the bias is the same sentence-like
+        ``initial_prompt`` faster-whisper gets, replacing the Vocabulary hint
+        for this one call. VAD off means the Silero pre-trim is skipped, so a
+        clipped onset isn't trimmed further.
+        """
+        hint = mlx_command_bias(trigger_words)
+        return self._on_worker(
+            lambda: self._transcribe(audio, vad_filter=False, hint=hint, confirm_pass=True)
+        )
+
+    def empty_cache(self) -> None:
+        self._on_worker(self._clear_mlx_cache)
+
+    def set_progress_callback(self, callback: Callable[[int, int], None] | None) -> None:
+        self._progress_callback = callback
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._loaded
+
+    # -- worker-thread bodies -------------------------------------------------
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        # UnknownMlxModelError surfaces here, at load, where the runtime
+        # fallback (#232) catches it like any other load failure.
+        repo = mlx_repo_for(self._model_name)
+        fp16 = normalise_mlx_compute_type(self._compute_type) == "float16"
+        path = _local_snapshot(repo)
+
+        import mlx.core as mx
+        from mlx_whisper.transcribe import ModelHolder
+
+        ModelHolder.get_model(path, mx.float16 if fp16 else mx.float32)
+        self._model_path = path
+        self._fp16 = fp16
+        self._loaded = True
+        if self._vocabulary:
+            logger.info(
+                "Vocabulary: %d term(s) fed to mlx-whisper via initial_prompt "
+                "(no hotwords on this engine; biasing may be weaker)",
+                len(self._vocabulary),
+            )
+
+    def _unload(self) -> None:
+        if not self._loaded:
+            return
+        from mlx_whisper.transcribe import ModelHolder
+
+        # Drop the process-global holder, then return the buffers to the OS so
+        # idle unload / tray Unload actually frees unified memory.
+        ModelHolder.model = None
+        ModelHolder.model_path = None
+        self._model_path = None
+        self._loaded = False
+        gc.collect()
+        self._clear_mlx_cache()
+
+    def _clear_mlx_cache(self) -> None:
+        # Never import MLX just to clear a cache it hasn't allocated.
+        if "mlx.core" not in sys.modules:
+            return
+        import mlx.core as mx
+
+        mx.clear_cache()
+
+    def _detect_probabilities(self, speech: np.ndarray) -> dict[str, float] | None:
+        """Whisper's per-language probabilities for *speech* (#273).
+
+        The same steps ``mlx_whisper.transcribe`` runs when ``language`` is
+        unset (mlx-whisper 0.4.x): log-mel of the first 30 s, then
+        ``model.detect_language``, which returns the full ``{code: prob}``
+        distribution, so the Preferred Languages restriction works exactly as on
+        faster-whisper. ``None`` on an English-only model or any failure (the
+        selector then uses the fallback).
+        """
+        try:
+            import mlx.core as mx
+            from mlx_whisper.audio import N_FRAMES, N_SAMPLES, log_mel_spectrogram, pad_or_trim
+            from mlx_whisper.transcribe import ModelHolder
+
+            dtype = mx.float16 if self._fp16 else mx.float32
+            model = ModelHolder.get_model(self._model_path, dtype)
+            if not model.is_multilingual:
+                return None
+            mel = log_mel_spectrogram(speech, n_mels=model.dims.n_mels, padding=N_SAMPLES)
+            segment = pad_or_trim(mel, N_FRAMES, axis=-2).astype(dtype)
+            _tokens, probs = model.detect_language(segment)
+            return {str(code): float(p) for code, p in probs.items()}
+        except Exception:
+            logger.debug("MLX language detection failed; using the fallback", exc_info=True)
+            return None
+
+    def _transcribe(
+        self,
+        audio: AudioChunk,
+        *,
+        vad_filter: bool,
+        hint: dict[str, str],
+        confirm_pass: bool = False,
+    ) -> TranscriptionResult:
+        if not self._loaded or self._model_path is None:
+            return EmptyResult()
+        samples = np.asarray(audio, dtype=np.float32)
+        selector = self._languages
+        detects = selector.policy.detects and not confirm_pass
+        speech: np.ndarray | None = None
+        if vad_filter or detects:
+            # mlx-whisper has no VAD: pre-trim with the Silero VAD bundled in
+            # faster-whisper (always installed as the fallback engine), the
+            # same silence-hallucination guard as the CPU path. Language
+            # detection measures (and listens to) the same speech.
+            from faster_whisper.vad import get_speech_timestamps
+
+            speech = keep_speech(samples, get_speech_timestamps(samples))
+        if vad_filter and speech is not None:
+            samples = speech
+            if samples.size == 0:
+                # Same as faster-whisper's vad_filter on silence: an empty
+                # Transcript (no segments, so unknown confidence; no speech).
+                return Transcript("", confidence=None, speech_duration_s=0.0)
+
+        if confirm_pass:
+            # The confirm pass re-transcribes the previous pass's audio: reuse
+            # that pass's language (#273).
+            language = selector.confirm_pass_language()
+        elif not detects or speech is None:
+            language = selector.choose(None, None).language
+        else:
+            duration = speech.size / 16_000
+            probabilities = (
+                self._detect_probabilities(speech)
+                if selector.needs_detection(duration)
+                else None
+            )
+            language = selector.choose(probabilities, duration).language
+
+        import mlx_whisper
+
+        kwargs: dict[str, Any] = {
+            "path_or_hf_repo": self._model_path,
+            "language": language,
+            "fp16": self._fp16,
+            "verbose": None,
+            **hint,
+        }
+        result = mlx_whisper.transcribe(samples, **kwargs)
+        return transcript_from_mlx_result(result, speech_samples=int(samples.size))

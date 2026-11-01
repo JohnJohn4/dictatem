@@ -12,7 +12,9 @@ import sys
 from typing import TYPE_CHECKING
 
 from dictatem.overlay.state import (
+    PILL_BODY_HEX,
     PILL_HEIGHT,
+    PILL_HEX,
     PILL_WIDTH,
     OverlayPhase,
     PillColor,
@@ -22,22 +24,26 @@ from dictatem.overlay.state import (
 if TYPE_CHECKING:
     from dictatem.overlay.state import OverlayState
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QCursor, QPainter
+from PySide6.QtCore import QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QWidget
 
 from dictatem.overlay.state import MonitorRect
 
-# Semantic PillColor → actual hue (the implementer call ADR-0026 leaves open).
-# Distinct hues for transcribing vs computing so the two processing phases read
-# differently. Built once at import (QColor needs no QApplication) rather than
-# per paintEvent — the pill repaints at 30 FPS while visible.
-_PHASE_HUES = {
-    PillColor.ACCENT: QColor(255, 255, 255, 195),  # recording — white (motion is the cue)
-    PillColor.PROCESSING: QColor(255, 191, 0),  # transcribing — amber
-    PillColor.COMPUTING: QColor(170, 130, 255),  # computing — violet
-    PillColor.ERROR: QColor(235, 80, 80),  # error / "saved" flash — red
-}
+# Semantic PillColor → actual hue, from the pure palette in ``overlay.state``
+# (shared with the Usage Guide's colour legend). Built once at import (QColor
+# needs no QApplication) rather than per paintEvent — the pill repaints at 30 FPS.
+_PHASE_HUES = {color: QColor(hex_) for color, hex_ in PILL_HEX.items()}
+_BODY = QColor(PILL_BODY_HEX)
+_BODY.setAlpha(235)
+# A faint light rim so the pill keeps its edge on dark windows and wallpapers.
+_RIM = QColor(255, 255, 255, 28)
+_CAPTION = QColor(PILL_HEX[PillColor.ACCENT])
+
+# Per-bar easing toward the target height: fast attack, slower release, so the
+# bars follow the voice without jitter.
+_ATTACK = 0.55
+_RELEASE = 0.18
 
 
 class QtOverlayWidget(QWidget):
@@ -49,6 +55,7 @@ class QtOverlayWidget(QWidget):
         super().__init__(None)
         self._state = overlay_state
         self._last_level: float = 0.0
+        self._shown_bars: list[float] = []
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -108,6 +115,7 @@ class QtOverlayWidget(QWidget):
 
     def hide_pill(self) -> None:
         self._timer.stop()
+        self._shown_bars = []
         self.hide()
 
     def _on_tick(self) -> None:
@@ -118,52 +126,109 @@ class QtOverlayWidget(QWidget):
         self.setWindowOpacity(self._state.current_opacity())
         self.update()
 
+    def _eased(self, targets: tuple[float, ...]) -> list[float]:
+        if len(self._shown_bars) != len(targets):
+            self._shown_bars = list(targets)
+        for i, target in enumerate(targets):
+            shown = self._shown_bars[i]
+            k = _ATTACK if target > shown else _RELEASE
+            self._shown_bars[i] = shown + (target - shown) * k
+        return self._shown_bars
+
+    def _draw_caption(
+        self,
+        painter: QPainter,
+        text: str,
+        colour: QColor,
+        point_size: float,
+        h_align: Qt.AlignmentFlag,
+    ) -> None:
+        painter.setPen(colour)
+        font = QFont(painter.font())
+        font.setPointSizeF(point_size)
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        painter.drawText(
+            self.rect().adjusted(18, 0, -14, 0),
+            Qt.AlignmentFlag.AlignVCenter | h_align,
+            text,
+        )
+
     def paintEvent(self, event: object) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        painter.setBrush(QColor(30, 30, 30, 220))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(self.rect(), 8, 8)
+        # A true capsule (radius = half the height) with a hairline light rim.
+        body = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        radius = body.height() / 2
+        painter.setBrush(_BODY)
+        painter.setPen(QPen(_RIM, 1.0))
+        painter.drawRoundedRect(body, radius, radius)
 
-        # While a model loads, the pill is a single animated caption — no dot or
+        # The busy nudge (#240): a hotkey press while working swaps the pill's
+        # content for a short caption, tinted in the processing phase's colour
+        # so the phase still reads. It reverts on its own when the window ends.
+        busy = self._state.current_busy_caption()
+        if busy is not None:
+            loading = self._state.phase == OverlayPhase.LOADING
+            col = _CAPTION if loading else _PHASE_HUES[self._state.current_color()]
+            self._draw_caption(painter, busy, col, 9.0, Qt.AlignmentFlag.AlignHCenter)
+            painter.end()
+            return
+
+        # While a model loads, the pill is a single animated caption — no
         # waveform (there is no recording yet to visualise).
         if self._state.phase == OverlayPhase.LOADING:
-            painter.setPen(QColor(235, 235, 235, 235))
-            font = painter.font()
-            font.setPointSize(11)
-            painter.setFont(font)
-            painter.drawText(
-                self.rect().adjusted(14, 0, -10, 0),
-                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            self._draw_caption(
+                painter,
                 self._state.current_loading_text(),
+                _CAPTION,
+                10.0,
+                Qt.AlignmentFlag.AlignLeft,
+            )
+            painter.end()
+            return
+
+        # A held dictation (#239): the "Saved — say paste" caption in the Held
+        # hue instead of bars — informational, so it reads as words, not as the
+        # error flash. The colour stays HELD through the fade-out too.
+        if self._state.current_color() == PillColor.HELD:
+            self._draw_caption(
+                painter,
+                self._state.current_held_text(),
+                _PHASE_HUES[PillColor.HELD],
+                10.0,
+                Qt.AlignmentFlag.AlignHCenter,
             )
             painter.end()
             return
 
         # Phase by COLOUR (#96 / ADR-0026): the waveform itself is drawn in the
-        # phase's colour — accent while recording, a distinct processing hue while
-        # transcribing, a distinct hue while a Transform computes, the error hue on
-        # the error / focus-drift "saved" flash. The Status Dot is gone. Only
-        # RECORDING tracks the live mic level; the other phases show a low static
-        # waveform that reads as "still working" in the phase colour.
+        # phase's colour — white while recording, amber while transcribing, iris
+        # while a Transform computes, coral on the error flash. Only RECORDING
+        # tracks the live mic level; the processing phases show a low wave
+        # travelling across the bars so they read as working.
         col = _PHASE_HUES[self._state.current_color()]
         live = self._state.phase in (OverlayPhase.RECORDING, OverlayPhase.FADING_IN)
-        level = self._last_level if live else 0.3
-        frame = self._state.current_waveform_frame(lambda: level)
+        if live:
+            frame = self._state.current_waveform_frame(lambda: self._last_level)
+        else:
+            frame = self._state.current_processing_frame()
+        bars = self._eased(frame.bars)
         bar_w = 4
-        bar_count = len(frame.bars)
-        bar_area_x = 14
-        bar_area_w = PILL_WIDTH - bar_area_x - 12
+        bar_count = len(bars)
+        bar_area_x = 24
+        bar_area_w = PILL_WIDTH - 2 * bar_area_x
         spacing = (bar_area_w - bar_count * bar_w) / max(1, bar_count - 1)
-        center_y = PILL_HEIGHT // 2
-        max_h = PILL_HEIGHT - 12
+        center_y = PILL_HEIGHT / 2
+        max_h = PILL_HEIGHT - 16
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(col)
-        for i, bar_val in enumerate(frame.bars):
-            bar_h = max(3, int(bar_val * max_h))
-            bx = int(bar_area_x + i * (bar_w + spacing))
-            by = center_y - bar_h // 2
-            painter.drawRoundedRect(bx, by, bar_w, bar_h, bar_w // 2, bar_w // 2)
+        for i, bar_val in enumerate(bars):
+            bar_h = max(4.0, bar_val * max_h)
+            bx = bar_area_x + i * (bar_w + spacing)
+            painter.drawRoundedRect(
+                QRectF(bx, center_y - bar_h / 2, bar_w, bar_h), bar_w / 2, bar_w / 2
+            )
 
         painter.end()

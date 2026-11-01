@@ -41,9 +41,21 @@ class FakeOverlayRenderer:
         self.state = "computing"
         self.calls.append(("show_computing",))
 
+    def show_busy_nudge(self) -> None:
+        # A caption over the current phase — the phase itself is unchanged.
+        self.calls.append(("show_busy_nudge",))
+
     def show_error(self) -> None:
         self.state = "error"
         self.calls.append(("show_error",))
+
+    def show_held(self) -> None:
+        self.state = "held"
+        self.calls.append(("show_held",))
+
+    def show_say_again(self) -> None:
+        self.state = "say_again"
+        self.calls.append(("show_say_again",))
 
     def hide(self) -> None:
         self.visible = False

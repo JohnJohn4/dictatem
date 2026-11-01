@@ -356,6 +356,81 @@ class TestLoading:
         assert state.phase == OverlayPhase.FADING_OUT
 
 
+class TestBusyNudge:
+    """A hotkey press while working shows a brief caption, then reverts (#240)."""
+
+    CAPTION = "Still working — Esc cancels"
+
+    def test_no_busy_caption_by_default(self, state: OverlayState) -> None:
+        state.show_transcribing()
+        assert state.current_busy_caption() is None
+
+    @pytest.mark.parametrize(
+        ("enter", "phase"),
+        [
+            (lambda s: s.show_transcribing(), OverlayPhase.TRANSCRIBING),
+            (lambda s: s.show_computing(), OverlayPhase.COMPUTING),
+            (lambda s: s.show_loading("Loading LLM Model"), OverlayPhase.LOADING),
+        ],
+    )
+    def test_caption_shows_over_the_processing_phase_then_reverts(
+        self, state: OverlayState, clock: FakeClock, enter, phase: OverlayPhase
+    ) -> None:
+        enter(state)
+        state.show_busy_nudge()
+        assert state.current_busy_caption() == self.CAPTION
+        assert state.phase == phase  # the phase itself never changes
+
+        clock.advance_ms(1000)
+        state.tick()
+        assert state.current_busy_caption() == self.CAPTION
+
+        clock.advance_ms(600)
+        state.tick()
+        assert state.current_busy_caption() is None
+        assert state.phase == phase
+
+    def test_loading_caption_resumes_after_the_nudge(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_loading("Loading LLM Model")
+        state.show_busy_nudge()
+        clock.advance_ms(1600)
+        assert state.current_loading_text().startswith("Loading LLM Model")
+        assert state.current_busy_caption() is None
+
+    def test_repeated_presses_extend_the_caption(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_transcribing()
+        state.show_busy_nudge()
+        clock.advance_ms(1000)
+        state.show_busy_nudge()
+        clock.advance_ms(1000)
+        assert state.current_busy_caption() == self.CAPTION
+        clock.advance_ms(600)
+        assert state.current_busy_caption() is None
+
+    def test_caption_never_shows_outside_a_processing_phase(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_busy_nudge()  # hidden
+        assert state.current_busy_caption() is None
+        state.show_recording(RecordingMode.TOGGLE)
+        clock.advance_ms(200)
+        state.tick()
+        state.show_busy_nudge()
+        assert state.current_busy_caption() is None
+
+    def test_caption_ends_when_the_pill_hides(
+        self, state: OverlayState
+    ) -> None:
+        state.show_transcribing()
+        state.show_busy_nudge()
+        state.hide()
+        assert state.current_busy_caption() is None
+
+
 class TestFlashError:
     """flash_error() → ERROR_FLASH for ~300ms → FADING_OUT → HIDDEN."""
 
@@ -424,6 +499,125 @@ class TestFlashError:
         assert state.phase == OverlayPhase.FADING_OUT
 
 
+class TestHeld:
+    """show_held() — the quiet "Saved — say paste" signal for a held dictation
+    (#239 / F-13 / ADR-0026): its own colour and caption, held ~1.5 s so the
+    caption can be read, then the normal fade-out."""
+
+    def _held_after_transcribing(self, state: OverlayState, clock: FakeClock) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.show_transcribing()
+        state.show_held()
+
+    def test_show_held_enters_held_phase(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._held_after_transcribing(state, clock)
+        assert state.phase == OverlayPhase.HELD
+
+    def test_held_has_its_own_colour_not_error(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._held_after_transcribing(state, clock)
+        assert state.current_color() == PillColor.HELD
+        assert PillColor.HELD != PillColor.ERROR
+
+    def test_held_hue_is_distinct_from_every_other_phase(self) -> None:
+        from dictatem.overlay.state import PILL_HEX
+
+        others = {PILL_HEX[c] for c in PillColor if c is not PillColor.HELD}
+        assert PILL_HEX[PillColor.HELD] not in others
+
+    def test_held_caption(self, state: OverlayState, clock: FakeClock) -> None:
+        self._held_after_transcribing(state, clock)
+        assert state.current_held_text() == "Saved — say paste"
+
+    def test_opacity_full_while_held(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._held_after_transcribing(state, clock)
+        clock.advance_ms(1_000)
+        state.tick()
+        assert state.current_opacity() == 1.0
+
+    def test_still_held_before_1500ms(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._held_after_transcribing(state, clock)
+        clock.advance_ms(1_499)
+        state.tick()
+        assert state.phase == OverlayPhase.HELD
+
+    def test_fades_out_after_1500ms_keeping_held_colour(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._held_after_transcribing(state, clock)
+        clock.advance_ms(1_500)
+        state.tick()
+        assert state.phase == OverlayPhase.FADING_OUT
+        assert state.current_color() == PillColor.HELD
+        clock.advance_ms(401)  # the 400 ms fade (+1 ms for float clock rounding)
+        state.tick()
+        assert state.phase == OverlayPhase.HIDDEN
+
+    def test_held_lasts_longer_than_error_flash(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        # A readable caption, unlike the 300 ms error blink.
+        self._held_after_transcribing(state, clock)
+        clock.advance_ms(300)
+        state.tick()
+        assert state.phase == OverlayPhase.HELD
+
+
+class TestSayAgain:
+    """flash_say_again() — "heard something close to a Trigger Word, say it
+    again" (#248): its own hue, settling exactly like the error flash."""
+
+    def _say_again_after_transcribing(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        state.show_recording(RecordingMode.PTT)
+        clock.advance_ms(100)
+        state.tick()
+        state.show_transcribing()
+        state.flash_say_again()
+
+    def test_enters_say_again_phase_at_full_opacity(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._say_again_after_transcribing(state, clock)
+        assert state.phase == OverlayPhase.SAY_AGAIN_FLASH
+        assert state.current_opacity() == 1.0
+
+    def test_has_its_own_colour(self, state: OverlayState, clock: FakeClock) -> None:
+        self._say_again_after_transcribing(state, clock)
+        assert state.current_color() == PillColor.SAY_AGAIN
+
+    def test_hue_is_distinct_from_error_processing_and_computing(self) -> None:
+        from dictatem.overlay.state import PILL_HEX
+
+        others = {PILL_HEX[c] for c in PillColor if c is not PillColor.SAY_AGAIN}
+        assert PILL_HEX[PillColor.SAY_AGAIN] not in others
+
+    def test_settles_like_the_error_flash(
+        self, state: OverlayState, clock: FakeClock
+    ) -> None:
+        self._say_again_after_transcribing(state, clock)
+        clock.advance_ms(299)
+        state.tick()
+        assert state.phase == OverlayPhase.SAY_AGAIN_FLASH
+        clock.advance_ms(1)
+        state.tick()
+        assert state.phase == OverlayPhase.FADING_OUT
+        assert state.current_color() == PillColor.SAY_AGAIN
+        clock.advance_ms(401)
+        state.tick()
+        assert state.phase == OverlayPhase.HIDDEN
+
+
 class TestImportSafety:
     def test_overlay_state_has_no_pyside6_imports(self) -> None:
         before = set(sys.modules.keys())
@@ -439,3 +633,30 @@ class TestImportSafety:
             assert violations == [], (
                 f"overlay.state pulled in forbidden module(s): {violations}"
             )
+
+
+class TestProcessingWave:
+    def test_wave_travels_over_time(self) -> None:
+        from dictatem.overlay.state import OverlayState
+
+        now = [0.0]
+        state = OverlayState(lambda: now[0])
+        state.show_transcribing()
+        first = state.current_processing_frame().bars
+        now[0] += 0.25
+        assert state.current_processing_frame().bars != first
+
+    def test_wave_stays_low_and_visible(self) -> None:
+        from dictatem.overlay.state import OverlayState
+
+        now = [0.0]
+        state = OverlayState(lambda: now[0])
+        for step in range(40):
+            now[0] = step * 0.05
+            for bar in state.current_processing_frame().bars:
+                assert 0.0 < bar <= 0.55
+
+    def test_every_pill_colour_has_a_hue(self) -> None:
+        from dictatem.overlay.state import PILL_HEX, PillColor
+
+        assert set(PILL_HEX) == set(PillColor)

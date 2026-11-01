@@ -11,8 +11,10 @@
 # identity shell (ADR-0014), and launches it once. It runs with no interactive
 # prompts so the piped form works.
 #
-# macOS always gets the CPU-lean dependency set — there is no NVIDIA/CUDA on a
-# Mac (ADR-0013) — so install.ps1's GPU auto-detection has no equivalent here.
+# There is no NVIDIA/CUDA on a Mac (ADR-0013), so install.ps1's CUDA detection
+# has no equivalent here. Instead, Apple Silicon on macOS 14+ also gets the MLX
+# (Apple GPU) engine via the `apple-gpu` extra; every other Mac gets the CPU set
+# (see select_dictatem_extra below).
 #
 # It deliberately does NOT download a Whisper model (lazy on first dictation)
 # and does NOT install, start, or pull Ollama (ADR-0008) — it only prints a
@@ -57,11 +59,45 @@ else
     uv_flags=""
 fi
 
+# Pick the engine set (ADR-0013 amendment, #224). Apple Silicon on macOS 14+
+# gets the `apple-gpu` extra: the runtime set plus the MLX engine (mlx-whisper,
+# ~230 MB more), which transcribes on the Apple GPU. Everything else (Intel
+# Macs, macOS 12/13, an unreadable version) keeps `runtime` exactly as before:
+# mlx/mlx-metal/torch ship macOS 14+ arm64 wheels only, so asking for them there
+# would fail the whole install. A PEP 508 marker can't express "macOS 14+", hence
+# this gate. DICTATEM_NO_APPLE_GPU=1 forces `runtime`. faster-whisper is in both
+# sets (it is the fallback engine). Re-running this installer (the #211 update
+# path) adds the extra for existing users; their config is never touched.
+# Args: $1 = `uname -m`, $2 = `sw_vers -productVersion`. Prints the extra name.
+# tests/test_apple_gpu_extra.py runs this function under sh — keep it top-level
+# and self-contained.
+select_dictatem_extra() {
+    if [ "${DICTATEM_NO_APPLE_GPU:-}" = "1" ] || [ "$1" != "arm64" ]; then
+        echo runtime
+        return
+    fi
+    _major="${2%%.*}"
+    case "$_major" in
+        '' | *[!0-9]*) echo runtime ;;
+        *) if [ "$_major" -ge 14 ]; then echo apple-gpu; else echo runtime; fi ;;
+    esac
+}
+
+dictatem_extra="$(select_dictatem_extra "$(uname -m)" "$(sw_vers -productVersion 2>/dev/null || true)")"
+if [ "$dictatem_extra" = "apple-gpu" ]; then
+    echo "Engine set: Apple GPU (MLX) + CPU fallback — Apple Silicon on macOS 14+."
+    echo "  (Adds ~230 MB. Set DICTATEM_NO_APPLE_GPU=1 to install the CPU set only.)"
+elif [ "${DICTATEM_NO_APPLE_GPU:-}" = "1" ]; then
+    echo "Engine set: CPU (faster-whisper) — DICTATEM_NO_APPLE_GPU=1 is set."
+else
+    echo "Engine set: CPU (faster-whisper) — the Apple GPU engine needs Apple Silicon on macOS 14+."
+fi
+
 # A single PEP 508 direct-reference requirement: the extras and the source URL
 # must travel together on one argument. Splitting the URL into `--from` and the
 # `dictatem[extras]` into a positional makes uv treat them as two conflicting
 # requirements for the same package and abort.
-requirement="dictatem[runtime] @ ${source_url}"
+requirement="dictatem[${dictatem_extra}] @ ${source_url}"
 
 # Pin the tool environment to a uv-MANAGED CPython instead of whatever Python
 # the Mac happens to have. Real-Mac QA (#61) showed a discovered python.org
@@ -212,6 +248,11 @@ if [ ! -f "$plist" ]; then
     wait "$boot_pid" 2>/dev/null || true
 fi
 
+# The daemon drops this marker once its menu-bar icon is up (#95). Clear any
+# stale one now, so the wait below only sees the daemon started here.
+ready_marker="$HOME/.dictatem/.daemon_ready"
+rm -f "$ready_marker" 2>/dev/null || true
+
 # Start the daemon under launchd (see the comment above for why a terminal
 # launch breaks the hotkey/paste). bootstrap loads the plist and RunAtLoad
 # starts it; retry a few times in case the unload has not fully settled.
@@ -233,11 +274,37 @@ else
     nohup "$launcher" >/dev/null 2>&1 &
 fi
 
-# --- 5. Permissions + optional Ollama pointers ------------------------------
+# --- 5. Wait for the menu-bar icon, then say what's left ------------------
+# Setup is NOT done when the files are installed: the first launch spends a
+# while importing the speech stack before the icon and the permission prompts
+# appear, and a hotkey pressed before the grants are in does nothing (#95).
+# So wait for the daemon's ready marker (up to ~90 s) and keep the user posted,
+# rather than printing "done" into ~20 s of silence.
+printf "Waiting for Dictatem to start (the first launch can take up to a minute) "
+i=0
+while [ ! -f "$ready_marker" ] && [ "$i" -lt 360 ]; do
+    sleep 0.25
+    i=$((i + 1))
+    if [ $((i % 8)) -eq 0 ]; then printf "."; fi
+done
 echo ""
-echo "Dictatem is starting in the menu bar."
-echo "macOS will ask for Microphone access on your first dictation, and Dictatem"
-echo "will guide you through granting Accessibility and Input Monitoring in"
-echo "System Settings (each needs a one-time relaunch to apply)."
+echo ""
+if [ -f "$ready_marker" ]; then
+    echo "Dictatem is running — its icon is in your menu bar."
+else
+    echo "Dictatem is still starting — its menu-bar icon should appear shortly."
+    echo "If it doesn't, see Troubleshooting:"
+    echo "  https://github.com/JohnJohn4/dictatem#troubleshooting"
+fi
+echo ""
+echo "Setup isn't finished until you've granted two permissions:"
+echo "  1. When Dictatem asks for Accessibility and Input Monitoring, click"
+echo "     Open System Settings and turn on \"python${DICTATEM_PYTHON}\" in each pane"
+echo "     (that entry is Dictatem)."
+echo "  2. Then choose Restart from the Dictatem menu-bar menu."
+echo "The hotkey and paste won't work until both are on and Dictatem has restarted."
+echo "(Already granted them on an earlier install? Then you're all set.)"
+echo "macOS asks for Microphone access on your first dictation."
+echo ""
 echo "Optional Trigger Words (local-LLM rewrites) need Ollama set up yourself — see"
 echo "the README: https://github.com/JohnJohn4/dictatem#trigger-words-setup-ollama"

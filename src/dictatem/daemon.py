@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import os
 import queue
 import sys
 import threading
@@ -14,6 +15,7 @@ from dictatem.exceptions import (
     AudioCaptureError,
     ClipboardContentionError,
     ModelLoadError,
+    ModifiersHeldError,
     PlatformNotSupportedError,
     TranscriptionFailedError,
     TransformFailedError,
@@ -23,23 +25,35 @@ from dictatem.exceptions import (
 # per-event/tick path, so it is imported eagerly rather than lazily under the
 # bridge lock (the heavier classifier types stay TYPE_CHECKING-only below).
 from dictatem.hotkey.classifier import HotkeyEvent
+from dictatem.paste.backspace_units import count_backspace_units
+from dictatem.session import DictationSession
 from dictatem.state import Command, Event, State
-from dictatem.transform.detector import PASTE_ACTION, match_builtin_action
 from dictatem.transform.last_paste import LastPaste
-from dictatem.types import EmptyResult, RecordingMode
+from dictatem.transform.recognizer import (
+    PASTE_ACTION,
+    Borderline,
+    BuiltinAction,
+    Fire,
+    TriggerTarget,
+    TriggerWordRecognizer,
+    Utterance,
+)
+from dictatem.types import EmptyResult, RecordingMode, Transcript
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable, Mapping
     from pathlib import Path
 
     from dictatem.audio.buffer import AudioBuffer
-    from dictatem.config import Config
+    from dictatem.config import Config, ConfigLoadReport
+    from dictatem.hardware.resolver import RuntimeFallbackReason
     from dictatem.hotkey.classifier import (
         HookDecision,
         HotkeyClassifier,
         Key,
         KeyAction,
     )
+    from dictatem.hotkey.hook_failure import HookFailure
     from dictatem.interfaces import (
         AudioCapture,
         AutostartRegistrar,
@@ -52,15 +66,68 @@ if TYPE_CHECKING:
         TrayRenderer,
     )
     from dictatem.overlay.state import OverlayState
-    from dictatem.permissions.mapper import PermissionGuidance
+    from dictatem.permissions.mapper import MacPermission, PermissionGuidance
     from dictatem.state import StateMachine
+    from dictatem.transcribe.language import LanguageSelector
     from dictatem.transcribe.latency_monitor import LatencyMonitor
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
     from dictatem.transcribe.replacements import Replacement
-    from dictatem.transform.detector import TriggerDetector
     from dictatem.transform.lifecycle import TransformLifecycle
+    from dictatem.types import AudioChunk, SegmentConfidence, TranscriptionResult
+    from dictatem.upgrade.core import UpgradeDecision
 
 logger = logging.getLogger(__name__)
+
+
+def _target_name(target: TriggerTarget) -> str:
+    """A loggable action name for a Trigger Word target: the built-in action
+    or the Transform's Alias. Configuration, not dictated content (#248)."""
+    if isinstance(target, BuiltinAction):
+        return target.name
+    return target.alias
+
+
+def _format_confidence(confidence: SegmentConfidence | None) -> str:
+    """Segment confidence for a diagnostic log line — numbers only, never text."""
+    if confidence is None:
+        return "confidence=unknown"
+    return (
+        f"avg_logprob={confidence.avg_logprob:.2f} "
+        f"no_speech_prob={confidence.no_speech_prob:.2f}"
+    )
+
+
+@dataclass(frozen=True)
+class _FirstPassDone:
+    """A first-pass transcription result, with the audio kept for a confirm pass."""
+
+    result: TranscriptionResult
+    audio_duration_s: float
+    audio: AudioChunk
+
+
+@dataclass(frozen=True)
+class _ConfirmPassDone:
+    """The confirm pass's re-listen of a Borderline (#249).
+
+    *first_pass* is the Borderline utterance as first heard: its post-VAD
+    speech duration is the honest measure of how long the user spoke.
+    """
+
+    borderline: Borderline
+    first_pass: Utterance
+    result: TranscriptionResult
+
+
+@dataclass(frozen=True)
+class _ConfirmPassFailed:
+    """The confirm pass raised an error that is not surfaced to the user.
+
+    Model-load and GPU-out-of-memory failures are surfaced exactly like the
+    first pass's instead; anything else just asks the user to say it again.
+    """
+
+    error_name: str
 
 
 def _add_rotating_log_file() -> logging.handlers.TimedRotatingFileHandler | None:
@@ -127,8 +194,21 @@ class _OverlayAdapter:
         # show_transcribing — this only flips the phase, never repositions.
         self._state.show_computing()
 
+    def show_busy_nudge(self) -> None:
+        # A caption over the already-visible processing pill (#240).
+        self._state.show_busy_nudge()
+
     def show_error(self) -> None:
         self._state.flash_error()
+
+    def show_held(self) -> None:
+        # Like show_error: the pill is already visible from transcribing, so this
+        # only flips the phase — no reposition, no activation (#239).
+        self._state.show_held()
+
+    def show_say_again(self) -> None:
+        # Like show_error: flips the already-visible pill's phase only (#248).
+        self._state.flash_say_again()
 
     def hide(self) -> None:
         self._state.hide()
@@ -177,8 +257,8 @@ class _HotkeyBridge:
         Keyboard keys are never suppressed (the classifier's HookDecision is
         ignored here, exactly as before), so this advances the classifier and
         defers the resulting state-machine work to the next ``tick``. Returns
-        whether the hook should inject a neutralizing keystroke after this
-        event — the Win+Alt menu/Start mask (#171).
+        whether the hook should swallow this lone Alt/Win key-up and replay it
+        behind the menu mask key (#171/#177; see ``pending_mask``).
         """
         _decision, mask = self._advance_and_defer(key, action, timestamp_ms)
         return mask
@@ -371,7 +451,7 @@ class DaemonCore:
         silence_timeout_s: float = 60.0,
         max_recording_s: float = 300.0,
         transform_lifecycle: TransformLifecycle | None = None,
-        trigger_detector: TriggerDetector | None = None,
+        trigger_recognizer: TriggerWordRecognizer | None = None,
         transform_enabled: bool = False,
         last_paste_ttl_s: float = 300.0,
         transform_model_name: str = "",
@@ -381,6 +461,7 @@ class DaemonCore:
         autostart_registrar: AutostartRegistrar | None = None,
         persist_autostart: Callable[[bool], None] | None = None,
         replacements: list[Replacement] | None = None,
+        config_read_only: bool = False,
     ) -> None:
         self._sm = state_machine
         self._audio_capture = audio_capture
@@ -394,21 +475,22 @@ class DaemonCore:
         self._restore_scheduler = restore_scheduler
         self._silence_timeout_s = silence_timeout_s
         self._max_recording_s = max_recording_s
-        self._last_text: str | None = None
-        # --- Focus-drift anchor (ADR-0026 / #97) ---
-        # The foreground identity (target_id) captured at record-start, compared
-        # against the live foreground at paste time. If focus drifted to another
-        # window/app during the wait (e.g. a long cold model load), a regular
-        # dictation is HELD in the Most-recent buffer rather than mispasted into
-        # the wrong window. A comparison anchor only — never used to move focus.
-        self._record_start_target_id: int | None = None
+        # --- Dictation Session (#234) ---
+        # Everything that belongs to ONE dictation — transcription/Transform
+        # outstanding, the pending replace count, the record-start focus-drift
+        # anchor (ADR-0026 / #97) and the text waiting to paste — plus the epoch.
+        # Record-start begins a session; cancel and recover-to-idle end it. The
+        # daemon-lifetime state below (Last Paste, Most-recent dictation,
+        # warm/preload flags) deliberately stays on the daemon.
+        self._session = DictationSession()
         # --- Most-recent dictation buffer (ADR-0023 / #119) ---
         # The exact payload of the last REGULAR dictation (normalised, with
         # Replacements applied) — the text that was (or would have been) pasted.
-        # Unlike _last_text (the transient pending-paste payload, nulled after
-        # every paste) and Last Paste (needs a successful paste + target_id),
-        # this is kept ACROSS pastes and even when the dictation landed nowhere,
-        # so it carries no target_id and does not arm Trigger Words. It is what
+        # Unlike the session's text_to_paste (the transient pending-paste
+        # payload, nulled after every paste) and Last Paste (needs a successful
+        # paste + target_id), this is kept ACROSS pastes and even when the
+        # dictation landed nowhere, so it carries no target_id and does not arm
+        # Trigger Words. It is what
         # the tray "Copy last dictation" item and the built-in `paste` Trigger
         # Word (#139) recover — the guarantee a dictation is never lost.
         self._most_recent_dictation: str | None = None
@@ -420,12 +502,29 @@ class DaemonCore:
         self._builtin_action_handlers: dict[str, Callable[..., None]] = {
             PASTE_ACTION: self._handle_paste_action,
         }
-        self._transcription_queue: queue.Queue[tuple[str, object]] = queue.Queue()
-        self._transcription_active: bool = False
+        # Worker results are tagged with the Dictation Session epoch they were
+        # started under: ``(epoch, kind, data)``. The drain drops any result from
+        # an older epoch — a cancelled dictation's late result (F-6 / #235).
+        self._transcription_queue: queue.Queue[tuple[int, str, object]] = (
+            queue.Queue()
+        )
+        # Tray notifications raised off the GUI thread (e.g. the MLX session
+        # fallback firing on the transcribe worker or a load-on-arm thread,
+        # #232). Drained on the tick by check_notifications, because a tray
+        # balloon must be shown from the Qt GUI thread.
+        self._pending_notifications: queue.SimpleQueue[tuple[str, str]] = (
+            queue.SimpleQueue()
+        )
         self._transcription_thread: threading.Thread | None = None
         # --- Trigger Words / Transform state (see CONTEXT.md) ---
         self._transform_lifecycle = transform_lifecycle
-        self._trigger_detector = trigger_detector
+        # One pure Trigger Word decision (#246). Absent one, a recognizer with
+        # no Prompt File aliases still recognises the built-in actions.
+        self._trigger_recognizer = (
+            trigger_recognizer
+            if trigger_recognizer is not None
+            else TriggerWordRecognizer({})
+        )
         self._transform_enabled = transform_enabled
         self._last_paste_ttl_s = last_paste_ttl_s
         self._transform_model_name = transform_model_name
@@ -435,9 +534,7 @@ class DaemonCore:
         # "computing" rather than "loading" (#74).
         self._llm_keep_alive_ms = int(llm_keep_alive_s * 1000)
         self._last_paste: LastPaste | None = None
-        self._pending_replace_chars: int = 0
-        self._transform_queue: queue.Queue[tuple[str, object]] = queue.Queue()
-        self._transform_active: bool = False
+        self._transform_queue: queue.Queue[tuple[int, str, object]] = queue.Queue()
         self._transform_thread: threading.Thread | None = None
         # --- Model-loading overlay state (#74) ---
         # _loading_for_transcribe: a first-tap cold load is showing the "Model
@@ -464,6 +561,23 @@ class DaemonCore:
         # --- Autostart toggle (see ADR-0012) ---
         self._autostart_registrar = autostart_registrar
         self._persist_autostart = persist_autostart
+        # --- Config Load Report (#238) ---
+        # The Config Load Report had a problem (unreadable file or a bad key):
+        # the startup notice promised the file was not changed, so nothing may
+        # write it this session — the autostart toggle is session-only.
+        self._config_read_only = config_read_only
+
+    def notify_config_problems(self, report: ConfigLoadReport) -> None:
+        """Show the one startup notification for a non-empty Config Load Report.
+
+        A valid config shows nothing; the per-problem detail is already logged
+        by ``load_config_with_report``.
+        """
+        from dictatem.config import config_problem_notification
+
+        note = config_problem_notification(report)
+        if note is not None:
+            self._tray.show_notification(*note)
 
     def on_tray_set_autostart(self, enabled: bool) -> None:
         """Apply the tray "Start at login" toggle (see ADR-0012).
@@ -472,6 +586,11 @@ class DaemonCore:
         persists the new ``config.startup.autostart`` flag so it survives a
         restart — keeping the flag the single source of truth. Wrapped so a
         registry hiccup can never crash the daemon.
+
+        While the config is read-only for the session (the Config Load Report
+        had any problem, #238) the toggle applies for this session only: the
+        config writer is never called, and a notification says why the change
+        wasn't saved.
         """
         try:
             if self._autostart_registrar is not None:
@@ -480,7 +599,18 @@ class DaemonCore:
                 apply_autostart(
                     desired=enabled, registrar=self._autostart_registrar
                 )
-            if self._persist_autostart is not None:
+            if self._config_read_only:
+                logger.warning(
+                    "Start at login set to %s for this session only — "
+                    "config.toml had problems at startup, so it was not written",
+                    enabled,
+                )
+                self._tray.show_notification(
+                    "Start at login: this session only",
+                    "Your config.toml has a problem, so this change applies "
+                    "for this session only and the file was not changed.",
+                )
+            elif self._persist_autostart is not None:
                 self._persist_autostart(enabled)
         except Exception:
             logger.error("Error applying autostart toggle", exc_info=True)
@@ -554,19 +684,19 @@ class DaemonCore:
         elif cmd is Command.FLASH_ERROR:
             self._overlay.show_error()
             self._tray.set_idle()
-        elif cmd is Command.NOTIFY_ERROR:
-            self._tray.show_notification(
-                "Transcription Failed",
-                "GPU memory exhausted; transcription failed.",
-            )
-        elif cmd is Command.RETRY_TRANSCRIPTION:
-            self._do_transcribe(now_ms=now_ms)
+        elif cmd is Command.FLASH_SAY_AGAIN:
+            self._overlay.show_say_again()
+            self._tray.set_idle()
         elif cmd is Command.START_TAP_TIMER:
             pass
         elif cmd is Command.CANCEL_TAP_TIMER:
             self._overlay.show(RecordingMode.TOGGLE)
+        elif cmd is Command.BUSY_NUDGE:
+            self._overlay.show_busy_nudge()
 
     def _do_record_start(self) -> None:
+        # Starting a recording begins a new Dictation Session (bumps the epoch).
+        self._session.begin()
         try:
             self._audio_capture.start()
         except AudioCaptureError:
@@ -594,7 +724,7 @@ class DaemonCore:
         # comparison token only — Dictatem never moves focus on the dictation path.
         # Captured BEFORE showing the pill so the anchor can never accidentally be
         # the overlay window itself, independent of how the pill is shown.
-        self._record_start_target_id = (
+        self._session.record_start_target_id = (
             self._foreground.capture() if self._foreground is not None else None
         )
         self._overlay.show(RecordingMode.PTT)
@@ -644,35 +774,37 @@ class DaemonCore:
             self._recover_to_idle()
             return
 
-        self._transcription_active = True
+        self._session.transcription_outstanding = True
+        # The worker's result is tagged with this epoch, so a cancel (which
+        # bumps it) makes the result stale before it can land (F-6 / #235).
+        epoch = self._session.epoch
 
         from dictatem.types import SAMPLE_RATE
 
-        def _worker(captured_audio: object) -> None:
-            # Only one transcription runs at a time (the state machine gates
-            # it), so the worker thread can safely drive the LatencyMonitor.
-            audio_duration_s = len(captured_audio) / SAMPLE_RATE  # type: ignore[arg-type]
-            if self._latency_monitor is not None:
-                self._latency_monitor.begin()
+        audio_duration_s = len(audio) / SAMPLE_RATE  # type: ignore[arg-type]
+        # The latency sample is opened here and closed in the drain — both on
+        # the GUI thread — and only for a current-epoch result, so a cancelled
+        # run (whose worker still finishes, ADR-0016) can neither fire nor skew
+        # the "transcriptions are slow" tip, even when it overlaps a new run.
+        if self._latency_monitor is not None:
+            self._latency_monitor.begin()
+
+        def _worker(captured_audio: AudioChunk) -> None:
+            q = self._transcription_queue
             try:
-                result = self._lifecycle.transcribe(captured_audio)  # type: ignore[arg-type]
+                result = self._lifecycle.transcribe(captured_audio)
             except TranscriptionFailedError:
-                self._transcription_queue.put(("transcription_failed", None))
+                q.put((epoch, "transcription_failed", None))
             except ModelLoadError as exc:
-                self._transcription_queue.put(("model_error", exc))
+                q.put((epoch, "model_error", exc))
             except Exception as exc:
-                self._transcription_queue.put(("unexpected_error", exc))
+                q.put((epoch, "unexpected_error", exc))
             else:
-                self._transcription_queue.put(("ok", result))
-                # One-shot "transcriptions are slow" tip (see ADR-0007):
-                # surface ONE smaller-model hint when slowness is consistent.
-                # Notifications must run on the Qt GUI thread, so route the
-                # tip through the result queue rather than calling the tray
-                # from this worker thread.
-                if self._latency_monitor is not None and (
-                    self._latency_monitor.end(audio_duration_s)
-                ):
-                    self._transcription_queue.put(("latency_tip", None))
+                # The audio rides along so a Borderline can be re-listened to
+                # by the confirm pass (#249).
+                q.put(
+                    (epoch, "ok", _FirstPassDone(result, audio_duration_s, captured_audio))
+                )
 
         t = threading.Thread(
             target=_worker, args=(audio,), daemon=True, name="transcribe-worker"
@@ -686,29 +818,18 @@ class DaemonCore:
         Called on every 50 ms tick so the Qt event loop stays responsive
         while faster-whisper runs on the worker thread.
         """
-        try:
-            kind, data = self._transcription_queue.get_nowait()
-        except queue.Empty:
+        item = self._next_current_result(self._transcription_queue, "transcription")
+        if item is None:
             return
+        kind, data = item
 
-        # The one-shot latency tip (see ADR-0007) is enqueued AFTER the "ok"
-        # result, so by the time it is drained on a later tick the ok result
-        # has already cleared ``_transcription_active``. Handle it here, before
-        # the guard, so it is not silently discarded.
-        if kind == "latency_tip":
-            self._tray.show_notification(
-                "Dictatem",
-                "Transcriptions are slow — switching to a smaller model may "
-                "help. See the README.",
-            )
-            return
+        if not self._session.transcription_outstanding:
+            return  # belt-and-braces: nothing is awaiting this result
 
-        if not self._transcription_active:
-            return  # ESC was pressed before result arrived — discard
-
+        latency_tip = False
         try:
             if kind == "transcription_failed":
-                self._transcription_active = False
+                self._session.transcription_outstanding = False
                 logger.error("GPU memory exhausted; transcription failed")
                 self._tray.show_notification(
                     "Transcription Failed",
@@ -716,63 +837,127 @@ class DaemonCore:
                 )
                 self._recover_to_idle()
             elif kind == "model_error":
-                self._transcription_active = False
-                logger.error("Model unavailable; check log", exc_info=data)  # type: ignore[arg-type]
-                self._tray.show_notification(
-                    "Model Unavailable",
-                    "Model unavailable; check log",
-                )
+                self._session.transcription_outstanding = False
+                # The lifecycle attaches the pure classifier's diagnosis (#241).
+                assert isinstance(data, ModelLoadError)
+                diagnosis = data.diagnosis
+                reason = diagnosis.reason.name if diagnosis is not None else "UNKNOWN"
+                logger.error("Model load failed (reason=%s)", reason, exc_info=data)
+                if diagnosis is not None:
+                    self._tray.show_notification(diagnosis.title, diagnosis.message)
+                else:
+                    self._tray.show_notification(
+                        "Model Unavailable",
+                        "Model unavailable; check log",
+                    )
                 self._recover_to_idle()
             elif kind == "unexpected_error":
-                self._transcription_active = False
+                self._session.transcription_outstanding = False
                 logger.error("Unexpected transcription error: %s", data)
                 self._tray.show_notification(
                     "Transcription Error",
                     "An unexpected error occurred during transcription; check log",
                 )
                 self._recover_to_idle()
+            elif isinstance(data, (_ConfirmPassDone, _ConfirmPassFailed)):
+                self._finish_confirm_pass(data, now_ms=now_ms)
             else:
-                result = data
+                assert isinstance(data, _FirstPassDone)
+                result, audio_duration_s, audio = (
+                    data.result,
+                    data.audio_duration_s,
+                    data.audio,
+                )
+                # One-shot "transcriptions are slow" tip (see ADR-0007): close
+                # the latency sample opened in _do_transcribe. The tip itself
+                # is shown in ``finally`` so it never precedes the paste.
+                if self._latency_monitor is not None:
+                    latency_tip = self._latency_monitor.end(audio_duration_s)
                 if isinstance(result, EmptyResult):
-                    self._transcription_active = False
+                    self._session.transcription_outstanding = False
                     logger.info("Transcription produced empty result")
                     commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
                     self._execute_commands(commands, now_ms=now_ms)
                     return
 
-                # Built-in action words (today: `paste`) are matched BEFORE the
-                # Transform alias map and run regardless of [transform].enabled
-                # or any Last Paste — they are the recovery path (ADR-0023 /
-                # #139). Detected before Replacements so a rule can't rewrite or
-                # mask them, and before _detect_trigger so they bypass both of
-                # its gates (transform-enabled + Last-Paste-exists).
-                action = match_builtin_action(result)  # type: ignore[arg-type]
-                if action is not None:
-                    self._builtin_action_handlers[action](now_ms=now_ms)
-                    return
+                assert isinstance(result, Transcript)
+                utterance = Utterance(
+                    text=result.text,
+                    # Post-VAD speech when the backend reported it, else the
+                    # recording duration (#246).
+                    speech_duration_s=(
+                        result.speech_duration_s
+                        if result.speech_duration_s is not None
+                        else audio_duration_s
+                    ),
+                    confidence=result.confidence,
+                )
+                self._log_short_utterance(utterance, audio_duration_s, result)
 
-                # Trigger Word detection — see CONTEXT.md#trigger-fire. Detect
-                # BEFORE applying Replacements so a Replacement rule can never
-                # rewrite (or mask) a Trigger Word; the trigger path is
-                # intercepted here and bypasses find/replace entirely (#125).
-                prompt = self._detect_trigger(result)  # type: ignore[arg-type]
-                if prompt is None:
-                    self._transcription_active = False
+                # One pure Trigger Word decision — see CONTEXT.md#trigger-word.
+                # Built-in actions (today: `paste`) win over Prompt File aliases
+                # and fire regardless of [transform].enabled or any Last Paste —
+                # they are the recovery path (ADR-0023 / #139); a Transform is
+                # only a candidate when armed. Decided BEFORE Replacements so a
+                # rule can never rewrite (or mask) a Trigger Word (#125).
+                decision = self._trigger_recognizer.decide(
+                    utterance, transforms_armed=self._transforms_armed()
+                )
+                if isinstance(decision, Borderline):
+                    self._handle_borderline(decision, utterance, audio)
+                    return
+                if isinstance(decision, Fire):
+                    self._route_fire(decision, now_ms=now_ms)
+                else:
+                    self._session.transcription_outstanding = False
                     # Regular dictation only: apply deterministic Replacements
                     # (ADR-0024) just before this text becomes the paste payload.
-                    text = self._apply_replacements(result)  # type: ignore[arg-type]
+                    text = self._apply_replacements(result.text)
                     # Never log dictated text content — it is private and the
                     # rotating file handler would retain it for ~7 days (S-2 /
                     # #188). Count only, mirroring the Transform path below.
                     logger.info("Transcription complete (%d chars)", len(text))
-                    self._last_text = text
+                    self._session.text_to_paste = text
                     commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
                     self._execute_commands(commands, now_ms=now_ms)
-                else:
-                    self._handle_trigger_fire(prompt, now_ms=now_ms)
         except Exception:
             logger.error("Unhandled error processing transcription result", exc_info=True)
             self._recover_to_idle()
+        finally:
+            if latency_tip:
+                self._tray.show_notification(
+                    "Dictatem",
+                    "Transcriptions are slow — switching to a smaller model may "
+                    "help. See the README.",
+                )
+
+    def _next_current_result(
+        self, q: queue.Queue[tuple[int, str, object]], source: str
+    ) -> tuple[str, object] | None:
+        """Pop the next result from *q* that belongs to the current session.
+
+        A result tagged with an older epoch comes from a cancelled dictation
+        whose worker ran to completion in the background (ADR-0016). It is
+        dropped with no side effects — no paste, notification, state-machine
+        event, or latency sample (F-6 / #235) — and the drain moves on, so a
+        stale result never delays the current one by a tick. Only the source
+        and result *kind* are logged, never content (S-2 / #188).
+        """
+        while True:
+            try:
+                epoch, kind, data = q.get_nowait()
+            except queue.Empty:
+                return None
+            if epoch == self._session.epoch:
+                return kind, data
+            logger.info(
+                "Dropping stale %s result (%s) from a cancelled dictation "
+                "(epoch %d, current %d)",
+                source,
+                kind,
+                epoch,
+                self._session.epoch,
+            )
 
     def _apply_replacements(self, text: str) -> str:
         """Apply deterministic Replacements to regular-dictation *text* (#125).
@@ -788,19 +973,132 @@ class DaemonCore:
 
         return apply_replacements(text, self._replacements)
 
-    def _detect_trigger(self, text: str) -> str | None:
-        """Return the prompt body for *text* if it is a Trigger Word.
+    def _transforms_armed(self) -> bool:
+        """Whether a Transform Trigger Word may fire: feature on AND a Last Paste."""
+        return self._transform_enabled and self._last_paste is not None
 
-        Returns ``None`` if the feature is disabled, no detector is wired,
-        no Last Paste exists, or *text* is just regular dictation.
+    def _log_short_utterance(
+        self, utterance: Utterance, recording_s: float, transcript: Transcript
+    ) -> None:
+        """Debug diagnostics for a short utterance — durations and confidence only.
+
+        Recording duration vs post-VAD speech duration plus segment confidence:
+        the data the review's §6.3 VAD-trimming question needs (#246). Never
+        the text — dictated content stays out of the log (S-2 / #188).
         """
-        if not self._transform_enabled:
-            return None
-        if self._trigger_detector is None:
-            return None
-        if self._last_paste is None:
-            return None
-        return self._trigger_detector.match(text)
+        if not utterance.is_short:
+            return
+        speech = (
+            f"{transcript.speech_duration_s:.2f}s"
+            if transcript.speech_duration_s is not None
+            else "unknown"
+        )
+        logger.debug(
+            "Short utterance: recording=%.2fs speech=%s %s",
+            recording_s,
+            speech,
+            _format_confidence(transcript.confidence),
+        )
+
+    def _route_fire(self, decision: Fire, *, now_ms: int) -> None:
+        """Run a fired Trigger Word: a built-in action or a Trigger Fire."""
+        if isinstance(decision.target, BuiltinAction):
+            self._builtin_action_handlers[decision.target.name](now_ms=now_ms)
+        else:
+            self._handle_trigger_fire(decision.target.prompt, now_ms=now_ms)
+
+    def _handle_borderline(
+        self, decision: Borderline, utterance: Utterance, audio: AudioChunk
+    ) -> None:
+        """Close to a Trigger Word but not sure: listen once more (#248, #249).
+
+        Logs the outcome kind, candidate action names, score band and
+        confidence — never the heard text (S-2 / #188) — then re-transcribes
+        the same audio once on a worker: the command-biased, VAD-off confirm
+        pass. The transcription leg stays open (pill "transcribing", Esc
+        cancels it like any in-flight transcription); its result lands in
+        :meth:`_finish_confirm_pass`.
+        """
+        logger.info(
+            "Trigger Word Borderline: candidates=%s band=%s %s",
+            ",".join(_target_name(t) for t in decision.candidates),
+            decision.band.value,
+            _format_confidence(utterance.confidence),
+        )
+        trigger_words = self._trigger_recognizer.trigger_words(
+            transforms_armed=self._transforms_armed()
+        )
+        lifecycle = self._lifecycle
+        epoch = self._session.epoch
+
+        def _worker() -> None:
+            q = self._transcription_queue
+            try:
+                result = lifecycle.transcribe_command(audio, trigger_words)
+            except TranscriptionFailedError:
+                # GPU out of memory after the lifecycle's retry, and a broken
+                # model below: surfaced exactly like the first pass, never
+                # hidden behind a say-again.
+                q.put((epoch, "transcription_failed", None))
+            except ModelLoadError as exc:
+                q.put((epoch, "model_error", exc))
+            except Exception as exc:
+                q.put((epoch, "confirm_failed", _ConfirmPassFailed(type(exc).__name__)))
+            else:
+                q.put((epoch, "confirm_ok", _ConfirmPassDone(decision, utterance, result)))
+
+        t = threading.Thread(target=_worker, daemon=True, name="confirm-worker")
+        self._transcription_thread = t
+        t.start()
+
+    def _finish_confirm_pass(
+        self, outcome: _ConfirmPassDone | _ConfirmPassFailed, *, now_ms: int
+    ) -> None:
+        """Judge the confirm pass: fire a confirmed candidate, else say again.
+
+        Only the outcome kind and action name are logged, never text (#249).
+        """
+        if isinstance(outcome, _ConfirmPassFailed):
+            logger.warning(
+                "Trigger Word confirm pass failed (%s); say again", outcome.error_name
+            )
+            self._say_again(now_ms=now_ms)
+            return
+        result = outcome.result
+        if isinstance(result, EmptyResult):
+            logger.info("Trigger Word confirm pass: empty; say again")
+            self._say_again(now_ms=now_ms)
+            return
+        # The confirm pass runs with VAD off, so its own duration is the whole
+        # recording; the first pass's (post-VAD) speech duration is the honest
+        # measure of how long the user spoke.
+        utterance = Utterance(
+            text=result.text,
+            speech_duration_s=outcome.first_pass.speech_duration_s,
+            confidence=result.confidence,
+        )
+        decision = self._trigger_recognizer.confirm(
+            outcome.borderline, utterance, transforms_armed=self._transforms_armed()
+        )
+        if isinstance(decision, Fire):
+            logger.info(
+                "Trigger Word confirm pass: confirmed %s", _target_name(decision.target)
+            )
+            self._route_fire(decision, now_ms=now_ms)
+            return
+        logger.info("Trigger Word confirm pass: not confirmed; say again")
+        self._say_again(now_ms=now_ms)
+
+    def _say_again(self, *, now_ms: int) -> None:
+        """Close the leg with the say-again flash (#248).
+
+        Nothing is pasted or typed, and the Most-recent dictation and Last
+        Paste are left untouched, so an exact "paste" afterwards still recovers
+        the right text (ADR-0023 / ADR-0028).
+        """
+        self._session.transcription_outstanding = False
+        commands = self._sm.handle(Event.BORDERLINE, now_ms=now_ms)
+        self._execute_commands(commands, now_ms=now_ms)
 
     def _handle_paste_action(self, *, now_ms: int) -> None:
         """Re-paste the Most-recent dictation — the built-in ``paste`` recovery.
@@ -813,7 +1111,7 @@ class DaemonCore:
         re-paste lands like a normal dictation (clipboard + Ctrl+V) and so
         becomes the new Last Paste, re-arming Trigger Words at the new spot.
         """
-        self._transcription_active = False
+        self._session.transcription_outstanding = False
         if self._most_recent_dictation is None:
             logger.info("`paste` action: no Most-recent dictation to recover")
             commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
@@ -826,8 +1124,8 @@ class DaemonCore:
         # Route the buffer through the normal paste path. replace_chars stays 0
         # so it's a clipboard + Ctrl+V paste (not a typed Trigger-Fire
         # replacement), and _do_paste records the new Last Paste.
-        self._last_text = self._most_recent_dictation
-        self._pending_replace_chars = 0
+        self._session.text_to_paste = self._most_recent_dictation
+        self._session.pending_replace_chars = 0
         commands = self._sm.handle(Event.TRANSCRIPTION_DONE, now_ms=now_ms)
         self._execute_commands(commands, now_ms=now_ms)
 
@@ -858,17 +1156,20 @@ class DaemonCore:
                 self._last_paste_ttl_s,
             )
             self._last_paste = None
-            self._transcription_active = False
+            self._session.transcription_outstanding = False
             commands = self._sm.handle(Event.EMPTY_RESULT, now_ms=now_ms)
             self._execute_commands(commands, now_ms=now_ms)
             return
 
         captured = self._last_paste
         lifecycle = self._transform_lifecycle
-        self._transform_active = True
+        self._session.transform_outstanding = True
+        # Same epoch as the transcription that fired it; a cancel mid-Transform
+        # bumps the session, so the late output is dropped at drain (#235).
+        epoch = self._session.epoch
         logger.info(
-            "Trigger Fire: starting Transform on %d-char Last Paste",
-            captured.char_count,
+            "Trigger Fire: starting Transform on a %d-Backspace-Unit Last Paste",
+            captured.backspace_units,
         )
         # Within the keep_alive window the model is already resident, so the work
         # is generation — the "computing" pill colour (#96 / ADR-0026), not a
@@ -880,14 +1181,15 @@ class DaemonCore:
             self._overlay.show_loading("Loading LLM Model")
 
         def _worker() -> None:
+            q = self._transform_queue
             try:
                 out = lifecycle.transform(captured.text, prompt)
             except TransformFailedError as exc:
-                self._transform_queue.put(("transform_failed", exc))
+                q.put((epoch, "transform_failed", exc))
             except Exception as exc:
-                self._transform_queue.put(("transform_unexpected", exc))
+                q.put((epoch, "transform_unexpected", exc))
             else:
-                self._transform_queue.put(("ok", (out, captured.char_count)))
+                q.put((epoch, "ok", (out, captured.backspace_units)))
 
         t = threading.Thread(
             target=_worker, daemon=True, name="transform-worker"
@@ -897,17 +1199,17 @@ class DaemonCore:
 
     def check_transform_result(self, *, now_ms: int = 0) -> None:
         """Drain the transform result queue and feed the SM the deferred event."""
-        try:
-            kind, data = self._transform_queue.get_nowait()
-        except queue.Empty:
+        item = self._next_current_result(self._transform_queue, "transform")
+        if item is None:
             return
+        kind, data = item
 
-        if not self._transform_active or not self._transcription_active:
-            # ESC pressed during transform; discard.
-            return
+        session = self._session
+        if not session.transform_outstanding or not session.transcription_outstanding:
+            return  # belt-and-braces: nothing is awaiting this result
 
-        self._transform_active = False
-        self._transcription_active = False
+        self._session.transform_outstanding = False
+        self._session.transcription_outstanding = False
 
         try:
             if kind == "ok":
@@ -917,8 +1219,8 @@ class DaemonCore:
                     len(text),
                     replace_chars,
                 )
-                self._last_text = text
-                self._pending_replace_chars = replace_chars
+                self._session.text_to_paste = text
+                self._session.pending_replace_chars = replace_chars
                 # The model just generated, so it is resident: a follow-up
                 # trigger within keep_alive is "computing", not "loading" (#74).
                 self._llm_warm_until_ms = now_ms + self._llm_keep_alive_ms
@@ -972,37 +1274,60 @@ class DaemonCore:
 
         Only for use in tests — production code uses the 50 ms tick timer.
         """
-        if self._transcription_thread is not None:
-            self._transcription_thread.join(timeout=5.0)
-        # Mirror the production tick: flip the loading pill to transcribing once
-        # the model is resident, before the result is processed (#74).
-        self.check_loading_overlay(now_ms=now_ms)
-        self.check_transcription_result(now_ms=now_ms)
+        # A Borderline's confirm pass (#249) starts a second worker while the
+        # first result is processed, so follow the threads until none is new.
+        joined: threading.Thread | None = None
+        while self._transcription_thread is not joined:
+            joined = self._transcription_thread
+            if joined is not None:
+                joined.join(timeout=5.0)
+            # Mirror the production tick: flip the loading pill to transcribing
+            # once the model is resident, before the result is processed (#74).
+            self.check_loading_overlay(now_ms=now_ms)
+            self.check_notifications()
+            self.check_transcription_result(now_ms=now_ms)
         if self._transform_thread is not None:
             self._transform_thread.join(timeout=5.0)
         self.check_transform_result(now_ms=now_ms)
 
     def _flash_error_and_settle(self) -> None:
-        """Quiet error flash + return to idle — the shared tail of ``_do_paste``'s
-        non-happy exits (focus-drift hold, Trigger Fire paste-time discard, and
-        paste failure). There is no sound surface, so the flash is silent, and the
-        overlay is deliberately NOT hidden here (``hide()`` would cut the flash
-        short — it is only for the happy path). Kept in one place so the recovery
-        UX can't drift between these branches.
-        """
+        """Error flash + return to idle — ``_do_paste``'s exit for a genuine
+        failure where nothing is held (a discarded Trigger Fire, or a Trigger
+        Fire whose paste failed: its Transform output is not retained)."""
         self._overlay.show_error()
+        self._settle_after_unpasted()
+
+    def _hold_and_settle(self) -> None:
+        """The quiet "Saved — say paste" Held signal + return to idle (#239 /
+        F-13 / ADR-0026) — ``_do_paste``'s exit when a REGULAR dictation is held
+        in the Most-recent dictation buffer instead of pasted (focus drift, or a
+        failed paste). Not the error flash: nothing was lost. Silent (there is no
+        sound surface) and never refocuses anything."""
+        self._overlay.show_held()
+        self._settle_after_unpasted()
+
+    def _settle_after_unpasted(self) -> None:
+        """The shared tail of ``_do_paste``'s non-happy exits. The overlay is
+        deliberately NOT hidden here (``hide()`` would cut the flash/Held signal
+        short — it is only for the happy path). Kept in one place so the recovery
+        UX can't drift between these branches."""
         self._tray.set_idle()
-        self._last_text = None
+        self._session.text_to_paste = None
 
     def _do_paste(self, *, now_ms: int = 0) -> None:
-        replace = self._pending_replace_chars
-        self._pending_replace_chars = 0
+        replace = self._session.pending_replace_chars
+        self._session.pending_replace_chars = 0
 
-        if self._last_text and self._clipboard and self._keystroke and self._foreground:
+        if (
+            self._session.text_to_paste
+            and self._clipboard
+            and self._keystroke
+            and self._foreground
+        ):
             from dictatem.paste.focus_drift import focus_drifted
             from dictatem.paste.pipeline import normalize_pasted_text, paste
 
-            normalized = normalize_pasted_text(self._last_text)
+            normalized = normalize_pasted_text(self._session.text_to_paste)
             current_target_id = self._foreground.capture()
 
             # Focus-drift detect-and-hold (ADR-0026 / #97): for a REGULAR
@@ -1014,20 +1339,21 @@ class DaemonCore:
             # record-start, so it takes the separate paste-time rail just below
             # (#189) rather than this record-start comparison.
             if replace == 0 and focus_drifted(
-                self._record_start_target_id, current_target_id
+                self._session.record_start_target_id, current_target_id
             ):
                 logger.info(
                     "Focus drifted between record-start and paste "
                     "(anchor=%s, now=%s); holding %d-char dictation for recovery",
-                    self._record_start_target_id,
+                    self._session.record_start_target_id,
                     current_target_id,
                     len(normalized),
                 )
                 self._most_recent_dictation = normalized
                 self._tray.set_has_last_dictation(True)
-                # The quiet "saved — say paste" flash: informational, not pushy —
-                # no sound (there is no sound surface) and no foreground.restore.
-                self._flash_error_and_settle()
+                # The quiet "Saved — say paste" Held signal (#239): informational,
+                # not pushy — no sound (there is no sound surface) and no
+                # foreground.restore.
+                self._hold_and_settle()
                 return
 
             # Trigger Fire paste-time same-target rail (#189 / review F-1). The
@@ -1070,7 +1396,7 @@ class DaemonCore:
 
             try:
                 paste(
-                    self._last_text,
+                    self._session.text_to_paste,
                     clipboard=self._clipboard,
                     keystroke=self._keystroke,
                     foreground=self._foreground,
@@ -1082,14 +1408,37 @@ class DaemonCore:
                     target_id=current_target_id,
                     schedule_restore=self._restore_scheduler,
                 )
+            except ModifiersHeldError as exc:
+                # A modifier (Alt/Win/Shift/Ctrl) stayed down past the bounded
+                # release wait (#269). NOTHING was injected — no clipboard write,
+                # no focus restore, no keystroke — so rather than inject key-ups
+                # under the user's fingers (an injected lone Alt/Win-up pops the
+                # menu bar / Start menu, #171) we treat it exactly like focus
+                # drift: a regular dictation is already in the Most-recent buffer,
+                # so show the Held signal ("say paste" / tray recovers it). A
+                # Trigger Fire is discarded with the error flash; its Last Paste
+                # is left armed (nothing was typed) so the user can retry. The
+                # pipeline already logged which modifiers and how long.
+                logger.info(
+                    "Paste deferred: modifier(s) still held after %.2fs (%s)%s",
+                    exc.waited_s,
+                    "Trigger Fire" if replace else "dictation",
+                    "" if replace else " — held for recovery",
+                )
+                if replace:
+                    self._flash_error_and_settle()
+                else:
+                    self._hold_and_settle()
+                return
             except (ClipboardContentionError, OSError):
                 # The clipboard failure classes the recovery buffer exists for
                 # (contention after the open retries, or an OSError from the
                 # win32/mac clipboard). A regular dictation's text is already in
                 # the Most-recent buffer (written above), so it is recoverable by
                 # saying "paste" or via the tray item; a Trigger Fire's Transform
-                # output is not retained (#119), so nothing is held for it. Flash
-                # the error and settle WITHOUT re-raising, so the flash isn't
+                # output is not retained (#119), so nothing is held for it. Show
+                # the Held signal for a dictation (#239) or the error flash for a
+                # Trigger Fire, and settle WITHOUT re-raising, so the signal isn't
                 # immediately hidden by _recover_to_idle, and do not arm Trigger
                 # Words against text that may not have landed. Any OTHER exception
                 # is a genuine bug — let it propagate to check_transcription_result
@@ -1103,44 +1452,43 @@ class DaemonCore:
                     exc_info=True,
                 )
                 self._last_paste = None
-                self._flash_error_and_settle()
+                if replace:
+                    self._flash_error_and_settle()
+                else:
+                    self._hold_and_settle()
                 return
 
             # Last Paste is armed only on a SUCCESSFUL paste — it arms Trigger
             # Words against text that actually landed (invariant kept by #190).
             self._last_paste = LastPaste(
                 text=normalized,
-                char_count=len(normalized),
+                backspace_units=count_backspace_units(normalized),
                 target_id=current_target_id,
                 pasted_at_ms=now_ms,
             )
         else:
             logger.warning(
                 "Paste skipped: text=%r, clipboard=%s, keystroke=%s, foreground=%s",
-                bool(self._last_text),
+                bool(self._session.text_to_paste),
                 self._clipboard is not None,
                 self._keystroke is not None,
                 self._foreground is not None,
             )
         self._overlay.hide()
         self._tray.set_idle()
-        self._last_text = None
+        self._session.text_to_paste = None
 
     def _do_cancel(self) -> None:
-        self._transcription_active = False
-        self._transform_active = False
-        self._pending_replace_chars = 0
+        # Ending the session clears every per-dictation field — including the
+        # record-start anchor, so it can never be consulted stale (#97).
+        self._session.end()
         self._last_paste = None
-        # The anchor is only valid between record-start and its matching paste;
-        # clear it on an aborted dictation so it can never be consulted stale (#97).
-        self._record_start_target_id = None
         try:
             self._audio_capture.stop()
         except Exception:
             logger.exception("Error stopping audio capture during cancel")
         self._overlay.hide()
         self._tray.set_idle()
-        self._last_text = None
 
     def on_tray_preload(self) -> None:
         try:
@@ -1257,7 +1605,7 @@ class DaemonCore:
         try:
             if self._loading_for_transcribe and self._lifecycle.is_loaded:
                 self._loading_for_transcribe = False
-                if self._transcription_active:
+                if self._session.transcription_outstanding:
                     self._overlay.show_transcribing()
             if (
                 self._preload_pill_active
@@ -1297,6 +1645,30 @@ class DaemonCore:
         except Exception:
             logger.error("Error starting first-run model fetch", exc_info=True)
 
+    def on_transcriber_fallback(self, reason: RuntimeFallbackReason) -> None:
+        """The MLX engine failed and the session switched to CPU (#232).
+
+        Thread-safe: called by the fallback composite from whichever thread hit
+        the failure. *reason* says whether MLX failed to load or failed while
+        transcribing. Queues the one "Running on CPU" notification for the tick.
+        """
+        from dictatem.hardware.resolver import fallback_notice
+
+        notice = fallback_notice(reason)
+        self._pending_notifications.put((notice.title, notice.body))
+
+    def check_notifications(self) -> None:
+        """Show any notifications queued off the GUI thread. Polled on the tick."""
+        while True:
+            try:
+                title, body = self._pending_notifications.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                self._tray.show_notification(title, body)
+            except Exception:
+                logger.error("Error showing a queued notification", exc_info=True)
+
     def check_model_download(self) -> None:
         """Surface the one-time first-run model download finishing (#162).
 
@@ -1332,19 +1704,15 @@ class DaemonCore:
             self.on_hotkey_event(Event.KEY_UP, now_ms=1000)
 
     def _recover_to_idle(self) -> None:
-        self._transcription_active = False
-        self._transform_active = False
-        self._pending_replace_chars = 0
+        self._session.end()  # clears per-dictation fields, incl. the #97 anchor
         self._last_paste = None
-        self._record_start_target_id = None  # stale-anchor guard (#97), see _do_cancel
-        self._sm._state = State.IDLE
+        self._sm.reset()
         try:
             self._audio_capture.stop()
         except Exception:
             logger.exception("Error stopping audio capture during recovery")
         self._overlay.hide()
         self._tray.set_idle()
-        self._last_text = None
 
 
 class _AbortCommandChain(Exception):
@@ -1439,6 +1807,16 @@ def _run_uninstall() -> None:
         lines.append("Some cleanup failed — check the daemon log.")
         lines.append("You can still finish removing Dictatem with:")
         lines.append("    uv tool uninstall dictatem")
+
+    # Remove the toast-attribution AppUserModelID registration alongside the
+    # autostart entry (both are daemon-written HKCU keys). Never fatal.
+    if sys.platform == "win32":
+        try:
+            from dictatem.process.win32_app_identity import unregister_app_identity
+
+            unregister_app_identity()
+        except Exception:
+            logger.warning("Could not remove the AppUserModelID", exc_info=True)
 
     # Stop the running daemon so step 2 (`uv tool uninstall`) isn't blocked by
     # the `…\Scripts` file lock (#69). Autostart was removed first (above, per
@@ -1627,6 +2005,21 @@ class _PlatformAdapters:
     means all granted, show nothing. ``None`` means the platform has no guided
     permission UX (Windows: the mic permission surfaces in-flow when capture
     fails).
+
+    ``bind_permission_reporter`` is the re-prompt-on-use seam (#95): the daemon
+    calls it once, before installing hooks, with a **thread-safe** "this
+    permission just blocked a gated action" callback, which the platform wires
+    into its native adapters (macOS: the event tap's creation failure and the
+    keystroke sender's Accessibility preflight). ``None`` = no such reports.
+
+    ``relaunch`` backs the tray **Restart** item (#212): it spawns whatever
+    restarts the daemon the platform's supported way and returns ``True`` (the
+    daemon then quits so the new instance can take the single-instance lock), or
+    ``False`` when it can't (nothing spawned; the user is shown
+    ``relaunch_failed_hint`` instead). Windows spawns a detached replacement
+    daemon (``process.restart``); macOS plugs its launchd relauncher in here
+    (#95). ``None`` hides the Restart item rather than leave a silent no-op.
+    ``relaunch_failed_hint`` ``None`` means the generic Quit-and-start-again copy.
     """
 
     probe: HardwareProbe
@@ -1642,6 +2035,18 @@ class _PlatformAdapters:
         Callable[[Callable[[Key, KeyAction, int], HookDecision]], object] | None
     )
     check_permissions: Callable[[], tuple[PermissionGuidance, ...]] | None
+    bind_permission_reporter: (
+        Callable[[Callable[[MacPermission], None]], None] | None
+    ) = None
+    relaunch: Callable[[], bool] | None = None
+    relaunch_failed_hint: str | None = None
+    # Hotkey-hook install failure seam (#245): like bind_permission_reporter,
+    # bound once before the hooks install with a thread-safe "this hook was
+    # refused" callback (Windows: SetWindowsHookExW returned NULL). None = the
+    # platform reports hook failures some other way (macOS: Input Monitoring).
+    bind_hook_failure_reporter: (
+        Callable[[Callable[[HookFailure], None]], None] | None
+    ) = None
 
 
 def _make_sounddevice_capture(config: Config, buffer: AudioBuffer) -> AudioCapture:
@@ -1676,7 +2081,9 @@ def _make_macaudio_capture(config: Config, buffer: AudioBuffer) -> AudioCapture:
     return MacAudioCapture(config, buffer)
 
 
-def _acquire_single_instance_lock(lock_path: Path) -> object | None:
+def _acquire_single_instance_lock(
+    lock_path: Path, *, wait_ms: int = 0
+) -> object | None:
     """Acquire the cross-platform single-instance lock (#92).
 
     Returns a lock object the caller must keep alive for the whole process, or
@@ -1706,6 +2113,11 @@ def _acquire_single_instance_lock(lock_path: Path) -> object | None:
     a rare edge — the common relaunch path (the installer's ``Stop-DictatemDaemon``
     / #98) stops the old daemon first, leaving no stale lock.
 
+    *wait_ms* > 0 is the tray-Restart path (#212): the replacement daemon is
+    spawned while the old one still holds the lock, so it waits up to *wait_ms*
+    for the old one to exit instead of failing fast. Still ``None`` if the lock
+    stays held past the wait — never two daemons at once.
+
     The import stays lazy so ``dictatem.daemon`` imports with no Qt present
     (``test_import_safety``).
     """
@@ -1714,9 +2126,10 @@ def _acquire_single_instance_lock(lock_path: Path) -> object | None:
     lock = QLockFile(str(lock_path))
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        # Try once without blocking: a redundant instance must fail fast and
-        # exit, not queue up waiting for the live daemon to release the lock.
-        if lock.tryLock(0):
+        # Normally try once without blocking: a redundant instance must fail
+        # fast and exit, not queue up waiting for the live daemon to release the
+        # lock. A Restart-spawned daemon (wait_ms > 0) waits for its predecessor.
+        if lock.tryLock(max(wait_ms, 0)):
             return lock
         if lock.error() == QLockFile.LockError.LockFailedError:
             return None  # genuinely held by a live daemon — the caller exits
@@ -1739,6 +2152,111 @@ def _acquire_single_instance_lock(lock_path: Path) -> object | None:
     return lock
 
 
+def log_trigger_lexicon_warnings(
+    prompt_files: Mapping[str, Iterable[str]],
+    paste_aliases: Iterable[str],
+    prompts_dir: Path,
+) -> None:
+    """Log the load-time Trigger Word collision check (#251, spec #226 Layer 4).
+
+    One warning per pair of Aliases of different actions that sound alike,
+    and one per Alias too short for fuzzy tolerance. Alias and file
+    names are configuration, not dictated content (#188). Never raises.
+    """
+    from dictatem.transform.collisions import PASTE_ACTION_LABEL, check_trigger_lexicon
+
+    report = check_trigger_lexicon(prompt_files, paste_aliases=paste_aliases)
+    for c in report.collisions:
+        logger.warning(
+            "Trigger Words %r (%s) and %r (%s) sound alike — a misheard one may "
+            "fire the other or ask you to say it again. Rename one (Prompt Files "
+            "live in %s; paste aliases in [trigger_words].paste_aliases).",
+            c.alias, c.action, c.other_alias, c.other_action, prompts_dir,
+        )
+    for e in report.exact_only:
+        where = (
+            "[trigger_words].paste_aliases"
+            if e.action == PASTE_ACTION_LABEL
+            else f"{prompts_dir / e.action}"
+        )
+        logger.warning(
+            "Trigger Word %r (%s) is too short for fuzzy matching — it only "
+            "fires when heard exactly. A longer word is more reliable.",
+            e.alias, where,
+        )
+
+
+def _build_language_selector(
+    config: Config,
+    read_os_ui_language: Callable[[], str | None] | None = None,
+) -> LanguageSelector:
+    """The session's :class:`LanguageSelector` from ``[model]`` (#273).
+
+    The OS UI language is read only for ``language = "auto"`` without
+    Preferred Languages — the one mode whose fallback can reach it. Logs the
+    mode and codes once (configuration, not dictated content).
+    """
+    from dictatem.transcribe.language import AUTO, LanguageSelector, language_policy
+
+    model = config.model
+    os_ui: str | None = None
+    if not model.languages and model.language == AUTO:
+        if read_os_ui_language is None:
+            from dictatem.transcribe.os_language import read_os_ui_language as reader
+        else:
+            reader = read_os_ui_language
+        os_ui = reader()
+    policy = language_policy(model.language, model.languages, os_ui_language=os_ui)
+    if policy.pinned is not None:
+        logger.info("Transcription language: %s (pinned, no detection)", policy.pinned)
+    elif policy.preferred:
+        logger.info(
+            "Transcription language: detect among Preferred Languages %s",
+            ",".join(policy.preferred),
+        )
+    else:
+        logger.info(
+            "Transcription language: auto-detect (OS UI language %s)",
+            policy.os_ui_language or "unknown",
+        )
+    return LanguageSelector(policy)
+
+
+def startup_version_line(
+    version: str | None, *, python_version: str, platform_name: str, machine: str
+) -> str:
+    """The one-line build identity logged at daemon startup (#201).
+
+    Pure so the format is unit-tested. *machine* is the interpreter's view of the
+    arch (``platform.machine()``) — on Windows-on-ARM the pinned x64 Python
+    reports ``AMD64`` under emulation, which is exactly what triage needs to see.
+    """
+    shown = f"v{version}" if version else "unknown version (dev checkout?)"
+    return (
+        f"Dictatem {shown} starting — Python {python_version}, "
+        f"{platform_name}, {machine or 'unknown arch'}"
+    )
+
+
+def _log_startup_version() -> None:
+    import platform
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        pkg_version: str | None = version("dictatem")
+    except PackageNotFoundError:
+        pkg_version = None
+    logger.info(
+        "%s",
+        startup_version_line(
+            pkg_version,
+            python_version=platform.python_version(),
+            platform_name=sys.platform,
+            machine=platform.machine(),
+        ),
+    )
+
+
 def _run_daemon(adapters: _PlatformAdapters) -> None:
     """Wire the platform-neutral daemon around *adapters* and run the Qt loop.
 
@@ -1757,7 +2275,11 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 
     from dictatem.audio.buffer import AudioBuffer
     from dictatem.autostart.reconcile import apply_autostart
-    from dictatem.config import default_config_path, load_config, write_config
+    from dictatem.config import (
+        default_config_path,
+        load_config_with_report,
+        write_config,
+    )
     from dictatem.hotkey.classifier import HotkeyClassifier
     from dictatem.onboarding import (
         mark_usage_guide_seen,
@@ -1767,7 +2289,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     from dictatem.overlay.qt_widget import QtOverlayWidget
     from dictatem.overlay.state import OverlayState
     from dictatem.state import StateMachine
-    from dictatem.transcribe.faster_whisper_backend import FasterWhisperBackend
+    from dictatem.transcribe.backend_selection import build_transcriber, select_backend
     from dictatem.transcribe.latency_monitor import LatencyMonitor
     from dictatem.transcribe.lifecycle import TranscribeLifecycle
     from dictatem.transcribe.replacements import (
@@ -1778,17 +2300,14 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         bootstrap_vocabulary,
         load_vocabulary,
     )
-    from dictatem.transform.detector import (
-        TriggerDetector,
-        shadowed_builtin_aliases,
-    )
     from dictatem.transform.lifecycle import TransformLifecycle
     from dictatem.transform.ollama_backend import OllamaBackend
     from dictatem.transform.prompts import (
         bootstrap_prompts,
         default_prompts_dir,
-        load_prompts_dir,
+        load_prompts,
     )
+    from dictatem.transform.recognizer import shadowed_builtin_aliases
     from dictatem.tray.qt_tray import QtTrayIcon
 
     # Configure logging before load_config so the first-run Hardware Tier
@@ -1805,6 +2324,8 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # noisy at INFO. Our own load/unload lines tell the user what they need.
     for noisy in ("httpx", "huggingface_hub", "filelock", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # First line of every session's log: which build is this? (#201)
+    _log_startup_version()
 
     # Single-instance guard (#92). Two concurrent daemons each register the
     # global hotkey hook, so every gesture is recorded, transcribed, and pasted
@@ -1812,11 +2333,22 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # instance is still alive; a dev clone next to the installed build does it
     # too). Acquire the lock BEFORE any hook, audio, model, or tray setup so a
     # redundant instance exits cleanly here, leaving the live daemon untouched.
+    # A tray Restart (#212) spawns this daemon while the old one is still
+    # quitting, so that one case waits for the old one to release the lock.
     # ``_instance_lock`` is intentionally bound for the whole function: it must
     # outlive setup (app.exec() below holds it until the process exits), and
     # releasing the QLockFile would drop the guard.
+    from dictatem.process.restart import take_restart_lock_wait_ms
+
+    lock_wait_ms = take_restart_lock_wait_ms(os.environ)
+    if lock_wait_ms:
+        logger.info(
+            "Restarted from the tray; waiting up to %d ms for the previous "
+            "instance to exit",
+            lock_wait_ms,
+        )
     _instance_lock = _acquire_single_instance_lock(
-        Path.home() / ".dictatem" / "daemon.lock"
+        Path.home() / ".dictatem" / "daemon.lock", wait_ms=lock_wait_ms
     )
     if _instance_lock is None:
         logger.warning("Another Dictatem instance is already running; exiting")
@@ -1831,7 +2363,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # (ADR-0025 / #162), the run the installer triggers as its last step.
     is_first_run = not config_path.exists()
     probe = adapters.probe
-    config = load_config(config_path, probe=probe)
+    config, config_report = load_config_with_report(config_path, probe=probe)
 
     # Reconcile the config's pinned transcription hardware against the machine
     # we're actually on (#39 / ADR-0009). A config baked on a GPU box and then
@@ -1839,21 +2371,29 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # load. On the absent-GPU case we fall back to the CPU tier FOR THIS SESSION
     # only — the config file is never rewritten, so the user's pinned GPU values
     # return automatically once the hardware does.
-    from dictatem.hardware.resolver import HardwareTierResolver
+    from dictatem.hardware.resolver import HardwareTierResolver, fallback_notice
 
-    effective, did_fall_back = HardwareTierResolver().reconcile(
+    # A config pinning mlx where MLX isn't usable falls back the same way (#231),
+    # to the Apple-Silicon CPU row on Apple Silicon or the CPU row elsewhere;
+    # fallback_reason says which hardware was missing.
+    reconciliation = HardwareTierResolver().reconcile(
         device=config.model.device,
         model=config.model.name,
         compute_type=config.model.compute_type,
         profile=probe.probe(),
     )
-    # Transcription hardware only. We deliberately do NOT apply
-    # effective.transform_model: the Transform/Ollama model is independent of
+    fallback_reason = reconciliation.fallback_reason
+    # Transcription hardware only. select_backend reads only the model, device
+    # and compute_type: we deliberately do NOT apply the resolved
+    # transform_model, because the Transform/Ollama model is independent of
     # CUDA and reconcile carries the CPU tier's tag in the fallback case purely
     # as a side effect of returning the whole row (see ADR-0009).
-    effective_model = effective.model
-    effective_device = effective.device
-    effective_compute_type = effective.compute_type
+    # Pick the transcription engine for the effective device (#229): cuda/cpu
+    # run faster-whisper, mlx is the Apple-GPU engine (#224), and an unknown
+    # device string warns and runs the CPU row for this session.
+    selection = select_backend(reconciliation.resolved)
+    if selection.warning is not None:
+        logger.warning("%s", selection.warning)
 
     logging.getLogger().setLevel(
         getattr(logging, config.logging.level.upper(), logging.INFO)
@@ -1889,6 +2429,12 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # closing the first-run permission dialog killed the daemon (and its
     # menu-bar icon) outright (#57 QA). Tray/hotkey keep it alive instead.
     app.setQuitOnLastWindowClosed(False)
+    if sys.platform == "win32":
+        # Qt's default style on Windows draws Windows-10-era menus and dialogs;
+        # the native Windows 11 style (Qt 6.7+) gives the tray menu, Usage Guide
+        # and dialogs rounded, current-looking chrome. An unknown style name is a
+        # no-op, so an older Qt simply keeps its default.
+        app.setStyle("windows11")
 
     if sys.platform == "darwin":
         # Make the running process a menu-bar accessory: the .app's LSUIElement
@@ -1919,16 +2465,24 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     vocabulary = load_vocabulary(dictatem_dir / "vocabulary.md")
     replacements = load_replacements(dictatem_dir / "replacements.md")
 
-    backend = FasterWhisperBackend(
-        model_name=effective_model,
-        compute_type=effective_compute_type,
-        device=effective_device,
-        language=config.model.language,
+    # An mlx selection comes back wrapped in the session fallback composite
+    # (#232): if MLX fails, this dictation and the rest of the session run on
+    # the Apple-Silicon CPU row, and on_fallback queues one tray notification.
+    # The lambda late-binds `daemon` (built below); it can only fire on a model
+    # load or transcription, which never happen before the daemon exists.
+    language_selector = _build_language_selector(config)
+    backend = build_transcriber(
+        selection,
+        language_selector=language_selector,
         vad_filter=config.model.vad_filter,
         vocabulary=vocabulary,
+        on_fallback=lambda reason: daemon.on_transcriber_fallback(reason),
     )
     lifecycle = TranscribeLifecycle(
         backend=backend,
+        model_name=selection.model,
+        device=selection.device,
+        compute_type=selection.compute_type,
         idle_timeout_s=config.model.idle_unload_minutes * 60,
         min_transcription_chars=config.model.min_transcription_chars,
     )
@@ -1948,19 +2502,30 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     transform_lifecycle = TransformLifecycle(backend=transform_backend)
     prompts_dir = Path.home() / ".dictatem" / "prompts"
     bootstrap_prompts(prompts_dir, default_prompts_dir())
-    prompt_aliases = load_prompts_dir(prompts_dir)
-    # A user Prompt File that reuses a built-in action name (`paste`) is
-    # shadowed by the built-in — its Transform can never fire (ADR-0023 / #139).
-    # Warn so the collision is visible rather than silently dead.
-    shadowed = shadowed_builtin_aliases(prompt_aliases)
+    loaded_prompts = load_prompts(prompts_dir)
+    prompt_aliases = loaded_prompts.aliases
+    # A user Prompt File that reuses a built-in action name (`paste`) or one of
+    # the user's `[trigger_words].paste_aliases` (#250) is shadowed by the
+    # built-in — its Transform can never fire (ADR-0023 / #139). Warn so the
+    # collision is visible rather than silently dead.
+    paste_aliases = config.trigger_words.paste_aliases
+    shadowed = shadowed_builtin_aliases(prompt_aliases, paste_aliases=paste_aliases)
     if shadowed:
         logger.warning(
             "Prompt File alias(es) %s are shadowed by the built-in `paste` "
-            "action and will never fire as a Transform — rename them in %s",
+            "action (or a [trigger_words].paste_aliases entry) and will never "
+            "fire as a Transform — rename them in %s",
             ", ".join(shadowed),
             prompts_dir,
         )
-    trigger_detector = TriggerDetector(prompt_aliases)
+    # Aliases of different actions that sound alike, and Aliases too short
+    # for fuzzy tolerance (#251) — logged, never blocking startup.
+    log_trigger_lexicon_warnings(loaded_prompts.aliases_by_file(), paste_aliases, prompts_dir)
+    trigger_recognizer = TriggerWordRecognizer(
+        prompt_aliases,
+        paste_aliases=paste_aliases,
+        fuzzy_matching=config.trigger_words.fuzzy_matching,
+    )
 
     overlay_state = OverlayState(
         clock=time.monotonic,
@@ -2005,7 +2570,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         silence_timeout_s=float(config.behaviour.silence_timeout_s),
         max_recording_s=float(config.behaviour.max_recording_seconds),
         transform_lifecycle=transform_lifecycle,
-        trigger_detector=trigger_detector,
+        trigger_recognizer=trigger_recognizer,
         transform_enabled=config.transform.enabled,
         last_paste_ttl_s=float(config.transform.last_paste_ttl_s),
         transform_model_name=config.transform.model_name,
@@ -2015,7 +2580,13 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         autostart_registrar=autostart_registrar,
         persist_autostart=_persist_autostart,
         replacements=replacements,
+        config_read_only=config_report.write_protected,
     )
+    # One startup notification for a non-empty Config Load Report (#238),
+    # deferred like the CPU-fallback one below: a balloon needs a visible icon
+    # and a running event loop.
+    if not config_report.is_empty:
+        QTimer.singleShot(1000, lambda: daemon.notify_config_problems(config_report))
 
     tray_icon.on_start = daemon.on_tray_start_recording
     tray_icon.on_stop = daemon.on_tray_stop_recording
@@ -2029,17 +2600,47 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     tray_icon.set_autostart_available(autostart_registrar is not None)
     tray_icon.on_quit = lambda: daemon.on_tray_quit(app.quit)
 
+    # Tray "Restart" (#212) — how a config.toml edit takes effect (the Usage
+    # Guide and README send the user here). The platform adapter spawns the
+    # replacement (Windows: a detached daemon that waits for our lock; macOS: a
+    # launchd kickstart, #95), then this daemon quits to free the lock. Hidden
+    # where the platform has no relauncher, so it is never a silent no-op.
+    relaunch = adapters.relaunch
+    if relaunch is not None:
+        from dictatem.process.restart import RESTART_FAILED_HINT
+
+        relaunch_failed_hint = adapters.relaunch_failed_hint or RESTART_FAILED_HINT
+
+        def _on_tray_restart() -> None:
+            logger.info("Restart requested from the tray")
+            try:
+                if relaunch():
+                    daemon.on_tray_quit(app.quit)
+                    return
+            except Exception:
+                logger.error("Error restarting Dictatem", exc_info=True)
+            tray.show_notification("Couldn't restart Dictatem", relaunch_failed_hint)
+
+        tray_icon.on_restart = _on_tray_restart
+    tray_icon.set_restart_available(relaunch is not None)
+
     # Tray "Check for Updates…" (#100). Resolve the latest GitHub release off the
-    # UI thread and, if newer, re-run the install one-liner at that tag — which
-    # stops the daemon, picks the right GPU/CPU extra, installs, and relaunches
-    # (ADR-0011/0015; the same verified upgrade path as #98), not a bundled
-    # updater. Kept alive for the event loop's lifetime, like the hook below.
+    # UI thread and, if newer, act per the platform's update path (#193,
+    # upgrade.prompt): on Windows re-run the install one-liner at that tag —
+    # which stops the daemon, picks the right GPU/CPU extra, installs, and
+    # relaunches (ADR-0011/0015; the same verified upgrade path as #98); on
+    # macOS show the pinned install.sh one-liner to copy (nothing auto-executes
+    # in phase 1). Not a bundled updater. Kept alive for the event loop's
+    # lifetime, like the hook below.
     from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as _installed_version
 
     from dictatem.upgrade.core import GITHUB_REPO
     from dictatem.upgrade.github import fetch_latest_tag
+    from dictatem.upgrade.prompt import UpdateMode, update_mode_for
     from dictatem.upgrade.qt_update_check import UpdateChecker
+
+    update_mode = update_mode_for(sys.platform)
 
     def _current_version() -> str:
         try:
@@ -2057,32 +2658,96 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             # in-app upgrade is Windows-only until a macOS installer path lands.
             logger.info("In-app upgrade is Windows-only for now; tag=%s", tag)
 
+    def _show_manual_update(decision: UpgradeDecision) -> None:
+        # macOS (#193 phase 1): a prompt with the pinned install.sh one-liner to
+        # copy into Terminal — nothing runs on the user's behalf.
+        try:
+            from dictatem.upgrade.prompt import manual_update_prompt
+            from dictatem.upgrade.qt_update_prompt import show_manual_update_prompt
+
+            assert decision.tag is not None  # guaranteed for UPGRADE_AVAILABLE
+            show_manual_update_prompt(
+                manual_update_prompt(_current_version(), decision.tag),
+                notify=tray_icon.show_notification,
+            )
+        except Exception:
+            logger.error("Error showing the update prompt", exc_info=True)
+
     _update_checker = UpdateChecker(
         current_version=_current_version(),
         fetch_latest_tag=lambda: fetch_latest_tag(repo=GITHUB_REPO),
         notify=tray_icon.show_notification,
         start_upgrade=_start_upgrade,
+        on_update_available=(
+            _show_manual_update if update_mode is UpdateMode.MANUAL else None
+        ),
     )
     tray_icon.on_upgrade = _update_checker.check
-    # In-app upgrade re-runs install.ps1 (Windows-only). Hide the item elsewhere
-    # so it never promises a restart it can't deliver (_start_upgrade no-ops).
-    tray_icon.set_upgrade_available(sys.platform == "win32")
+    # Shown wherever there is an update path (Windows in-app, macOS manual);
+    # hidden elsewhere so it never promises an update it can't deliver.
+    tray_icon.set_upgrade_available(update_mode is not UpdateMode.UNSUPPORTED)
     # Footer showing the installed version, so the user can confirm which build
     # they're on (e.g. after an upgrade). Hidden if the version can't be read.
     _ver = _current_version()
     tray_icon.set_version_label(f"Dictatem v{_ver}" if _ver else "")
 
+    # Ready signal for the installer (#95): once the loop runs and the tray icon
+    # is realized (QtTrayIcon queued its own 0 ms realize first), drop a marker
+    # the macOS install.sh waits on, so it can say "still setting up" through
+    # the cold first launch instead of claiming "done" before the icon exists.
+    from dictatem.onboarding import daemon_ready_marker, write_daemon_ready_marker
+
+    QTimer.singleShot(
+        0,
+        lambda: write_daemon_ready_marker(
+            daemon_ready_marker(Path.home()), pid=os.getpid()
+        ),
+    )
+
     # Usage Guide (ADR-0019): build the read-only help content from live config
     # so the "How to use Dictatem…" item reflects the actual activation chord.
     from dictatem.tray.usage_guide import usage_guide_html
 
+    trigger_words = sorted(prompt_aliases)
     tray_icon.set_usage_guide_html(
         usage_guide_html(
             config.hotkey.modifiers,
             platform=sys.platform,
-            trigger_words=sorted(prompt_aliases),
-        )
+            trigger_words=trigger_words,
+            paste_aliases=paste_aliases,
+        ),
+        dark_html=usage_guide_html(
+            config.hotkey.modifiers,
+            platform=sys.platform,
+            trigger_words=trigger_words,
+            paste_aliases=paste_aliases,
+            dark=True,
+        ),
     )
+
+    # Re-prompt-on-use (#95). Native adapters report "permission X just blocked
+    # a gated action" from any thread (the event tap's own thread, the Qt
+    # thread for paste) into this queue; the tick drains it on the Qt thread,
+    # and the pure throttle decides dialog vs tray note vs nothing. Bound
+    # BEFORE the hooks install, so a tap that fails instantly is still caught.
+    from dictatem.permissions.mapper import MacPermission
+    from dictatem.permissions.reprompt import PermissionRepromptThrottle
+
+    permission_reports: queue.SimpleQueue[MacPermission] = queue.SimpleQueue()
+    reprompt_throttle = PermissionRepromptThrottle()
+    if adapters.bind_permission_reporter is not None:
+        adapters.bind_permission_reporter(permission_reports.put)
+
+    # Hotkey-hook install failures (#245): the hook thread reports, the tick
+    # drains into one tray notification + hint. Bound BEFORE the hooks install.
+    from dictatem.hotkey.hook_failure import HookFailureReporter
+
+    hook_failures = HookFailureReporter(
+        show_notification=tray.show_notification,
+        set_hotkey_hint=tray_icon.set_hotkey_hint,
+    )
+    if adapters.bind_hook_failure_reporter is not None:
+        adapters.bind_hook_failure_reporter(hook_failures.report)
 
     bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:
@@ -2139,13 +2804,81 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     if is_first_run:
         QTimer.singleShot(2500, daemon.begin_first_run_model_fetch)
 
+    # Reports that arrive before the launch-time permission probe has finished
+    # are held back so the probe's own (startup-worded) dialogs go first and
+    # the throttle can dedupe — the event tap fails within milliseconds of
+    # launch, long before the 2 s deferred probe runs.
+    startup_permission_check_done = adapters.check_permissions is None
+    deferred_permission_reports: list[MacPermission] = []
+
+    def _close_permission_dialog(guidance: PermissionGuidance) -> None:
+        reprompt_throttle.dialog_closed(guidance.permission, time.monotonic())
+
+    def _show_permission_dialogs_now(guidances: list[PermissionGuidance]) -> None:
+        try:
+            from dictatem.permissions.qt_dialog import show_permission_dialogs
+
+            show_permission_dialogs(guidances, on_closed=_close_permission_dialog)
+        except Exception:
+            logger.error("Error showing a permission dialog", exc_info=True)
+
+    def _handle_permission_report(permission: MacPermission) -> None:
+        from dictatem.permissions.mapper import (
+            PromptContext,
+            map_missing_permissions,
+            reprompt_notification,
+            tcc_entry_name,
+        )
+        from dictatem.permissions.reprompt import RepromptAction
+
+        entry = tcc_entry_name(sys.version_info.major, sys.version_info.minor)
+        action = reprompt_throttle.on_use(permission, time.monotonic())
+        if action is RepromptAction.DIALOG:
+            guidances = list(
+                map_missing_permissions(
+                    {permission}, context=PromptContext.ON_USE, listed_as=entry
+                )
+            )
+            # Its own slot, never nested inside the tick that drained it: the
+            # dialog's exec() re-enters the event loop, which keeps ticking.
+            QTimer.singleShot(0, lambda: _show_permission_dialogs_now(guidances))
+        elif action is RepromptAction.NOTIFY:
+            title, body = reprompt_notification(permission, listed_as=entry)
+            tray.show_notification(title, body)
+
+    def _drain_permission_reports() -> None:
+        from dictatem.permissions.mapper import HOTKEY_OFF_HINT
+
+        while True:
+            try:
+                permission = permission_reports.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                logger.info("Permission blocked a gated action: %s", permission.name)
+                if permission is MacPermission.INPUT_MONITORING:
+                    # Where the user looks when the hotkey "does nothing".
+                    tray_icon.set_hotkey_hint(HOTKEY_OFF_HINT)
+                if startup_permission_check_done:
+                    _handle_permission_report(permission)
+                else:
+                    deferred_permission_reports.append(permission)
+            except Exception:
+                logger.error("Error surfacing a permission report", exc_info=True)
+
     def _on_tick() -> None:
         now = int(time.monotonic() * 1000)
         if bridge is not None:
             bridge.tick(now)
+        _drain_permission_reports()
+        try:
+            hook_failures.drain()
+        except Exception:
+            logger.error("Error surfacing a hotkey hook failure", exc_info=True)
         overlay.update_level(audio_buffer.current_level())
         daemon.check_loading_overlay(now_ms=now)
         daemon.check_model_download()
+        daemon.check_notifications()
         daemon.check_transcription_result(now_ms=now)
         daemon.check_transform_result(now_ms=now)
 
@@ -2185,17 +2918,32 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         check_permissions = adapters.check_permissions
 
         def _show_permission_guidance() -> None:
+            nonlocal startup_permission_check_done
             permissions_pending = False
             try:
                 guidances = check_permissions()
                 if guidances:
                     permissions_pending = True
-                    from dictatem.permissions.qt_dialog import show_permission_dialogs
-
-                    show_permission_dialogs(guidances)
+                    # Through the re-prompt throttle (#95) so a permission an
+                    # on-use report already surfaced isn't shown twice.
+                    due = reprompt_throttle.on_startup(
+                        {g.permission for g in guidances}, time.monotonic()
+                    )
+                    to_show = [g for g in guidances if g.permission in due]
+                    if to_show:
+                        _show_permission_dialogs_now(to_show)
             except Exception:
                 logger.error("Error in startup permission check", exc_info=True)
             finally:
+                startup_permission_check_done = True
+                for permission in deferred_permission_reports:
+                    try:
+                        _handle_permission_report(permission)
+                    except Exception:
+                        logger.error(
+                            "Error surfacing a permission report", exc_info=True
+                        )
+                deferred_permission_reports.clear()
                 _maybe_auto_open_usage_guide(permissions_pending=permissions_pending)
 
         QTimer.singleShot(2000, _show_permission_guidance)
@@ -2209,26 +2957,23 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # Surface the session CPU fallback once, after the loop is up. A
     # QSystemTrayIcon balloon needs a visible icon and a running event loop, so
     # we defer it with a single-shot timer rather than firing it inline (#39).
-    if did_fall_back:
+    if fallback_reason is not None:
+        notice = fallback_notice(fallback_reason)
         logger.warning(
-            "Configured GPU (device=%s, model=%s, compute_type=%s) is "
-            "unavailable on this machine — running on CPU "
+            "Configured %s (device=%s, model=%s, compute_type=%s) is "
+            "unavailable on this machine (%s) — running on CPU "
             "(%s/%s/%s) for this session. The config file is unchanged.",
+            notice.device_label,
             config.model.device,
             config.model.name,
             config.model.compute_type,
-            effective_model,
-            effective_device,
-            effective_compute_type,
+            fallback_reason,
+            selection.model,
+            selection.device,
+            selection.compute_type,
         )
         QTimer.singleShot(
-            2000,
-            lambda: tray.show_notification(
-                "Running on CPU",
-                "Configured GPU (cuda) isn't available — running on CPU this "
-                "session. Your config is unchanged; restore the GPU to use it "
-                "again.",
-            ),
+            2000, lambda: tray.show_notification(notice.title, notice.body)
         )
 
     logger.info("Dictatem daemon started")
@@ -2246,23 +2991,61 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             logger.exception("Error closing audio capture on shutdown")
 
 
+def _register_windows_app_identity() -> None:
+    """Set + register the process AppUserModelID (toast attribution). Never raises."""
+    try:
+        from dictatem.assets import asset_path
+        from dictatem.process.app_identity import ICON_ASSET
+        from dictatem.process.win32_app_identity import register_app_identity
+
+        icon = asset_path(ICON_ASSET)
+        register_app_identity(icon if icon.is_file() else None)
+    except Exception:
+        logger.warning("Could not set up the Windows app identity", exc_info=True)
+
+
 def _start_windows_daemon() -> None:
     """Build the Windows adapter set (lazy imports) and run the daemon."""
     from dictatem.hardware.nvidia_probe import NvidiaHardwareProbe
+    from dictatem.hotkey.hook_failure import HookFailure, HookKind
     from dictatem.hotkey.wh_keyboard_ll import WHKeyboardLLHook
     from dictatem.hotkey.wh_mouse_ll import WHMouseLLHook
     from dictatem.paste.win32_clipboard import Win32ClipboardIO
     from dictatem.paste.win32_foreground import Win32ForegroundTracker
     from dictatem.paste.win32_keystroke import Win32KeystrokeSender
+    from dictatem.process.restart import spawn_restart
+
+    # Toasts read "Dictatem" with our icon instead of "Python" — must run before
+    # QApplication / the tray icon exist. Never fatal (logs and continues).
+    _register_windows_app_identity()
 
     # One keystroke sender, shared by the paste rail AND the keyboard hook's
-    # neutralizing-mask injector (#171), so the hook can emit the Ctrl tap that
-    # stops a lone Win/Alt chord release activating the menu bar / Start menu.
+    # masked key-up replay (#171/#177), so the hook can re-emit a lone Alt/Win
+    # release behind the menu mask key (no menu bar / Start menu activation).
     keystroke = Win32KeystrokeSender()
+
+    # Hook install failures (#245): the daemon binds its thread-safe reporter
+    # before installing the hooks; the holder lets both hooks report through it.
+    hook_failure_reporter: list[Callable[[HookFailure], None]] = []
+
+    def _bind_hook_failure_reporter(report: Callable[[HookFailure], None]) -> None:
+        hook_failure_reporter[:] = [report]
+
+    def _hook_failed(kind: HookKind) -> Callable[[int], None]:
+        def _on_install_failed(error_code: int) -> None:
+            for report in hook_failure_reporter:
+                report(HookFailure(kind, error_code))
+
+        return _on_install_failed
 
     def _install_hook(handler: Callable[[Key, KeyAction, int], bool]) -> object:
         hook = WHKeyboardLLHook(
-            handler, inject_mask=keystroke.send_modifier_release_mask
+            handler,
+            replay_masked_release=keystroke.send_masked_release,
+            on_install_failed=_hook_failed(HookKind.KEYBOARD),
+            # Feeds the paste rail's input timeline: pre-injection settle and
+            # the per-paste diagnostics line (#269).
+            observe_key=keystroke.observe_hook_key,
         )
         hook.install()
         return hook
@@ -2270,7 +3053,7 @@ def _start_windows_daemon() -> None:
     def _install_mouse_hook(
         handler: Callable[[Key, KeyAction, int], HookDecision],
     ) -> object:
-        hook = WHMouseLLHook(handler)
+        hook = WHMouseLLHook(handler, on_install_failed=_hook_failed(HookKind.MOUSE))
         hook.install()
         return hook
 
@@ -2285,6 +3068,8 @@ def _start_windows_daemon() -> None:
             install_keyboard_hook=_install_hook,
             install_mouse_hook=_install_mouse_hook,
             check_permissions=None,
+            relaunch=spawn_restart,
+            bind_hook_failure_reporter=_bind_hook_failure_reporter,
         )
     )
 
@@ -2298,8 +3083,9 @@ def _start_macos_daemon() -> None:
     global hotkey (#56),
     NSPasteboard/CGEvent/NSWorkspace paste (#59), the CGPreflight permission
     check (#57), and the LaunchAgent autostart registrar (#61) — manual-QA
-    only, like their win32 counterparts. MacHardwareProbe reports no CUDA, so
-    first run bakes the CPU tier into the config.
+    only, like their win32 counterparts. MacHardwareProbe reports no CUDA plus
+    MLX availability and unified memory, so first run bakes an Apple-GPU,
+    Apple-Silicon or CPU tier into the config (#233).
 
     This body executes on the headless macOS CI leg (TestStarterAdapterSets):
     everything here must stay construction-only — no native call happens until
@@ -2308,15 +3094,34 @@ def _start_macos_daemon() -> None:
     from dictatem.hardware.mac_probe import MacHardwareProbe
     from dictatem.hotkey.mac_hook import CGEventTapHook
     from dictatem.macapp.bundle import default_app_bundle_path
+    from dictatem.macapp.relaunch import MANUAL_RELAUNCH_HINT, spawn_launchd_relaunch
     from dictatem.paste.mac_clipboard import MacClipboardIO
     from dictatem.paste.mac_foreground import MacForegroundTracker
     from dictatem.paste.mac_keystroke import MacKeystrokeSender
     from dictatem.permissions.mac_tcc import check_permissions
+    from dictatem.permissions.mapper import MacPermission
+
+    keystroke = MacKeystrokeSender()
+    # Re-prompt-on-use (#95): the daemon binds its thread-safe reporter before
+    # installing the hook; the holder lets the hook (built later) and the
+    # keystroke sender both report through whatever was bound.
+    reporter: list[Callable[[MacPermission], None]] = []
+
+    def _report(permission: MacPermission) -> None:
+        for report in reporter:
+            report(permission)
+
+    def _bind_permission_reporter(report: Callable[[MacPermission], None]) -> None:
+        reporter[:] = [report]
+        keystroke.on_access_blocked = lambda: _report(MacPermission.ACCESSIBILITY)
 
     def _install_hook(handler: Callable[[Key, KeyAction, int], bool]) -> object:
         # macOS has no menu/Start side-effect to mask (#171 is Windows-only); the
         # CGEventTap hook ignores the handler's bool return and injects nothing.
-        hook = CGEventTapHook(handler)
+        hook = CGEventTapHook(
+            handler,
+            on_tap_failed=lambda: _report(MacPermission.INPUT_MONITORING),
+        )
         hook.install()
         return hook
 
@@ -2364,11 +3169,14 @@ def _start_macos_daemon() -> None:
             make_audio_capture=_make_macaudio_capture,
             autostart_registrar=autostart_registrar,
             clipboard=MacClipboardIO(),
-            keystroke=MacKeystrokeSender(),
+            keystroke=keystroke,
             foreground=MacForegroundTracker(),
             install_keyboard_hook=_install_hook,
             # macOS mouse-trigger hook (CGEventTap otherMouse*) is #121 (S9).
             install_mouse_hook=None,
             check_permissions=check_permissions,
+            bind_permission_reporter=_bind_permission_reporter,
+            relaunch=spawn_launchd_relaunch,
+            relaunch_failed_hint=MANUAL_RELAUNCH_HINT,
         )
     )

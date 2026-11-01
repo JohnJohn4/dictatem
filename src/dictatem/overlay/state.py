@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import enum
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -20,6 +21,8 @@ class OverlayPhase(enum.Enum):
     TRANSCRIBING = "transcribing"
     COMPUTING = "computing"
     ERROR_FLASH = "error_flash"
+    SAY_AGAIN_FLASH = "say_again_flash"  # a Borderline Trigger Word (#248)
+    HELD = "held"  # the quiet "Saved — say paste" signal (#239)
     FADING_OUT = "fading_out"
 
 
@@ -34,7 +37,29 @@ class PillColor(enum.Enum):
     ACCENT = "accent"  # recording: the live waveform's colour
     PROCESSING = "processing"  # transcribing
     COMPUTING = "computing"  # a Transform/Trigger Fire generating (distinct hue)
-    ERROR = "error"  # the error / focus-drift "saved" flash
+    ERROR = "error"  # a genuine failure (empty result, discarded Trigger Fire, ...)
+    HELD = "held"  # a dictation held for recovery: "Saved — say paste" (#239)
+    SAY_AGAIN = "say_again"  # close to a Trigger Word but unsure: say it again (#248)
+
+
+# The actual hue for each semantic PillColor, as hex. Pure so the Usage Guide's
+# colour legend (``tray.usage_guide``) renders the exact same swatches the Qt
+# widget paints — one source, no drift. Recording stays white (S9 QA: motion is
+# the cue); the two processing phases and the flash get distinct hues.
+PILL_BODY_HEX: str = "#1A1D24"
+PILL_HEX: dict[PillColor, str] = {
+    PillColor.ACCENT: "#F4F6FA",  # recording
+    PillColor.PROCESSING: "#F2B544",  # transcribing — amber
+    PillColor.COMPUTING: "#9C8CFF",  # computing — iris
+    PillColor.ERROR: "#F07167",  # genuine failure — coral
+    PillColor.HELD: "#4FD1A5",  # held for recovery — mint (#239)
+    PillColor.SAY_AGAIN: "#4FB3F7",  # Borderline Trigger Word, say again — sky (#248)
+}
+
+# The Held pill's caption (#239 / F-13 / ADR-0026): a regular dictation was kept
+# in the Most-recent dictation buffer instead of pasted (focus drift, or a failed
+# paste), and saying "paste" lands it. Shared with the Usage Guide legend.
+HELD_CAPTION: str = "Saved — say paste"
 
 
 class Point(NamedTuple):
@@ -56,6 +81,10 @@ class WaveformFrame:
 
 _BAR_WEIGHTS: tuple[float, ...] = (0.5, 0.7, 0.9, 1.0, 0.85, 0.95, 1.0, 0.8, 0.65, 0.5)
 
+# The processing wave: radians/second and radians between neighbouring bars.
+_WAVE_SPEED: float = 7.0
+_WAVE_STEP: float = 0.55
+
 PILL_WIDTH: int = 200
 PILL_HEIGHT: int = 40
 PILL_MARGIN: int = 16
@@ -63,6 +92,14 @@ PILL_MARGIN: int = 16
 # How long each dot in the "Model Loading" animation holds before the next
 # appears; the count cycles 1 -> 2 -> 3 -> 1 so the pill reads as live.
 LOADING_DOT_INTERVAL_S: float = 0.4
+
+# The busy nudge (#240 / review F-14): a hotkey press while Dictatem is working
+# shows this caption over the processing phase for a moment, then reverts.
+BUSY_CAPTION: str = "Still working — Esc cancels"
+BUSY_NUDGE_S: float = 1.5
+_BUSY_PHASES: frozenset[OverlayPhase] = frozenset(
+    {OverlayPhase.TRANSCRIBING, OverlayPhase.COMPUTING, OverlayPhase.LOADING}
+)
 
 
 class OverlayState:
@@ -84,6 +121,8 @@ class OverlayState:
         self._fade_out_s = fade_out_ms / 1000.0
         self._bar_weights = _BAR_WEIGHTS[:bar_count]
         self._flash_duration_s = 0.300
+        # Long enough to read the Held caption, short enough to stay unobtrusive.
+        self._held_duration_s = 1.500
         self._phase = OverlayPhase.HIDDEN
         # The current phase colour (#96). Set on each show_*/flash transition and
         # held through the following fade-out, so the pill fades the colour it was
@@ -92,6 +131,8 @@ class OverlayState:
         self._transition_start: float = 0.0
         self._loading_label: str = "Model Loading"
         self._loading_start: float = 0.0
+        # Clock time the busy caption expires at; 0 = not showing (#240).
+        self._busy_until: float = 0.0
 
     @property
     def phase(self) -> OverlayPhase:
@@ -103,6 +144,7 @@ class OverlayState:
         # gesture they just made (#96 / ADR-0026). The parameter is kept so the
         # OverlayRenderer contract still distinguishes the two record entrypoints.
         self._color = PillColor.ACCENT
+        self._busy_until = 0.0
         self._phase = OverlayPhase.FADING_IN
         self._transition_start = self._clock()
 
@@ -132,12 +174,53 @@ class OverlayState:
         dots = int(elapsed / LOADING_DOT_INTERVAL_S) % 3 + 1
         return f"{self._loading_label}{'.' * dots}"
 
+    def show_busy_nudge(self) -> None:
+        """Acknowledge a hotkey press made while working (#240 / review F-14).
+
+        Shows :data:`BUSY_CAPTION` over the current processing phase for
+        :data:`BUSY_NUDGE_S`; another press restarts the window. The phase
+        itself is untouched, so the pill reverts on its own. Ignored outside a
+        processing phase — there is nothing to be "still" doing.
+        """
+        if self._phase in _BUSY_PHASES:
+            self._busy_until = self._clock() + BUSY_NUDGE_S
+
+    def current_busy_caption(self) -> str | None:
+        """The busy caption while a nudge is live, else ``None``."""
+        if self._phase in _BUSY_PHASES and self._clock() < self._busy_until:
+            return BUSY_CAPTION
+        return None
+
     def flash_error(self) -> None:
         self._color = PillColor.ERROR
         self._phase = OverlayPhase.ERROR_FLASH
         self._transition_start = self._clock()
 
+    def flash_say_again(self) -> None:
+        """The "say again" flash (#248): Dictatem heard something close to a
+        Trigger Word but wasn't sure, so it pasted nothing. Same timing as the
+        error flash, its own hue — nothing broke, the user just repeats."""
+        self._color = PillColor.SAY_AGAIN
+        self._phase = OverlayPhase.SAY_AGAIN_FLASH
+        self._transition_start = self._clock()
+
+    def show_held(self) -> None:
+        """The quiet "Saved — say paste" signal (#239 / F-13 / ADR-0026).
+
+        Shown when a regular dictation is held in the Most-recent dictation
+        buffer rather than pasted. Its own hue and caption — not the error flash —
+        held ~1.5 s, then the normal fade-out. Silent; never refocuses anything.
+        """
+        self._color = PillColor.HELD
+        self._phase = OverlayPhase.HELD
+        self._transition_start = self._clock()
+
+    def current_held_text(self) -> str:
+        """The caption the pill shows while HELD."""
+        return HELD_CAPTION
+
     def hide(self) -> None:
+        self._busy_until = 0.0
         self._phase = OverlayPhase.FADING_OUT
         self._transition_start = self._clock()
 
@@ -146,8 +229,12 @@ class OverlayState:
         if self._phase == OverlayPhase.FADING_IN:
             if now - self._transition_start >= self._fade_in_s:
                 self._phase = OverlayPhase.RECORDING
-        elif self._phase == OverlayPhase.ERROR_FLASH:
+        elif self._phase in (OverlayPhase.ERROR_FLASH, OverlayPhase.SAY_AGAIN_FLASH):
             if now - self._transition_start >= self._flash_duration_s:
+                self._phase = OverlayPhase.FADING_OUT
+                self._transition_start = now
+        elif self._phase == OverlayPhase.HELD:
+            if now - self._transition_start >= self._held_duration_s:
                 self._phase = OverlayPhase.FADING_OUT
                 self._transition_start = now
         elif (
@@ -168,6 +255,8 @@ class OverlayState:
             OverlayPhase.TRANSCRIBING,
             OverlayPhase.COMPUTING,
             OverlayPhase.ERROR_FLASH,
+            OverlayPhase.SAY_AGAIN_FLASH,
+            OverlayPhase.HELD,
         ):
             return 1.0
         if self._phase == OverlayPhase.FADING_OUT:
@@ -180,16 +269,33 @@ class OverlayState:
         """The pill's phase colour — the Status Dot's replacement (#96).
 
         Carries recording phase: accent while recording, a distinct processing
-        hue while transcribing, a distinct hue while a Transform computes, and
-        the error/focus-drift flash colour. Held through the fade-out so the pill
-        fades the colour it was last showing. While LOADING the pill shows a text
-        caption instead (see :meth:`current_loading_text`), so this is unused then.
+        hue while transcribing, a distinct hue while a Transform computes, the
+        error flash colour, and the Held ("Saved — say paste") colour. Held
+        through the fade-out so the pill fades the colour it was last showing.
+        While LOADING the pill shows a text caption instead (see
+        :meth:`current_loading_text`), so this is unused then.
         """
         return self._color
 
     def current_waveform_frame(self, level_supplier: Callable[[], float]) -> WaveformFrame:
         level = max(0.0, min(1.0, level_supplier()))
         bars = tuple(w * level for w in self._bar_weights)
+        return WaveformFrame(bars=bars)
+
+    def current_processing_frame(self) -> WaveformFrame:
+        """A low wave travelling left-to-right across the bars.
+
+        Shown while transcribing / computing, so a slow pass reads as "working"
+        rather than frozen (review F-14). Driven by the injected clock: bar *i*
+        sits on a sine whose phase advances with time, between 15% and 55% of
+        its weight.
+        """
+        t = self._clock()
+        n = len(self._bar_weights)
+        bars = tuple(
+            w * (0.15 + 0.40 * (0.5 + 0.5 * math.sin(t * _WAVE_SPEED - i * _WAVE_STEP)))
+            for i, w in zip(range(n), self._bar_weights, strict=True)
+        )
         return WaveformFrame(bars=bars)
 
     @staticmethod

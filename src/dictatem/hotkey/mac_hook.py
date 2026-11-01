@@ -66,11 +66,17 @@ class CGEventTapHook:
     """CGEventTap keyboard hook that forwards events to a thread-safe handler."""
 
     def __init__(
-        self, on_key_event: Callable[[Key, KeyAction, int], bool]
+        self,
+        on_key_event: Callable[[Key, KeyAction, int], bool],
+        *,
+        on_tap_failed: Callable[[], None] | None = None,
     ) -> None:
         # The handler returns a Win+Alt-mask flag (#171); macOS has no such
         # side-effect, so the return is ignored here (listen-only tap).
         self._on_key_event = on_key_event
+        # Called ON THE HOOK THREAD when the tap can't be created (Input
+        # Monitoring missing) — must be thread-safe (the daemon enqueues).
+        self._on_tap_failed = on_tap_failed
         self._tap: object | None = None  # CFMachPortRef while the tap is live
         self._run_loop: object | None = None  # the hook thread's CFRunLoopRef
 
@@ -158,9 +164,10 @@ class CGEventTapHook:
         )
         if tap is None:
             # Tap creation failing IS the "Input Monitoring not granted"
-            # detection signal (#57 / ADR-0014). This phase is detection and
-            # logging only — no dialog UI. The daemon stays up; recording
-            # still works from the tray menu.
+            # detection signal (#57 / ADR-0014). Log it, then report it so the
+            # daemon surfaces it (guided dialog + tray hint, #95) instead of
+            # the hotkey dying silently. The daemon stays up; recording still
+            # works from the tray menu.
             from dictatem.permissions.mapper import (
                 MacPermission,
                 map_missing_permissions,
@@ -173,6 +180,11 @@ class CGEventTapHook:
                 guidance.message,
                 guidance.settings_url,
             )
+            if self._on_tap_failed is not None:
+                try:
+                    self._on_tap_failed()
+                except Exception:
+                    logger.error("Error reporting the event-tap failure", exc_info=True)
             return
 
         self._tap = tap

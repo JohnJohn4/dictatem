@@ -111,3 +111,53 @@ class TestSingleInstanceGuard:
         blocker.write_text("x")
         lock = _acquire_single_instance_lock(blocker / "daemon.lock")
         assert lock is not None  # degraded → proceed, not a silent "already running"
+
+    def test_restart_wait_takes_over_once_the_old_daemon_exits(
+        self, tmp_path: Path
+    ) -> None:
+        # Tray Restart (#212): the replacement is spawned while the old daemon
+        # still holds the lock. With wait_ms it must take over as soon as the
+        # holder exits, instead of refusing like a redundant instance.
+        lock_path = tmp_path / "daemon.lock"
+        child = (
+            "import sys, time\n"
+            "from PySide6.QtCore import QLockFile\n"
+            "lk = QLockFile(sys.argv[1])\n"
+            "assert lk.tryLock(0)\n"
+            "print('held', flush=True)\n"
+            "time.sleep(1.5)\n"
+            "lk.unlock()\n"
+        )
+        holder = subprocess.Popen(
+            [sys.executable, "-c", child, str(lock_path)],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            assert holder.stdout is not None
+            assert holder.stdout.readline().strip() == "held"
+            # Fail-fast (a normal launch) is still refused while it is held...
+            assert _acquire_single_instance_lock(lock_path) is None
+            # ...but a Restart-spawned daemon waits it out.
+            lock = _acquire_single_instance_lock(lock_path, wait_ms=20_000)
+            try:
+                assert lock is not None
+            finally:
+                if lock is not None:
+                    _release(lock)
+        finally:
+            holder.wait(timeout=30)
+
+    def test_restart_wait_still_refuses_a_lock_that_stays_held(
+        self, tmp_path: Path
+    ) -> None:
+        # If the old daemon never exits, the replacement gives up after the
+        # wait and exits — never two daemons at once.
+        lock_path = tmp_path / "daemon.lock"
+        first = _acquire_single_instance_lock(lock_path)
+        try:
+            assert first is not None
+            assert _acquire_single_instance_lock(lock_path, wait_ms=300) is None
+        finally:
+            if first is not None:
+                _release(first)

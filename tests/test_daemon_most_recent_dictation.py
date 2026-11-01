@@ -10,14 +10,16 @@ manual-QA.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from dictatem.daemon import DaemonCore
 from dictatem.state import Event, StateMachine
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
 from dictatem.transcribe.replacements import Replacement
-from dictatem.transform.detector import TriggerDetector
 from dictatem.transform.lifecycle import TransformLifecycle
+from dictatem.transform.recognizer import TriggerWordRecognizer
 from tests.fakes import (
     FakeAudioCapture,
     FakeClipboardIO,
@@ -78,7 +80,7 @@ def _make_core(
         keystroke=keystroke,
         foreground=FakeForegroundTracker(target_id=42),
         transform_lifecycle=TransformLifecycle(backend=transform_backend),
-        trigger_detector=TriggerDetector(ALIASES),
+        trigger_recognizer=TriggerWordRecognizer(ALIASES),
         transform_enabled=transform_enabled,
         last_paste_ttl_s=300.0,
         replacements=replacements or [],
@@ -128,9 +130,8 @@ class TestBufferRetention:
     ) -> None:
         backend._result = "first dictation"
         _cycle(core, start_ms=0, end_ms=1_000)
-        # _last_text (the transient pending payload) is nulled after the paste,
-        # but the Most-recent dictation buffer survives.
-        assert core._last_text is None
+        # The pending paste payload is consumed by the paste, but the
+        # Most-recent dictation buffer survives it.
         assert core._most_recent_dictation == "first dictation "
 
     def test_buffer_tracks_the_newest_dictation(
@@ -218,7 +219,7 @@ class TestBufferPopulatedBeforePaste:
             keystroke=keystroke,
             foreground=FakeForegroundTracker(target_id=42),
             transform_lifecycle=TransformLifecycle(backend=transform_backend),
-            trigger_detector=TriggerDetector(ALIASES),
+            trigger_recognizer=TriggerWordRecognizer(ALIASES),
             transform_enabled=True,
             last_paste_ttl_s=300.0,
         )
@@ -247,11 +248,13 @@ class TestBufferPopulatedBeforePaste:
         assert _set_texts(clipboard) == []
         assert keystroke.paste_count == 0
         # ...but the buffer holds the dictation, the tray flag is set, and the
-        # error flashed. No Last Paste is armed (nothing landed).
+        # pill shows the Held "Saved — say paste" signal rather than the error
+        # flash (#239). No Last Paste is armed (nothing landed).
         assert core._most_recent_dictation == "hello world "
         assert tray.has_last_dictation is True
         assert core._last_paste is None
-        assert any(c[0] == "show_error" for c in overlay.calls)
+        assert ("show_held",) in overlay.calls
+        assert ("show_error",) not in overlay.calls
 
         # Recovery: saying "paste" re-pastes the held dictation, now successfully.
         backend._result = "paste"
@@ -268,6 +271,7 @@ class TestBufferPopulatedBeforePaste:
         tray: FakeTrayRenderer,
         transform_backend: FakeTransformBackend,
         monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         # Only the clipboard-contention classes (ClipboardContentionError /
         # OSError) are treated as recoverable. A genuine bug in the paste path
@@ -284,11 +288,18 @@ class TestBufferPopulatedBeforePaste:
             backend=backend, clipboard=clipboard, keystroke=keystroke, tray=tray,
             overlay=FakeOverlayRenderer(), transform_backend=transform_backend,
         )
-        core._last_text = "some text"
-        core._pending_replace_chars = 0
+        backend._result = "some text"
 
-        with pytest.raises(ValueError):
-            core._do_paste(now_ms=0)
+        with caplog.at_level(logging.WARNING, logger="dictatem.daemon"):
+            _cycle(core, start_ms=0, end_ms=1_000)
+
+        # It surfaced as an unhandled error with the ValueError's traceback...
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert any(
+            r.exc_info is not None and r.exc_info[0] is ValueError for r in errors
+        )
+        # ...not as the recoverable-contention warning.
+        assert not any("Paste failed" in r.getMessage() for r in caplog.records)
         assert core._most_recent_dictation == "some text "
 
     def test_successful_paste_leaves_buffer_unchanged_regression(

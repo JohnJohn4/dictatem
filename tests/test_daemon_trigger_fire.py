@@ -15,9 +15,9 @@ from dictatem.daemon import DaemonCore
 from dictatem.exceptions import TransformFailedError
 from dictatem.state import Event, State, StateMachine
 from dictatem.transcribe.lifecycle import TranscribeLifecycle
-from dictatem.transform.detector import TriggerDetector
 from dictatem.transform.failure import OllamaFailure
 from dictatem.transform.lifecycle import TransformLifecycle
+from dictatem.transform.recognizer import TriggerWordRecognizer
 from tests.fakes import (
     FakeAudioCapture,
     FakeClipboardIO,
@@ -86,8 +86,8 @@ def transform_lifecycle(
 
 
 @pytest.fixture
-def trigger_detector() -> TriggerDetector:
-    return TriggerDetector(ALIASES)
+def trigger_recognizer() -> TriggerWordRecognizer:
+    return TriggerWordRecognizer(ALIASES)
 
 
 @pytest.fixture
@@ -106,7 +106,7 @@ def core(
     keystroke: FakeKeystrokeSender,
     foreground: FakeForegroundTracker,
     transform_lifecycle: TransformLifecycle,
-    trigger_detector: TriggerDetector,
+    trigger_recognizer: TriggerWordRecognizer,
 ) -> DaemonCore:
     return DaemonCore(
         state_machine=sm,
@@ -118,7 +118,7 @@ def core(
         keystroke=keystroke,
         foreground=foreground,
         transform_lifecycle=transform_lifecycle,
-        trigger_detector=trigger_detector,
+        trigger_recognizer=trigger_recognizer,
         transform_enabled=True,
         last_paste_ttl_s=300.0,
     )
@@ -237,7 +237,7 @@ class TestTriggerFireHappyPath:
         transform_backend.queue_result("CONDENSED")
         _cycle(core, start_ms=2_000, end_ms=3_000)
 
-        # Replacement: backspaces = char_count of previous LastPaste.
+        # Replacement: backspaces = backspace_units of previous LastPaste.
         # "the long verbose thing" → normalize → "the long verbose thing " (23 chars).
         assert keystroke.total_backspaces == 23
         # Trigger fire types directly via send_text — no extra Ctrl+V paste,
@@ -304,6 +304,163 @@ class TestTriggerFireHappyPath:
         assert transform_backend.calls[-1][1] == SUMMARIZE_PROMPT
 
 
+class TestFuzzyTriggerFire:
+    """A lone near-miss of an Alias ("summerize") runs the Trigger Fire on
+    the Last Paste, through the same gates and rails as an exact one (#247)."""
+
+    def test_lone_summerize_runs_the_trigger_fire(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+        clipboard: FakeClipboardIO,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = "Summerize."
+        transform_backend.queue_result("short")
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+        assert transform_backend.calls == [("the verbose text ", SUMMARIZE_PROMPT)]
+        assert keystroke.backspace_counts == [17]
+        assert keystroke.typed_texts == ["short "]
+        assert _set_texts(clipboard) == ["the verbose text "]
+
+    def test_without_a_last_paste_it_is_dictation(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        clipboard: FakeClipboardIO,
+    ) -> None:
+        backend._result = "summerize"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        assert transform_backend.calls == []
+        assert _set_texts(clipboard) == ["summerize "]
+
+    def test_target_change_aborts_a_fuzzy_fire(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+        foreground._target_id = 999
+
+        backend._result = "summerize"
+        transform_backend.queue_result("should not be used")
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+        assert transform_backend.calls == []
+        assert keystroke.total_backspaces == 0
+
+    def test_ttl_expiry_aborts_a_fuzzy_fire(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = "summerize"
+        transform_backend.queue_result("never used")
+        _cycle(core, start_ms=300_500, end_ms=301_500)
+
+        assert transform_backend.calls == []
+        assert keystroke.total_backspaces == 0
+
+    def test_focus_drift_during_generation_discards_a_fuzzy_fire(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+        foreground: FakeForegroundTracker,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = "summerize"
+        transform_backend.queue_result("CONDENSED")
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=2_000)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=2_200)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=3_000)
+        if core._transcription_thread is not None:
+            core._transcription_thread.join(timeout=5.0)
+        core.check_transcription_result(now_ms=3_000)
+        assert transform_backend.calls == [("the verbose text ", SUMMARIZE_PROMPT)]
+
+        # Focus moves while the LLM is generating: the paste-time rail
+        # re-checks the target and discards the result.
+        foreground.set_target(999)
+        if core._transform_thread is not None:
+            core._transform_thread.join(timeout=5.0)
+        core.check_transform_result(now_ms=3_200)
+
+        assert keystroke.total_backspaces == 0
+        assert keystroke.typed_texts == []
+
+
+# ── Backspace Units: emoji and accents (#242 / review F-5) ───────────
+
+THUMBS_MEDIUM = chr(0x1F44D) + chr(0x1F3FD)  # thumbs up + skin tone: 1 unit
+FAMILY = chr(0x200D).join(map(chr, (0x1F468, 0x1F469, 0x1F467, 0x1F466)))  # 1 unit
+FLAG_JP = chr(0x1F1EF) + chr(0x1F1F5)  # 1 unit
+DECOMPOSED_CAFE = "cafe" + chr(0x301)  # NFC -> 4 units
+
+
+class TestTriggerFireBackspaceUnits:
+    """Trigger Fire sends one Backspace per user-perceived character of the
+    Last Paste, not per code point, so it never eats text typed before it."""
+
+    def test_emoji_and_accent_dictation_is_erased_by_unit_count(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+    ) -> None:
+        # Pasted: "ok <thumbs> cafe <flag> " = 3 + 1 + 1 + 4 + 1 + 1 + 1 = 12.
+        backend._result = f"ok {THUMBS_MEDIUM} {DECOMPOSED_CAFE} {FLAG_JP}"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = "summarize"
+        transform_backend.queue_result("short")
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+        assert keystroke.backspace_counts == [12]
+
+    def test_transform_output_with_emoji_becomes_correctly_counted_last_paste(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        keystroke: FakeKeystrokeSender,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        # The LLM "polishes" in an emoji: typed output "done <family> " = 7 units.
+        backend._result = "summarize"
+        transform_backend.queue_result(f"done {FAMILY}")
+        _cycle(core, start_ms=2_000, end_ms=3_000)
+
+        # Chained trigger erases exactly that Transform output.
+        backend._result = "summarize"
+        transform_backend.queue_result("tiny")
+        _cycle(core, start_ms=4_000, end_ms=5_000)
+
+        assert keystroke.backspace_counts == [17, 7]
+
+
 # ── Negative paths: trigger does NOT fire ────────────────────────────
 
 
@@ -359,7 +516,7 @@ class TestTriggerDoesNotFire:
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
         transform_lifecycle: TransformLifecycle,
-        trigger_detector: TriggerDetector,
+        trigger_recognizer: TriggerWordRecognizer,
         backend: FakeTranscriberBackend,
         transform_backend: FakeTransformBackend,
     ) -> None:
@@ -374,7 +531,7 @@ class TestTriggerDoesNotFire:
             keystroke=keystroke,
             foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector,
+            trigger_recognizer=trigger_recognizer,
             transform_enabled=False,
         )
         backend._result = "hello"
@@ -495,8 +652,10 @@ class TestTriggerFirePasteTimeRail:
         assert keystroke.total_backspaces == 0
         assert keystroke.typed_texts == []
         assert keystroke.paste_count == 1  # only the original dictation pasted
-        # Discarded with the error flash.
+        # Discarded with the error flash — a genuine failure, nothing is held, so
+        # NOT the "Saved — say paste" Held signal (#239).
         assert any(c[0] == "show_error" for c in overlay.calls)
+        assert ("show_held",) not in overlay.calls
         # Last Paste is left UNCHANGED (still the original dictation @ target 42).
         assert core._last_paste is not None
         assert core._last_paste.text == "the verbose text "
@@ -570,7 +729,7 @@ def _make_core(
     keystroke: FakeKeystrokeSender,
     foreground: FakeForegroundTracker,
     transform_lifecycle: TransformLifecycle,
-    trigger_detector: TriggerDetector,
+    trigger_recognizer: TriggerWordRecognizer,
     model_name: str = "gemma4:e4b",
     base_url: str = "http://localhost:11434",
 ) -> DaemonCore:
@@ -584,7 +743,7 @@ def _make_core(
         keystroke=keystroke,
         foreground=foreground,
         transform_lifecycle=transform_lifecycle,
-        trigger_detector=trigger_detector,
+        trigger_recognizer=trigger_recognizer,
         transform_enabled=True,
         last_paste_ttl_s=300.0,
         transform_model_name=model_name,
@@ -620,7 +779,7 @@ class TestActionableFailureMessaging:
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
         transform_lifecycle: TransformLifecycle,
-        trigger_detector: TriggerDetector,
+        trigger_recognizer: TriggerWordRecognizer,
         backend: FakeTranscriberBackend,
         transform_backend: FakeTransformBackend,
     ) -> None:
@@ -628,7 +787,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector,
+            trigger_recognizer=trigger_recognizer,
         )
         self._run_failure(
             core=core, backend=backend, transform_backend=transform_backend,
@@ -653,7 +812,7 @@ class TestActionableFailureMessaging:
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
         transform_lifecycle: TransformLifecycle,
-        trigger_detector: TriggerDetector,
+        trigger_recognizer: TriggerWordRecognizer,
         backend: FakeTranscriberBackend,
         transform_backend: FakeTransformBackend,
     ) -> None:
@@ -661,7 +820,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector,
+            trigger_recognizer=trigger_recognizer,
         )
         self._run_failure(
             core=core, backend=backend, transform_backend=transform_backend,
@@ -683,7 +842,7 @@ class TestActionableFailureMessaging:
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
         transform_lifecycle: TransformLifecycle,
-        trigger_detector: TriggerDetector,
+        trigger_recognizer: TriggerWordRecognizer,
         backend: FakeTranscriberBackend,
         transform_backend: FakeTransformBackend,
     ) -> None:
@@ -691,7 +850,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector,
+            trigger_recognizer=trigger_recognizer,
             model_name="llama3.2:1b",
         )
         self._run_failure(
@@ -714,7 +873,7 @@ class TestActionableFailureMessaging:
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
         transform_lifecycle: TransformLifecycle,
-        trigger_detector: TriggerDetector,
+        trigger_recognizer: TriggerWordRecognizer,
         backend: FakeTranscriberBackend,
         transform_backend: FakeTransformBackend,
     ) -> None:
@@ -725,7 +884,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector,
+            trigger_recognizer=trigger_recognizer,
         )
         self._run_failure(
             core=core, backend=backend, transform_backend=transform_backend,
@@ -752,7 +911,7 @@ class TestActionableFailureMessaging:
         keystroke: FakeKeystrokeSender,
         foreground: FakeForegroundTracker,
         transform_lifecycle: TransformLifecycle,
-        trigger_detector: TriggerDetector,
+        trigger_recognizer: TriggerWordRecognizer,
         backend: FakeTranscriberBackend,
         transform_backend: FakeTransformBackend,
     ) -> None:
@@ -762,7 +921,7 @@ class TestActionableFailureMessaging:
             sm=sm, audio=audio, lifecycle=lifecycle, overlay=overlay, tray=tray,
             clipboard=clipboard, keystroke=keystroke, foreground=foreground,
             transform_lifecycle=transform_lifecycle,
-            trigger_detector=trigger_detector,
+            trigger_recognizer=trigger_recognizer,
         )
         self._run_failure(
             core=core, backend=backend, transform_backend=transform_backend,
@@ -819,3 +978,80 @@ class TestCancelDuringTransform:
         # Only the first dictation pasted; no follow-up.
         assert keystroke.paste_count == 1
         assert keystroke.total_backspaces == 0
+
+
+# ── Busy nudge (#240) ───────────────────────────────────────────────
+
+
+class TestBusyNudge:
+    """A hotkey press while Dictatem is working shows the busy caption and
+    changes nothing else: no new recording, no cancel, the result still lands."""
+
+    def test_press_during_transcription_nudges_and_result_still_pastes(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        audio: FakeAudioCapture,
+        overlay: FakeOverlayRenderer,
+        keystroke: FakeKeystrokeSender,
+        sm: StateMachine,
+    ) -> None:
+        backend._result = "hello world"
+        backend.block_transcribe()
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=0)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=200)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=1_000)
+        assert sm.state is State.TRANSCRIBING
+        starts_before = audio.start_count
+
+        # The user presses again (twice) while the transcription is in flight.
+        for t in (1_200, 1_400):
+            core.on_hotkey_event(Event.KEY_DOWN, now_ms=t)
+            core.on_hotkey_event(Event.KEY_UP, now_ms=t + 50)
+
+        assert overlay.calls.count(("show_busy_nudge",)) == 2
+        assert audio.start_count == starts_before  # nothing recorded
+        assert sm.state is State.TRANSCRIBING
+
+        backend.release_transcribe()
+        core.drain_transcription_for_test(now_ms=2_000)
+        assert keystroke.paste_count == 1
+        assert sm.state is State.IDLE
+
+    def test_press_during_trigger_fire_transform_nudges_and_fire_lands(
+        self,
+        core: DaemonCore,
+        backend: FakeTranscriberBackend,
+        transform_backend: FakeTransformBackend,
+        audio: FakeAudioCapture,
+        overlay: FakeOverlayRenderer,
+        keystroke: FakeKeystrokeSender,
+        sm: StateMachine,
+    ) -> None:
+        backend._result = "the verbose text"
+        _cycle(core, start_ms=0, end_ms=1_000)
+
+        backend._result = "summarize"
+        transform_backend.queue_result("CONDENSED")
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=2_000)
+        core.on_hotkey_event(Event.TIMER_EXPIRED, now_ms=2_200)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=3_000)
+        if core._transcription_thread is not None:
+            core._transcription_thread.join(timeout=5.0)
+        core.check_transcription_result(now_ms=3_000)
+        assert transform_backend.calls  # the Transform is under way
+        starts_before = audio.start_count
+
+        core.on_hotkey_event(Event.KEY_DOWN, now_ms=3_100)
+        core.on_hotkey_event(Event.KEY_UP, now_ms=3_150)
+
+        assert overlay.calls.count(("show_busy_nudge",)) == 1
+        assert audio.start_count == starts_before
+        assert sm.state is State.TRANSCRIBING
+
+        if core._transform_thread is not None:
+            core._transform_thread.join(timeout=5.0)
+        core.check_transform_result(now_ms=3_200)
+        assert keystroke.total_backspaces == 17  # len("the verbose text ")
+        assert keystroke.typed_texts == ["CONDENSED "]
+        assert sm.state is State.IDLE

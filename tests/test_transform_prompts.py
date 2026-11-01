@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from dictatem.transform.prompts import (
     bootstrap_prompts,
     default_prompts_dir,
+    load_prompts,
     load_prompts_dir,
     parse_prompt_file,
 )
@@ -89,7 +90,7 @@ class TestParsePromptFile:
         assert result.body == "The body."
 
     def test_aliases_kept_verbatim_for_loader_to_normalise(self) -> None:
-        # Surface form preserved here — TriggerDetector / loader normalise later.
+        # Surface form preserved here — the recognizer / loader normalise later.
         content = "---\naliases: [Summarize, summarize.]\n---\nbody"
         result = parse_prompt_file(content)
         assert result is not None
@@ -154,6 +155,27 @@ class TestLoadPromptsDir:
         )
         result = load_prompts_dir(tmp_path)
         assert result == {"real": "BODY"}
+
+
+class TestLoadPrompts:
+    """`load_prompts` also keeps which Prompt File each Alias came from (#251)."""
+
+    def test_aliases_by_file_groups_registered_aliases_per_file(self, tmp_path: Path) -> None:
+        (tmp_path / "a.md").write_text(
+            "---\naliases: [Shared, alpha]\n---\nFROM_A", encoding="utf-8",
+        )
+        (tmp_path / "b.md").write_text(
+            "---\naliases: [shared, beta]\n---\nFROM_B", encoding="utf-8",
+        )
+        loaded = load_prompts(tmp_path)
+        assert loaded.aliases == {"shared": "FROM_A", "alpha": "FROM_A", "beta": "FROM_B"}
+        # The duplicate "shared" in b.md never registered, so it isn't b's.
+        assert loaded.aliases_by_file() == {"a.md": ["shared", "alpha"], "b.md": ["beta"]}
+
+    def test_missing_directory_is_empty(self, tmp_path: Path) -> None:
+        loaded = load_prompts(tmp_path / "nope")
+        assert loaded.aliases == {}
+        assert loaded.aliases_by_file() == {}
 
 
 class TestBootstrapPrompts:

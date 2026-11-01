@@ -29,7 +29,8 @@ class Event(enum.Enum):
     MAX_DURATION = "max_duration"
     TRANSCRIPTION_DONE = "transcription_done"
     EMPTY_RESULT = "empty_result"
-    OOM = "oom"
+    # Close to a Trigger Word but not sure: paste nothing, say again (#248).
+    BORDERLINE = "borderline"
 
 
 class Command(enum.Enum):
@@ -38,10 +39,12 @@ class Command(enum.Enum):
     CANCEL = "cancel"
     PASTE = "paste"
     FLASH_ERROR = "flash_error"
+    FLASH_SAY_AGAIN = "flash_say_again"
     START_TAP_TIMER = "start_tap_timer"
     CANCEL_TAP_TIMER = "cancel_tap_timer"
-    RETRY_TRANSCRIPTION = "retry_transcription"
-    NOTIFY_ERROR = "notify_error"
+    # The hotkey was pressed while working: show "did my press register?"
+    # feedback. Records, queues and cancels nothing (#240 / review F-14).
+    BUSY_NUDGE = "busy_nudge"
 
 
 class StateMachine:
@@ -49,7 +52,6 @@ class StateMachine:
         self._state = State.IDLE
         self._tap_threshold_ms = tap_threshold_ms
         self._key_down_at: int | None = None
-        self._oom_retried: bool = False
 
     @property
     def state(self) -> State:
@@ -60,6 +62,16 @@ class StateMachine:
         if handler is None:
             return []
         return handler(self, now_ms)
+
+    def reset(self) -> None:
+        """Return to IDLE from any state, forgetting any in-progress press.
+
+        The recovery path for callers that abandon a dictation outside the
+        normal event flow (e.g. an error). Emits no commands — the caller has
+        already done its own teardown.
+        """
+        self._state = State.IDLE
+        self._key_down_at = None
 
     # -- IDLE handlers --
 
@@ -76,7 +88,6 @@ class StateMachine:
             self._state = State.TOGGLE_REC
             return [Command.CANCEL_TAP_TIMER]
         self._state = State.TRANSCRIBING
-        self._oom_retried = False
         return [Command.RECORD_STOP_AND_TRANSCRIBE]
 
     def _pressed_timer_expired(self, _now_ms: int) -> list[Command]:
@@ -98,14 +109,12 @@ class StateMachine:
 
     def _toggle_key_down(self, _now_ms: int) -> list[Command]:
         self._state = State.TRANSCRIBING
-        self._oom_retried = False
         return [Command.RECORD_STOP_AND_TRANSCRIBE]
 
     # -- PTT_REC handlers --
 
     def _ptt_key_up(self, _now_ms: int) -> list[Command]:
         self._state = State.TRANSCRIBING
-        self._oom_retried = False
         return [Command.RECORD_STOP_AND_TRANSCRIBE]
 
     # -- TRANSCRIBING handlers --
@@ -118,13 +127,14 @@ class StateMachine:
         self._state = State.IDLE
         return [Command.FLASH_ERROR]
 
-    def _transcribing_oom(self, _now_ms: int) -> list[Command]:
-        if not self._oom_retried:
-            self._oom_retried = True
-            return [Command.RETRY_TRANSCRIPTION]
+    def _transcribing_borderline(self, _now_ms: int) -> list[Command]:
         self._state = State.IDLE
-        self._oom_retried = False
-        return [Command.NOTIFY_ERROR]
+        return [Command.FLASH_SAY_AGAIN]
+
+    def _transcribing_key_down(self, _now_ms: int) -> list[Command]:
+        # Stay put: the press is acknowledged, never acted on. A Trigger Fire
+        # Transform also runs in TRANSCRIBING, so this covers both (#240).
+        return [Command.BUSY_NUDGE]
 
 
 _Handler = Callable[["StateMachine", int], list[Command]]
@@ -149,5 +159,6 @@ _HANDLERS: dict[tuple[State, Event], _Handler] = {
     (State.TRANSCRIBING, Event.TRANSCRIPTION_DONE): StateMachine._transcribing_done,
     (State.TRANSCRIBING, Event.ESC): StateMachine._cancel_to_idle,
     (State.TRANSCRIBING, Event.EMPTY_RESULT): StateMachine._transcribing_empty,
-    (State.TRANSCRIBING, Event.OOM): StateMachine._transcribing_oom,
+    (State.TRANSCRIBING, Event.BORDERLINE): StateMachine._transcribing_borderline,
+    (State.TRANSCRIBING, Event.KEY_DOWN): StateMachine._transcribing_key_down,
 }

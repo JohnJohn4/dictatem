@@ -108,3 +108,29 @@ class TestHotkeyHintLabel:
     def test_empty_modifiers_yield_empty_label(self) -> None:
         # No usable chord → no hint (the tray hides the header item).
         assert hotkey_hint_label((), platform="win32") == ""
+
+
+class TestHotkeyKeys:
+    def test_windows_keeps_configured_order(self) -> None:
+        from dictatem.tray.hotkey_hint import hotkey_keys
+
+        assert hotkey_keys(("win", "alt"), platform="win32") == ["Win", "Alt"]
+
+    def test_macos_uses_canonical_glyph_order_then_mouse(self) -> None:
+        from dictatem.tray.hotkey_hint import hotkey_keys
+
+        keys = hotkey_keys(("mouse4", "win", "ctrl"), platform="darwin")
+        assert keys == ["⌃", "⌘", "Mouse4"]
+
+    def test_agrees_with_format_hotkey(self) -> None:
+        from dictatem.tray.hotkey_hint import format_hotkey, hotkey_keys
+
+        for platform, sep in (("win32", "+"), ("darwin", "")):
+            for mods in (("win", "alt"), ("ctrl", "shift", "alt"), ("mouse5",)):
+                joined = sep.join(hotkey_keys(mods, platform=platform))
+                assert joined == format_hotkey(mods, platform=platform)
+
+    def test_unknown_names_dropped(self) -> None:
+        from dictatem.tray.hotkey_hint import hotkey_keys
+
+        assert hotkey_keys(("bogus",), platform="win32") == []
