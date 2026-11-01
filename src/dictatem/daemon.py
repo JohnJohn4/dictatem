@@ -3005,6 +3005,9 @@ def _start_windows_daemon() -> None:
             handler,
             replay_masked_release=keystroke.send_masked_release,
             on_install_failed=_hook_failed(HookKind.KEYBOARD),
+            # Feeds the paste rail's input timeline: pre-injection settle and
+            # the per-paste diagnostics line (#269).
+            observe_key=keystroke.observe_hook_key,
         )
         hook.install()
         return hook

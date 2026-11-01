@@ -46,6 +46,9 @@ DICTATEM_MODULES = [
     "dictatem.paste.pipeline",
     # Held-modifier wait before injecting a paste (#269): pure, injected I/O.
     "dictatem.paste.modifier_wait",
+    # Paste settle decision + per-injection diagnostic line (#269): pure.
+    "dictatem.paste.input_timeline",
+    "dictatem.paste.injection_diagnostics",
     # AppUserModelID decisions (toast attribution); winreg lives in the adapter.
     "dictatem.process.app_identity",
     # Pure VK map + own-injection / masked-replay decisions (#171/#177).

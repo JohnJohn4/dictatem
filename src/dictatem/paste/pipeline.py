@@ -8,6 +8,7 @@ import unicodedata
 from typing import TYPE_CHECKING
 
 from dictatem.exceptions import ClipboardContentionError, ModifiersHeldError
+from dictatem.interfaces import InjectionDiagnostics
 from dictatem.paste.modifier_wait import (
     MODIFIER_WAIT_CAP_S,
     wait_for_modifiers_released,
@@ -131,6 +132,20 @@ def _wait_for_modifier_release(
     raise ModifiersHeldError(result.still_held, result.waited_s)
 
 
+def _report_injection(keystroke: KeystrokeSender, target_id: int, kind: str) -> None:
+    """Ask a diagnostics-capable sender to log its per-injection line (#269).
+
+    Best-effort and fenced: a diagnostics failure is logged at DEBUG and can
+    never reach (or abort) the paste path.
+    """
+    if not isinstance(keystroke, InjectionDiagnostics):
+        return
+    try:
+        keystroke.report_injection(target_id, kind)
+    except Exception:
+        logger.debug("Paste diagnostics failed", exc_info=True)
+
+
 def paste(
     text: str,
     *,
@@ -193,6 +208,7 @@ def paste(
         foreground.restore(target_id)
         keystroke.send_backspaces(replace_chars)
         keystroke.send_text(normalized)
+        _report_injection(keystroke, target_id, "trigger-fire")
         logger.info("Paste: typed-replacement complete")
         return
 
@@ -204,6 +220,7 @@ def paste(
     logger.info("Paste: clipboard set, restoring foreground and sending Ctrl+V")
     foreground.restore(target_id)
     keystroke.send_paste()
+    _report_injection(keystroke, target_id, "paste")
 
     def _restore() -> None:
         # restore() can race the target window's Ctrl+V handler — both call
