@@ -18,6 +18,7 @@ if sys.platform != "win32":
 
 from dictatem.hotkey.win32_keymap import DICTATEM_INJECTION_TAG, VK_MENU_MASK
 from dictatem.paste import win32_keystroke as wk
+from dictatem.paste.keystroke_pacing import CHUNK_GAP_S, KEYS_PER_CHUNK, PHASE_GAP_S
 
 _MOD = "dictatem.paste.win32_keystroke"
 
@@ -63,7 +64,78 @@ def test_send_paste_dispatches_one_six_event_batch() -> None:
     with patch(f"{_MOD}._send_input", side_effect=fake_send):
         ks.send_paste()
     assert len(batches) == 1 and len(batches[0]) == 6
-    assert ks._sends == [(6, 6)]
+    assert ks._sends == [(6, 6, 1)]
+
+
+def _tag(inp: Any) -> int | None:
+    return wk.ctypes.cast(inp.ki.dwExtraInfo, wk.ctypes.c_void_p).value
+
+
+class _Recorder:
+    """Fake SendInput + sleep: records every batch and every pause, in order."""
+
+    def __init__(self, short_on: int | None = None) -> None:
+        self.calls: list[Any] = []  # ("send", inputs-copy) or ("sleep", seconds)
+        self._short_on = short_on
+
+    def send(self, inputs: Any) -> int:
+        batch = list(inputs)
+        self.calls.append(("send", batch))
+        n_sends = sum(1 for c in self.calls if c[0] == "send")
+        return 0 if n_sends == self._short_on else len(batch)
+
+    def sleep(self, seconds: float) -> None:
+        self.calls.append(("sleep", seconds))
+
+    def batches(self) -> list[list[Any]]:
+        return [c[1] for c in self.calls if c[0] == "send"]
+
+
+def test_trigger_fire_is_paced_in_tagged_chunks_with_a_phase_gap() -> None:
+    rec = _Recorder()
+    ks = wk.Win32KeystrokeSender(sleep=rec.sleep)
+    with patch(f"{_MOD}._send_input", side_effect=rec.send):
+        ks.send_backspaces(182)
+        ks.send_text("x" * 93)
+    batches = rec.batches()
+    # 182 presses / 8 = 23 Backspace chunks, 93 / 8 = 12 typing chunks.
+    assert len(batches) == 23 + 12
+    assert all(len(b) <= 2 * KEYS_PER_CHUNK for b in batches)
+    assert ks._sends == [(364, 364, 23), (186, 186, 12)]
+    sleeps = [c[1] for c in rec.calls if c[0] == "sleep"]
+    assert sleeps.count(PHASE_GAP_S) == 1
+    assert sleeps.count(CHUNK_GAP_S) == 22 + 11
+    # The phase gap sits exactly between the last Backspace and first typed key.
+    # 23 Backspace sends + 22 gaps = calls 0..44; the phase gap is call 45.
+    assert rec.calls[44][0] == "send" and rec.calls[46][0] == "send"
+    assert rec.calls[45] == ("sleep", PHASE_GAP_S)
+    for batch in batches:
+        assert all(_tag(inp) == DICTATEM_INJECTION_TAG for inp in batch)
+
+
+def test_typed_chunks_never_split_a_surrogate_pair() -> None:
+    rec = _Recorder()
+    ks = wk.Win32KeystrokeSender(sleep=rec.sleep)
+    text = "abcdefg😀hij👍🏽k"
+    with patch(f"{_MOD}._send_input", side_effect=rec.send):
+        ks.send_text(text)
+    typed: list[int] = []
+    for batch in rec.batches():
+        downs = [i.ki.wScan for i in batch if not i.ki.dwFlags & wk.KEYEVENTF_KEYUP]
+        assert not 0xD800 <= downs[-1] <= 0xDBFF  # never ends on a high surrogate
+        assert all(i.ki.dwFlags & wk.KEYEVENTF_UNICODE for i in batch)
+        typed.extend(downs)
+    assert b"".join(u.to_bytes(2, "little") for u in typed).decode("utf-16-le") == text
+    assert not any(c == ("sleep", PHASE_GAP_S) for c in rec.calls)  # no backspaces
+
+
+def test_a_short_chunk_stops_the_phase() -> None:
+    rec = _Recorder(short_on=2)
+    ks = wk.Win32KeystrokeSender(sleep=rec.sleep)
+    with patch(f"{_MOD}._send_input", side_effect=rec.send):
+        ks.send_backspaces(40)
+    assert len(rec.batches()) == 2
+    assert ks._sends == [(16, 80, 2)]
 
 
 def test_masked_release_marks_replay_pending_and_failure_clears_it() -> None:
@@ -81,7 +153,7 @@ def test_masked_release_marks_replay_pending_and_failure_clears_it() -> None:
 
 def test_report_injection_logs_one_line_without_text(caplog: pytest.LogCaptureFixture) -> None:
     ks = wk.Win32KeystrokeSender()
-    ks._sends = [(6, 6)]
+    ks._sends = [(6, 6, 1)]
     with (
         patch(f"{_MOD}.threading.Thread", _SyncThread),
         patch(f"{_MOD}.THREAD_KEYS_DELAY_S", 0),

@@ -52,7 +52,10 @@ class InjectionSnapshot:
     async_keys: tuple[str, ...] | None  # GetAsyncKeyState (down keys)
     since_modifier_up_ms: int | None  # last modifier (combo) key-up -> now
     replay_within_1s: bool  # hook swallowed + replayed a key-up in the last 1 s
-    sends: tuple[tuple[int, int], ...]  # (dispatched, requested) per SendInput
+    # (dispatched, requested, chunks) per injection phase: the Ctrl+V batch,
+    # or Trigger Fire's Backspace and typing phases, each sent in paced
+    # SendInput chunks (#275).
+    sends: tuple[tuple[int, int, int], ...]
     settle_ms: int = 0  # pre-injection settle wait (0 = none needed)
 
 
@@ -82,10 +85,17 @@ def _foreground(snap: InjectionSnapshot) -> str:
     return f"no({_hwnd(fg)})"
 
 
-def _sends(sends: tuple[tuple[int, int], ...]) -> str:
+def _phase(sent: int, wanted: int, chunks: int) -> str:
+    counts = f"{sent}/{wanted}"
+    if chunks == 1:
+        return counts
+    return f"{counts} in {chunks} chunks"
+
+
+def _sends(sends: tuple[tuple[int, int, int], ...]) -> str:
     if not sends:
         return "none"
-    return ",".join(f"{sent}/{wanted}" for sent, wanted in sends)
+    return ",".join(_phase(*phase) for phase in sends)
 
 
 def format_injection_diagnostics(snap: InjectionSnapshot) -> str:

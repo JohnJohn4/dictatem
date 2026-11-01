@@ -116,3 +116,14 @@ def test_crlf_is_one_unit_but_other_controls_stand_alone() -> None:
     assert count_backspace_units("a\n\rb") == 4
     # A control never absorbs a following mark.
     assert count_backspace_units("\n\u0301") == 2
+
+
+def test_split_backspace_units_concatenates_back_and_matches_the_count() -> None:
+    from dictatem.paste.backspace_units import split_backspace_units
+
+    text = "ẹ́x\r\n\U0001F44D\U0001F3FD\U0001F1EC\U0001F1E7!"
+    units = split_backspace_units(text)
+    assert "".join(units) == text
+    assert units == ["ẹ́", "x", "\r\n", "\U0001F44D\U0001F3FD", "\U0001F1EC\U0001F1E7", "!"]
+    assert len(units) == count_backspace_units(text)
+    assert split_backspace_units("") == []
