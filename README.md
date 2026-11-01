@@ -21,7 +21,7 @@ with macOS 14+, and runs on the CPU elsewhere.
 ## Install
 
 One command per platform. Both install [`uv`](https://docs.astral.sh/uv/) if
-needed, install Dictatem pinned to the **v0.6.4** release, and launch it — the
+needed, install Dictatem pinned to the **v0.7.0** release, and launch it — the
 tray / menu-bar icon appears a few seconds later. Everything runs as your own
 user (no admin / `sudo`).
 
@@ -35,13 +35,13 @@ is supported via x64 emulation.
 Run in **PowerShell**:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.4/install.ps1 | iex
+Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.7.0/install.ps1 | iex
 ```
 
 The leading `Set-ExecutionPolicy` clears a restrictive execution policy **for
 this window only** (no admin, reverts when you close the terminal). The installer
 also adds `dictatem` to your user `PATH`. Prefer to read the script first? Open
-[the URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.4/install.ps1)
+[the URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.7.0/install.ps1)
 and run it once you're satisfied.
 
 ### macOS
@@ -65,14 +65,15 @@ else, including the local Transform (Ollama) model. On an 8 GB Mac the smaller
 into `~/.dictatem/config.toml` once and never re-made, so an existing config
 keeps whatever it already says.
 
-On **Apple Silicon with macOS 14 or later**, the installer also installs the
-Apple GPU (MLX) transcription engine, which adds about **230 MB** to the
-download (torch, mlx, mlx-metal and friends). Intel Macs and macOS 12/13 skip
-it, because its wheels need macOS 14+ on Apple Silicon, and get the CPU set
-exactly as before. The installer prints which engine set it chose. To skip the
-GPU engine on a qualifying Mac, run the one-liner with
-`DICTATEM_NO_APPLE_GPU=1` in front of `sh` (`… | DICTATEM_NO_APPLE_GPU=1 sh`).
-Re-running the installer later adds the engine without touching your config.
+**Apple GPU engine (beta, opt-in).** On **Apple Silicon with macOS 14 or
+later** you can also install the Apple GPU (MLX) transcription engine, which is
+much faster for the larger models and adds about **230 MB** to the download
+(torch, mlx, mlx-metal and friends). It is opt-in while it is being tested on
+real Macs: run the one-liner with `DICTATEM_APPLE_GPU=1` in front of `sh`
+(`… | DICTATEM_APPLE_GPU=1 sh`). Intel Macs and macOS 12/13 can't use it (its
+wheels need macOS 14+ on Apple Silicon) and always get the CPU set. The
+installer prints which engine set it chose. Re-running the installer later adds
+the engine without touching your config.
 
 **Existing installs: opting into the Apple GPU.** A config written before the GPU
 engine arrived stays on the CPU. With the engine installed (re-run the
@@ -111,7 +112,7 @@ the CPU engine.
 Run in **Terminal**:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.4/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.7.0/install.sh | sh
 ```
 
 This generates `~/Applications/Dictatem.app` and starts Dictatem in the menu bar
@@ -431,6 +432,17 @@ The same two steps apply on macOS (in Terminal) — step 1 also removes
 `~/.dictatem` is left untouched.
 
 ---
+
+## Known issues
+
+- **Trigger Words in Windows 11 Notepad.** Replacing text with a Trigger Word
+  (e.g. *polish*) can come out garbled in the built-in Windows 11 Notepad,
+  which mishandles typed-in keystrokes. Regular dictation works there, and
+  Trigger Words work in other editors and browsers (Notepad++, Chrome, …).
+  Tracked in [#278](https://github.com/JohnJohn4/dictatem/issues/278).
+- **macOS is in beta.** It works on Apple Silicon, but expect rough edges: the
+  permission prompts name `python3.12` rather than Dictatem until signed builds
+  ship ([#91](https://github.com/JohnJohn4/dictatem/issues/91)).
 
 ## Troubleshooting
 

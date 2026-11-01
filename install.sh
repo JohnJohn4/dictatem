@@ -3,7 +3,7 @@
 #
 # Run it piped, straight from raw GitHub:
 #
-#     curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.6.4/install.sh | sh
+#     curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.7.0/install.sh | sh
 #
 # It is a thin uv-tool provisioning script (ADR-0011), the macOS mirror of
 # install.ps1: it installs `uv` if absent, `uv tool install`s Dictatem from
@@ -20,7 +20,7 @@
 # and does NOT install, start, or pull Ollama (ADR-0008) — it only prints a
 # pointer to the README Ollama/Transform setup.
 #
-# This installs Dictatem pinned to the v0.6.4 release (the DICTATEM_TAG line
+# This installs Dictatem pinned to the v0.7.0 release (the DICTATEM_TAG line
 # below) for an auditable, reproducible install. It installs from the release
 # *tarball* over HTTPS, NOT a git+ URL, so a clean Mac needs no git — a git+
 # URL would trigger the Command Line Tools install prompt (#71, ADR-0015).
@@ -48,7 +48,7 @@ else
 fi
 
 # --- 2. Install Dictatem from the GitHub release tarball --------------------
-DICTATEM_TAG="v0.6.4"
+DICTATEM_TAG="v0.7.0"
 
 if [ -n "${DICTATEM_REF:-}" ]; then
     echo "DICTATEM_REF=${DICTATEM_REF} — installing from that ref, refreshing uv's copy of it."
@@ -59,20 +59,21 @@ else
     uv_flags=""
 fi
 
-# Pick the engine set (ADR-0013 amendment, #224). Apple Silicon on macOS 14+
-# gets the `apple-gpu` extra: the runtime set plus the MLX engine (mlx-whisper,
-# ~230 MB more), which transcribes on the Apple GPU. Everything else (Intel
-# Macs, macOS 12/13, an unreadable version) keeps `runtime` exactly as before:
-# mlx/mlx-metal/torch ship macOS 14+ arm64 wheels only, so asking for them there
-# would fail the whole install. A PEP 508 marker can't express "macOS 14+", hence
-# this gate. DICTATEM_NO_APPLE_GPU=1 forces `runtime`. faster-whisper is in both
-# sets (it is the fallback engine). Re-running this installer (the #211 update
-# path) adds the extra for existing users; their config is never touched.
+# Pick the engine set (ADR-0013 amendment, #224). The `apple-gpu` extra is the
+# runtime set plus the MLX engine (mlx-whisper, ~230 MB more), which transcribes
+# on the Apple GPU. It is OPT-IN for now (owner decision, v0.7.0): only
+# DICTATEM_APPLE_GPU=1 on Apple Silicon with macOS 14+ selects it, until real-Mac
+# QA of #230-#233 confirms latency and fallback; then this becomes the default.
+# Everything else (no opt-in, Intel Macs, macOS 12/13, an unreadable version)
+# keeps `runtime`: mlx/mlx-metal/torch ship macOS 14+ arm64 wheels only, so
+# asking for them there would fail the whole install. A PEP 508 marker can't
+# express "macOS 14+", hence this gate. faster-whisper is in both sets (it is the
+# fallback engine). The user's config is never touched.
 # Args: $1 = `uname -m`, $2 = `sw_vers -productVersion`. Prints the extra name.
 # tests/test_apple_gpu_extra.py runs this function under sh — keep it top-level
 # and self-contained.
 select_dictatem_extra() {
-    if [ "${DICTATEM_NO_APPLE_GPU:-}" = "1" ] || [ "$1" != "arm64" ]; then
+    if [ "${DICTATEM_APPLE_GPU:-}" != "1" ] || [ "$1" != "arm64" ]; then
         echo runtime
         return
     fi
@@ -85,12 +86,11 @@ select_dictatem_extra() {
 
 dictatem_extra="$(select_dictatem_extra "$(uname -m)" "$(sw_vers -productVersion 2>/dev/null || true)")"
 if [ "$dictatem_extra" = "apple-gpu" ]; then
-    echo "Engine set: Apple GPU (MLX) + CPU fallback — Apple Silicon on macOS 14+."
-    echo "  (Adds ~230 MB. Set DICTATEM_NO_APPLE_GPU=1 to install the CPU set only.)"
-elif [ "${DICTATEM_NO_APPLE_GPU:-}" = "1" ]; then
-    echo "Engine set: CPU (faster-whisper) — DICTATEM_NO_APPLE_GPU=1 is set."
-else
+    echo "Engine set: Apple GPU (MLX, beta) + CPU fallback — DICTATEM_APPLE_GPU=1 on Apple Silicon, macOS 14+."
+elif [ "${DICTATEM_APPLE_GPU:-}" = "1" ]; then
     echo "Engine set: CPU (faster-whisper) — the Apple GPU engine needs Apple Silicon on macOS 14+."
+else
+    echo "Engine set: CPU (faster-whisper)."
 fi
 
 # A single PEP 508 direct-reference requirement: the extras and the source URL
