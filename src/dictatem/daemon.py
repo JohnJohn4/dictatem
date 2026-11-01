@@ -15,6 +15,7 @@ from dictatem.exceptions import (
     AudioCaptureError,
     ClipboardContentionError,
     ModelLoadError,
+    ModifiersHeldError,
     PlatformNotSupportedError,
     TranscriptionFailedError,
     TransformFailedError,
@@ -255,8 +256,8 @@ class _HotkeyBridge:
         Keyboard keys are never suppressed (the classifier's HookDecision is
         ignored here, exactly as before), so this advances the classifier and
         defers the resulting state-machine work to the next ``tick``. Returns
-        whether the hook should inject a neutralizing keystroke after this
-        event — the Win+Alt menu/Start mask (#171).
+        whether the hook should swallow this lone Alt/Win key-up and replay it
+        behind the menu mask key (#171/#177; see ``pending_mask``).
         """
         _decision, mask = self._advance_and_defer(key, action, timestamp_ms)
         return mask
@@ -1406,6 +1407,28 @@ class DaemonCore:
                     target_id=current_target_id,
                     schedule_restore=self._restore_scheduler,
                 )
+            except ModifiersHeldError as exc:
+                # A modifier (Alt/Win/Shift/Ctrl) stayed down past the bounded
+                # release wait (#269). NOTHING was injected — no clipboard write,
+                # no focus restore, no keystroke — so rather than inject key-ups
+                # under the user's fingers (an injected lone Alt/Win-up pops the
+                # menu bar / Start menu, #171) we treat it exactly like focus
+                # drift: a regular dictation is already in the Most-recent buffer,
+                # so show the Held signal ("say paste" / tray recovers it). A
+                # Trigger Fire is discarded with the error flash; its Last Paste
+                # is left armed (nothing was typed) so the user can retry. The
+                # pipeline already logged which modifiers and how long.
+                logger.info(
+                    "Paste deferred: modifier(s) still held after %.2fs (%s)%s",
+                    exc.waited_s,
+                    "Trigger Fire" if replace else "dictation",
+                    "" if replace else " — held for recovery",
+                )
+                if replace:
+                    self._flash_error_and_settle()
+                else:
+                    self._hold_and_settle()
+                return
             except (ClipboardContentionError, OSError):
                 # The clipboard failure classes the recovery buffer exists for
                 # (contention after the open retries, or an OSError from the
@@ -1783,6 +1806,16 @@ def _run_uninstall() -> None:
         lines.append("Some cleanup failed — check the daemon log.")
         lines.append("You can still finish removing Dictatem with:")
         lines.append("    uv tool uninstall dictatem")
+
+    # Remove the toast-attribution AppUserModelID registration alongside the
+    # autostart entry (both are daemon-written HKCU keys). Never fatal.
+    if sys.platform == "win32":
+        try:
+            from dictatem.process.win32_app_identity import unregister_app_identity
+
+            unregister_app_identity()
+        except Exception:
+            logger.warning("Could not remove the AppUserModelID", exc_info=True)
 
     # Stop the running daemon so step 2 (`uv tool uninstall`) isn't blocked by
     # the `…\Scripts` file lock (#69). Autostart was removed first (above, per
@@ -2920,6 +2953,19 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             logger.exception("Error closing audio capture on shutdown")
 
 
+def _register_windows_app_identity() -> None:
+    """Set + register the process AppUserModelID (toast attribution). Never raises."""
+    try:
+        from dictatem.assets import asset_path
+        from dictatem.process.app_identity import ICON_ASSET
+        from dictatem.process.win32_app_identity import register_app_identity
+
+        icon = asset_path(ICON_ASSET)
+        register_app_identity(icon if icon.is_file() else None)
+    except Exception:
+        logger.warning("Could not set up the Windows app identity", exc_info=True)
+
+
 def _start_windows_daemon() -> None:
     """Build the Windows adapter set (lazy imports) and run the daemon."""
     from dictatem.hardware.nvidia_probe import NvidiaHardwareProbe
@@ -2931,9 +2977,13 @@ def _start_windows_daemon() -> None:
     from dictatem.paste.win32_keystroke import Win32KeystrokeSender
     from dictatem.process.restart import spawn_restart
 
+    # Toasts read "Dictatem" with our icon instead of "Python" — must run before
+    # QApplication / the tray icon exist. Never fatal (logs and continues).
+    _register_windows_app_identity()
+
     # One keystroke sender, shared by the paste rail AND the keyboard hook's
-    # neutralizing-mask injector (#171), so the hook can emit the Ctrl tap that
-    # stops a lone Win/Alt chord release activating the menu bar / Start menu.
+    # masked key-up replay (#171/#177), so the hook can re-emit a lone Alt/Win
+    # release behind the menu mask key (no menu bar / Start menu activation).
     keystroke = Win32KeystrokeSender()
 
     # Hook install failures (#245): the daemon binds its thread-safe reporter
@@ -2953,7 +3003,7 @@ def _start_windows_daemon() -> None:
     def _install_hook(handler: Callable[[Key, KeyAction, int], bool]) -> object:
         hook = WHKeyboardLLHook(
             handler,
-            inject_mask=keystroke.send_modifier_release_mask,
+            replay_masked_release=keystroke.send_masked_release,
             on_install_failed=_hook_failed(HookKind.KEYBOARD),
         )
         hook.install()

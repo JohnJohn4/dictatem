@@ -7,7 +7,11 @@ import time
 import unicodedata
 from typing import TYPE_CHECKING
 
-from dictatem.exceptions import ClipboardContentionError
+from dictatem.exceptions import ClipboardContentionError, ModifiersHeldError
+from dictatem.paste.modifier_wait import (
+    MODIFIER_WAIT_CAP_S,
+    wait_for_modifiers_released,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -94,6 +98,39 @@ def _open_with_retry(
             sleep(_RETRY_DELAY_S)
 
 
+def _wait_for_modifier_release(
+    keystroke: KeystrokeSender,
+    *,
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> None:
+    """Block (bounded) until no modifier is held; raise if the cap expires.
+
+    Logs only modifier names and timings — never dictated text.
+    """
+    result = wait_for_modifiers_released(
+        keystroke.held_modifiers, clock=clock, sleep=sleep
+    )
+    if not result.needed:
+        return
+    held = ", ".join(sorted(result.initially_held))
+    if result.released:
+        logger.info(
+            "Paste: waited %d ms for held modifier(s) [%s] to be released",
+            round(result.waited_s * 1000),
+            held,
+        )
+        return
+    logger.warning(
+        "Paste: modifier(s) [%s] still held after %d ms (cap %.1fs); "
+        "nothing injected",
+        ", ".join(sorted(result.still_held)),
+        round(result.waited_s * 1000),
+        MODIFIER_WAIT_CAP_S,
+    )
+    raise ModifiersHeldError(result.still_held, result.waited_s)
+
+
 def paste(
     text: str,
     *,
@@ -104,6 +141,7 @@ def paste(
     target_id: int | None = None,
     schedule_restore: RestoreScheduler | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> None:
     """Paste *text* into the focused window.
 
@@ -128,6 +166,15 @@ def paste(
     clipboard is put back (#66). Without it, the restore runs synchronously
     after a short settle — the legacy path, which can lose that race on slow or
     security-hooked machines.
+
+    Before ANY side effect (clipboard write, focus restore, keystroke), the
+    pipeline waits — bounded by ``MODIFIER_WAIT_CAP_S`` — until no modifier is
+    held (``keystroke.held_modifiers()``), so a still-held hotkey can't turn
+    the injected Ctrl+V into Ctrl+Alt+V / Win+Ctrl+V or corrupt the typed
+    Trigger Fire path (#269). If the cap expires, :class:`ModifiersHeldError`
+    is raised with nothing injected, and the caller holds the dictation for
+    recovery. *clock* and *sleep* drive that wait (injected for tests); it
+    blocks the calling thread, which is why the cap is short.
     """
     normalized = normalize_pasted_text(text)
     if target_id is None:
@@ -138,6 +185,8 @@ def paste(
         len(normalized),
         replace_chars,
     )
+
+    _wait_for_modifier_release(keystroke, clock=clock, sleep=sleep)
 
     if replace_chars > 0:
         # Typed-replacement path: no clipboard, no settle, no race.

@@ -6,11 +6,19 @@ import ctypes
 import ctypes.wintypes
 import logging
 
+from dictatem.hotkey.win32_keymap import (
+    DICTATEM_INJECTION_TAG,
+    LLKHF_EXTENDED,
+    VK_MENU_MASK,
+)
+from dictatem.paste.modifier_wait import held_modifier_names
+
 logger = logging.getLogger(__name__)
 
 VK_CONTROL = 0x11
 VK_V = 0x56
 VK_BACK = 0x08
+KEYEVENTF_EXTENDEDKEY = 0x0001
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
 INPUT_KEYBOARD = 1
@@ -64,13 +72,34 @@ class _INPUT(ctypes.Structure):
     ]
 
 
+# Tag every injected event so our own keyboard hook can ignore it (see
+# ``hotkey/win32_keymap.is_own_injection``).
+_EXTRA_INFO = ctypes.cast(DICTATEM_INJECTION_TAG, ctypes.POINTER(ctypes.c_ulong))
+
+_user32 = ctypes.WinDLL("user32", use_last_error=False)
+_user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+_user32.GetAsyncKeyState.restype = ctypes.c_short
+
+
 def _key_input(vk: int, flags: int = 0, scan: int = 0) -> _INPUT:
     inp = _INPUT(type=INPUT_KEYBOARD)
-    inp.ki = _KEYBDINPUT(wVk=vk, wScan=scan, dwFlags=flags, time=0, dwExtraInfo=None)
+    inp.ki = _KEYBDINPUT(
+        wVk=vk, wScan=scan, dwFlags=flags, time=0, dwExtraInfo=_EXTRA_INFO
+    )
     return inp
 
 
+def _is_vk_down(vk: int) -> bool:
+    # High bit set = the key is down right now (logical async state, which is
+    # what an injected Ctrl+V combines with in the target).
+    return bool(_user32.GetAsyncKeyState(vk) & 0x8000)
+
+
 class Win32KeystrokeSender:
+    def held_modifiers(self) -> frozenset[str]:
+        """Alt / Win / Shift / Ctrl currently down, via ``GetAsyncKeyState`` (#269)."""
+        return held_modifier_names(_is_vk_down)
+
     def send_paste(self) -> None:
         inputs = (_INPUT * 4)(
             _key_input(VK_CONTROL),
@@ -108,38 +137,42 @@ class Win32KeystrokeSender:
                 err,
             )
 
-    def send_modifier_release_mask(self) -> None:
-        """Inject a no-op Ctrl tap to neutralize a lone Win/Alt key-up (#171).
+    def send_masked_release(self, vk: int, scan: int, hook_flags: int) -> bool:
+        """Re-emit a swallowed lone Alt/Win key-up behind the menu mask key (#171/#177).
 
-        A lone Alt release activates the menu bar and a lone Win release pops the
-        Start menu, which can move the caret and misfire the next paste. Injecting
-        an innocuous Ctrl down+up while another combo modifier is still held marks
-        that modifier's key session as "not lone", so its eventual release no
-        longer triggers the OS side-effect. Ctrl is the masking key because a lone
-        Ctrl tap has no UI effect of its own (the same trick AutoHotkey uses).
+        Called from the keyboard hook for the key-up it is about to swallow:
+        injects ``[VK_MENU_MASK down, VK_MENU_MASK up, <vk> up]`` as ONE batch,
+        so the OS sees a key between the Alt/Win press and its release (not
+        lone: no menu bar / Start menu) and the key still ends up released.
+        The mask is the unassigned 0xE8 (AutoHotkey's default), not Ctrl: an
+        injected generic Ctrl reaches the low-level hook as ``VK_LCONTROL``
+        (verified on Windows 11) and would perturb a Ctrl-containing combo.
 
-        MUST stay the *generic* ``VK_CONTROL`` (0x11), never side-specific
-        ``VK_LCONTROL``/``VK_RCONTROL`` (0xA2/0xA3): this injected tap re-enters
-        the low-level keyboard hook, and only the side-specific codes map to a real
-        ``Key`` — generic 0x11 maps to ``Key.OTHER`` (inert), so the classifier can
-        never mistake our own mask for a combo key, even in a Ctrl-containing combo
-        (the same reason the paste rail's injected Ctrl+V is harmless). See
-        ``hotkey/win32_keymap.py`` and ``HotkeyClassifier.pending_mask``.
+        Every event carries ``DICTATEM_INJECTION_TAG`` so the hook passes the
+        replay through without feeding it to the classifier. Returns True only
+        when all three events were dispatched; on False the hook passes the
+        original key-up through instead, so a key can never be left stuck.
         """
-        inputs = (_INPUT * 2)(
-            _key_input(VK_CONTROL),
-            _key_input(VK_CONTROL, KEYEVENTF_KEYUP),
+        keyup_flags = KEYEVENTF_KEYUP
+        if hook_flags & LLKHF_EXTENDED:
+            keyup_flags |= KEYEVENTF_EXTENDEDKEY
+        inputs = (_INPUT * 3)(
+            _key_input(VK_MENU_MASK),
+            _key_input(VK_MENU_MASK, KEYEVENTF_KEYUP),
+            _key_input(vk, keyup_flags, scan=scan),
         )
         sent = ctypes.windll.user32.SendInput(
-            2, ctypes.byref(inputs), ctypes.sizeof(_INPUT)
+            3, ctypes.byref(inputs), ctypes.sizeof(_INPUT)
         )
-        if sent != 2:
+        if sent != 3:
             err = ctypes.windll.kernel32.GetLastError()
             logger.warning(
-                "SendInput dispatched %d/2 neutralizing-mask events (GetLastError=%d)",
+                "SendInput dispatched %d/3 masked-release events (GetLastError=%d)",
                 sent,
                 err,
             )
+            return False
+        return True
 
     def send_text(self, text: str) -> None:
         if not text:

@@ -55,9 +55,13 @@ While a mouse button is actively completing the combo it is **suppressed** — i
 does not also fire its usual action (e.g. browser-back) — whereas modifier keys
 always pass through. Because a lone **Alt** release activates the Windows menu bar
 and a lone **Win** release pops the Start menu, releasing a Win+Alt-style chord
-would otherwise let a fractionally-staggered release misfire one of those and
-steal the caret; on Windows the keyboard hook injects a no-op **Ctrl** tap on the
-chord release to neutralise it (#171).
+would otherwise misfire one of those and steal keyboard focus from the next
+paste. So on Windows, when an Alt/Win key that was part of a Dictatem combo
+session is released and nothing else was pressed while it was down, the keyboard
+hook swallows that key-up and re-emits it behind the unassigned mask key `0xE8`.
+Your own lone Alt or Win press, outside dictation, still works normally (#171,
+#177). Dictatem tags every keystroke it injects, and the hook never feeds those
+to the hotkey logic.
 
 `meta` is the canonical cross-platform name for the OS key; `win` is a
 permanent alias kept for existing Windows configs. The default combo is

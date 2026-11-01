@@ -28,6 +28,11 @@ from dictatem.hotkey.wh_keyboard_ll import (
     WM_SYSKEYDOWN,
     WHKeyboardLLHook,
 )
+from dictatem.hotkey.win32_keymap import (
+    DICTATEM_INJECTION_TAG,
+    LLKHF_EXTENDED,
+    LLKHF_INJECTED,
+)
 
 VK_A = 0x41
 VK_LCONTROL = 0xA2
@@ -43,9 +48,9 @@ def _make_struct(vk: int, time: int = 1000) -> KBDLLHOOKSTRUCT:
     return s
 
 
-def _make_callback(handler, inject_mask=None):  # type: ignore[no-untyped-def]
+def _make_callback(handler, replay=None):  # type: ignore[no-untyped-def]
     """Build a hook and return its real hook proc, without starting the thread."""
-    hook = WHKeyboardLLHook(handler, inject_mask=inject_mask)
+    hook = WHKeyboardLLHook(handler, replay_masked_release=replay)
     return hook._ll_callback, hook
 
 
@@ -191,35 +196,130 @@ def test_handler_exception_does_not_suppress_key() -> None:
     assert result != 1
 
 
-# ── Neutralizing keystroke injection (#171) ─────────────────────────────────
+# ── Menu mask: swallow-and-replay of a lone Alt/Win key-up (#171/#177) ──────
 
 
-def test_inject_mask_called_when_handler_returns_true() -> None:
-    """When the handler asks for a mask, the hook injects the neutralizing
-    keystroke AND still passes the real key through (#171)."""
-    injected: list[int] = []
+def _run_masked_keyup(replay, *, w_param: int = WM_KEYUP, mask: bool = True):  # type: ignore[no-untyped-def]
     struct = _make_struct(VK_LWIN)
+    struct.scanCode = 0x5B
+    struct.flags = LLKHF_EXTENDED
+    with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
+        mock_u32.CallNextHookEx.return_value = 0
+        cb, _ = _make_callback(lambda vk, action, ts: mask, replay=replay)
+        result = cb(0, w_param, ctypes.addressof(struct))
+    return result, mock_u32.CallNextHookEx.call_count
+
+
+def test_masked_keyup_is_replayed_then_swallowed() -> None:
+    replays: list[tuple[int, int, int]] = []
+
+    def replay(vk: int, scan: int, flags: int) -> bool:
+        replays.append((vk, scan, flags))
+        return True
+
+    result, next_calls = _run_masked_keyup(replay)
+    # The SAME key-up (vk, scan, extended flag) was re-emitted behind the mask…
+    assert replays == [(VK_LWIN, 0x5B, LLKHF_EXTENDED)]
+    # …so the original is swallowed (non-zero, no CallNextHookEx).
+    assert result == 1
+    assert next_calls == 0
+
+
+@pytest.mark.parametrize(
+    "replay_result",
+    [False, None, RuntimeError("SendInput blew up")],
+    ids=["short-sendinput", "non-bool", "raises"],
+)
+def test_failed_replay_passes_original_keyup_through(replay_result: object) -> None:
+    """Never-stuck: if the key-up wasn't re-emitted, the original goes through."""
+
+    def replay(vk: int, scan: int, flags: int) -> object:
+        if isinstance(replay_result, Exception):
+            raise replay_result
+        return replay_result
+
+    result, next_calls = _run_masked_keyup(replay)
+    assert result != 1
+    assert next_calls == 1
+
+
+def test_every_swallowed_keyup_was_re_emitted() -> None:
+    """Invariant across all outcomes: swallowed (result 1) <=> a full replay."""
+    for outcome in (True, False):
+        emitted: list[int] = []
+
+        def replay(
+            vk: int,
+            scan: int,
+            flags: int,
+            _ok: bool = outcome,
+            _emitted: list[int] = emitted,
+        ) -> bool:
+            if _ok:
+                _emitted.append(vk)
+            return _ok
+
+        result, next_calls = _run_masked_keyup(replay)
+        swallowed = result == 1 and next_calls == 0
+        assert swallowed == (emitted == [VK_LWIN])
+        assert swallowed or next_calls == 1
+
+
+def test_no_replay_when_handler_does_not_ask() -> None:
+    replays: list[int] = []
+    result, next_calls = _run_masked_keyup(
+        lambda vk, s, f: replays.append(vk) or True, mask=False
+    )
+    assert replays == []
+    assert next_calls == 1 and result != 1
+
+
+def test_key_down_is_never_swallowed_even_if_flagged() -> None:
+    replays: list[int] = []
+    result, next_calls = _run_masked_keyup(
+        lambda vk, s, f: replays.append(vk) or True, w_param=WM_KEYDOWN
+    )
+    assert replays == []
+    assert next_calls == 1 and result != 1
+
+
+def test_no_replayer_passes_through() -> None:
+    result, next_calls = _run_masked_keyup(None)
+    assert next_calls == 1 and result != 1
+
+
+# ── Own injections never reach the classifier (#269 follow-up) ──────────────
+
+
+def _tagged_struct(vk: int, extra: int | None) -> KBDLLHOOKSTRUCT:
+    s = _make_struct(vk)
+    s.flags = LLKHF_INJECTED
+    if extra is not None:
+        s.dwExtraInfo = ctypes.cast(extra, ctypes.POINTER(ctypes.wintypes.ULONG))
+    return s
+
+
+def test_own_tagged_injection_skips_handler_but_passes_through() -> None:
+    received: list[object] = []
+    struct = _tagged_struct(VK_LCONTROL, DICTATEM_INJECTION_TAG)
 
     with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
         mock_u32.CallNextHookEx.return_value = 0
-        cb, _ = _make_callback(
-            lambda vk, action, ts: True, inject_mask=lambda: injected.append(1)
-        )
-        cb(0, WM_KEYUP, ctypes.addressof(struct))
+        cb, _ = _make_callback(lambda *a: received.append(a) or True)
+        result = cb(0, WM_KEYDOWN, ctypes.addressof(struct))
 
-    assert injected == [1]
-    mock_u32.CallNextHookEx.assert_called_once()  # real key still passed through
+    assert received == []
+    mock_u32.CallNextHookEx.assert_called_once()
+    assert result != 1
 
 
-def test_inject_mask_not_called_when_handler_returns_false() -> None:
-    injected: list[int] = []
-    struct = _make_struct(VK_LWIN)
+def test_foreign_injection_still_reaches_handler() -> None:
+    received: list[object] = []
+    struct = _tagged_struct(VK_LCONTROL, None)
 
     with patch("dictatem.hotkey.win32_ll_hook.user32") as mock_u32:
         mock_u32.CallNextHookEx.return_value = 0
-        cb, _ = _make_callback(
-            lambda vk, action, ts: False, inject_mask=lambda: injected.append(1)
-        )
-        cb(0, WM_KEYUP, ctypes.addressof(struct))
+        cb, _ = _make_callback(lambda *a: received.append(a) or False)
+        cb(0, WM_KEYDOWN, ctypes.addressof(struct))
 
-    assert injected == []
+    assert len(received) == 1
