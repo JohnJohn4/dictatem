@@ -21,7 +21,7 @@ _SNAP = InjectionSnapshot(
     async_keys=(),
     since_modifier_up_ms=412,
     replay_within_1s=True,
-    sends=((6, 6),),
+    sends=((6, 6, 1),),
 )
 
 
@@ -74,13 +74,22 @@ def test_unreadable_fields_print_as_question_marks() -> None:
 
 def test_no_focus_window_and_multiple_sends() -> None:
     snap = dataclasses.replace(
-        _SNAP, kind="trigger-fire", focus_class="", sends=((10, 10), (20, 24)), settle_ms=37
+        _SNAP,
+        kind="trigger-fire",
+        focus_class="",
+        sends=((364, 364, 23), (186, 186, 12)),
+        settle_ms=37,
     )
     line = format_injection_diagnostics(snap)
     assert line.startswith("Paste diag [trigger-fire]: ")
     assert " focus=none " in line
     assert " settle_ms=37 " in line
-    assert line.endswith(" sendinput=10/10,20/24")
+    assert line.endswith(" sendinput=364/364 in 23 chunks,186/186 in 12 chunks")
+
+
+def test_short_phase_shows_dispatched_of_requested() -> None:
+    line = format_injection_diagnostics(dataclasses.replace(_SNAP, sends=((16, 364, 2),)))
+    assert line.endswith(" sendinput=16/364 in 2 chunks")
 
 
 def test_keys_down_keeps_print_order() -> None:

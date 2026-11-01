@@ -68,3 +68,16 @@ to clean up after itself.
   when there's contention. Same root cause as the trigger-fire race but
   much rarer on the dictation path; not worth solving more thoroughly
   right now.
+- The typed path is **paced** ([#275](https://github.com/JohnJohn4/dictatem/issues/275)).
+  Windows 11 Notepad dropped and mangled a one-batch flood of 182
+  Backspaces plus 93 Unicode keys, even though `SendInput` accepted every
+  event. Each phase now goes out in chunks of 8 key presses with 8 ms between
+  chunks, and there is a 40 ms gap between the Backspace and typing phases
+  (`paste/keystroke_pacing.py`). This is a fixed delay, not a drain barrier.
+  `SendMessageTimeout(WM_NULL)` was considered and rejected: a sent message
+  is dispatched the next time the target thread pumps, *ahead of* its queued
+  input, and injected input may still be in the raw input thread. So it
+  doesn't prove the keys were processed. The chunk count is capped per
+  phase, so the delay stays bounded (about 3 s for a 2,000-character
+  rewrite). That avoids the open-ended "sleep proportional to N" rejected
+  above.

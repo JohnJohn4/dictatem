@@ -156,12 +156,19 @@ def _is_boundary(
 
 
 def count_backspace_units(text: str) -> int:
-    """Return the number of user-perceived characters in *text*.
+    """Return the number of user-perceived characters in *text*."""
+    return len(split_backspace_units(text))
+
+
+def split_backspace_units(text: str) -> list[str]:
+    """Split *text* into its user-perceived characters (Backspace Units).
 
     Walks the code points once, applying the UAX #29 break rules to each
-    adjacent pair; the result is the number of cluster starts.
+    adjacent pair; a new unit starts at every cluster boundary. The pieces
+    concatenate back to *text*. Used by :func:`count_backspace_units` and by
+    the typed-replacement pacing, which keeps each unit in one SendInput chunk.
     """
-    count = 0
+    units: list[str] = []
     prev: _Prop | None = None
     # GB11 tracker: inside ``ExtPict Extend* ZWJ?`` so far.
     in_pict_seq = False
@@ -172,7 +179,9 @@ def count_backspace_units(text: str) -> int:
         if prev is None or _is_boundary(
             prev, cur, in_pict_seq=in_pict_seq, ri_run=ri_run
         ):
-            count += 1
+            units.append(ch)
+        else:
+            units[-1] += ch
         if cur is _Prop.EXT_PICT:
             in_pict_seq = True
         elif cur is _Prop.EXTEND or (cur is _Prop.ZWJ and prev is not _Prop.ZWJ):
@@ -181,4 +190,4 @@ def count_backspace_units(text: str) -> int:
             in_pict_seq = False
         ri_run = ri_run + 1 if cur is _Prop.REGIONAL_INDICATOR else 0
         prev = cur
-    return count
+    return units

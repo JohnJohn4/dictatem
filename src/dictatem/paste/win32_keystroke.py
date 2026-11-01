@@ -8,6 +8,7 @@ import dataclasses
 import logging
 import threading
 import time
+from typing import TYPE_CHECKING
 
 from dictatem.hotkey.win32_keymap import (
     DICTATEM_INJECTION_TAG,
@@ -26,8 +27,17 @@ from dictatem.paste.input_timeline import (
     replayed_recently,
     wait_for_input_settle,
 )
+from dictatem.paste.keystroke_pacing import (
+    CHUNK_GAP_S,
+    PHASE_GAP_S,
+    chunk_backspaces,
+    chunk_text_units,
+)
 from dictatem.paste.modifier_wait import held_modifier_names
 from dictatem.paste.win32_clipboard_formats import STANDARD_FORMAT_NAMES
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +195,24 @@ def _send_input(inputs: ctypes.Array[_INPUT]) -> int:
     )
 
 
+def backspace_batch(n: int) -> ctypes.Array[_INPUT]:
+    """*n* Backspace presses (down + up each) as one batch of 2*n events."""
+    inputs = (_INPUT * (2 * n))()
+    for i in range(n):
+        inputs[2 * i] = _key_input(VK_BACK)
+        inputs[2 * i + 1] = _key_input(VK_BACK, KEYEVENTF_KEYUP)
+    return inputs
+
+
+def unicode_batch(units: Sequence[int]) -> ctypes.Array[_INPUT]:
+    """One ``KEYEVENTF_UNICODE`` press (down + up) per UTF-16 code unit."""
+    inputs = (_INPUT * (2 * len(units)))()
+    for i, unit in enumerate(units):
+        inputs[2 * i] = _key_input(0, KEYEVENTF_UNICODE, scan=unit)
+        inputs[2 * i + 1] = _key_input(0, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, scan=unit)
+    return inputs
+
+
 def _is_vk_down(vk: int) -> bool:
     # High bit set = the key is down right now (logical async state, which is
     # what an injected Ctrl+V combines with in the target).
@@ -296,14 +324,17 @@ def _clipboard_format_names() -> list[str]:
 
 
 class Win32KeystrokeSender:
-    def __init__(self) -> None:
+    def __init__(self, sleep: Callable[[float], None] = time.sleep) -> None:
         # Fed by the keyboard hook (observe_hook_key / send_masked_release),
         # read before each injection (settle) and by the diagnostics (#269).
         self.timeline = InputTimeline()
-        # (dispatched, requested) per SendInput since the injection began; only
-        # touched on the GUI thread (the paste rail), never by the hook.
-        self._sends: list[tuple[int, int]] = []
+        # (dispatched, requested, chunks) per injection phase since the
+        # injection began; only touched on the GUI thread (the paste rail),
+        # never by the hook.
+        self._sends: list[tuple[int, int, int]] = []
         self._settle_ms = 0
+        # Paces the chunked Trigger Fire phases (#275); injected for tests.
+        self._sleep = sleep
 
     # --- hook-side bookkeeping (runs on the keyboard-hook thread) ---
 
@@ -340,20 +371,39 @@ class Win32KeystrokeSender:
             "; replayed key-up never observed" if result.replay_unobserved else "",
         )
 
-    def _dispatch(self, inputs: ctypes.Array[_INPUT], label: str) -> int:
-        count = len(inputs)
-        sent = _send_input(inputs)
-        self._sends.append((int(sent), count))
-        if sent != count:
-            err = ctypes.windll.kernel32.GetLastError()
-            logger.warning(
-                "SendInput dispatched %d/%d %s events (GetLastError=%d)",
-                sent,
-                count,
-                label,
-                err,
-            )
-        return sent
+    def _dispatch(self, batches: Sequence[ctypes.Array[_INPUT]], label: str) -> int:
+        """Send *batches* as one paced phase; record it; return events dispatched.
+
+        One SendInput per batch, with ``CHUNK_GAP_S`` between batches (#275).
+        A short dispatch (UIPI block, desktop switch, ...) ends the phase early:
+        the remaining chunks would fail the same way, and a half-typed
+        replacement is no better than a stopped one. The phase is still
+        recorded with its full requested count, so the diag line shows it.
+        """
+        wanted = sum(len(b) for b in batches)
+        sent_total = 0
+        chunks = 0
+        for i, batch in enumerate(batches):
+            if i:
+                self._sleep(CHUNK_GAP_S)
+            sent = int(_send_input(batch))
+            sent_total += sent
+            chunks += 1
+            if sent != len(batch):
+                err = ctypes.windll.kernel32.GetLastError()
+                logger.warning(
+                    "SendInput dispatched %d/%d %s events in chunk %d/%d"
+                    " (GetLastError=%d); stopping this phase",
+                    sent,
+                    len(batch),
+                    label,
+                    chunks,
+                    len(batches),
+                    err,
+                )
+                break
+        self._sends.append((sent_total, wanted, chunks))
+        return sent_total
 
     def send_paste(self) -> None:
         self._sends = []
@@ -366,20 +416,15 @@ class Win32KeystrokeSender:
                 )
             except Exception:
                 logger.debug("Could not list clipboard formats", exc_info=True)
-        self._dispatch(paste_batch(), "paste")
+        self._dispatch([paste_batch()], "paste")
 
     def send_backspaces(self, n: int) -> None:
         self._sends = []
         if n <= 0:
             return
         self._settle_before_injection()
-        count = n * 2  # one keydown + one keyup per backspace
-        inputs_array = _INPUT * count
-        inputs = inputs_array()
-        for i in range(n):
-            inputs[2 * i] = _key_input(VK_BACK)
-            inputs[2 * i + 1] = _key_input(VK_BACK, KEYEVENTF_KEYUP)
-        self._dispatch(inputs, "backspace")
+        batches = [backspace_batch(size) for size in chunk_backspaces(n)]
+        self._dispatch(batches, "backspace")
 
     def send_masked_release(self, vk: int, scan: int, hook_flags: int) -> bool:
         """Re-emit a swallowed lone Alt/Win key-up behind the menu mask key (#171/#177).
@@ -425,20 +470,14 @@ class Win32KeystrokeSender:
     def send_text(self, text: str) -> None:
         if not text:
             return
-        # Encode to UTF-16 LE so supplementary-plane code points are split
-        # into surrogate pairs — each 16-bit unit becomes one keystroke.
-        units_bytes = text.encode("utf-16-le")
-        n_units = len(units_bytes) // 2
-        count = n_units * 2  # one keydown + one keyup per unit
-        inputs_array = _INPUT * count
-        inputs = inputs_array()
-        for i in range(n_units):
-            unit = int.from_bytes(units_bytes[2 * i : 2 * i + 2], "little")
-            inputs[2 * i] = _key_input(0, KEYEVENTF_UNICODE, scan=unit)
-            inputs[2 * i + 1] = _key_input(
-                0, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, scan=unit
-            )
-        self._dispatch(inputs, "unicode")
+        if self._sends:
+            # Backspaces were just sent: give the target time to finish
+            # deleting before the first typed character arrives (#275).
+            self._sleep(PHASE_GAP_S)
+        # UTF-16 code units, chunked on grapheme boundaries so a surrogate
+        # pair (or a combining sequence) never straddles two SendInputs.
+        batches = [unicode_batch(units) for units in chunk_text_units(text)]
+        self._dispatch(batches, "unicode")
 
     # --- diagnostics (#269) ---
 
