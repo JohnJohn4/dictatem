@@ -24,37 +24,10 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Next up: the macOS launch gates — #95, #94, #93, #193, and S11/#91.**
-
-The five pre-launch must-fixes (**#188–#192**) are **DONE and in review** as PRs
-**#194/#195/#196/#197/#198** (merge order **#188 → #190 → #189 → #191 → #192**;
-#196 is stacked on #195 — merge #195 first). See the 2026-07-16 ledger entry for
-what shipped and the decisions taken. Once those merge, the **Windows launch is
-clear**.
-
-The remaining launch gates are all **macOS**: **#95** (launch-blocking first-run
-onboarding + re-prompt-on-use), **#94** (refresh the stale v0.4.0 QA runbook +
-run it on a real Mac), **#93** (intermittent paste-not-landing), **#193** (macOS
-in-app update path), and the **S11/#91 signing decision** — the review
-recommends paying the $99 Developer-ID (a **user spend call**). Read the
-pre-launch review §5 (`docs/reviews/2026-07-08-prelaunch-review.md`) for the
-ordered macOS checklist and §§3–4 for the remaining non-gating findings
-(F-4…F-15, S-1/S-3/S-4) — deliberately *not* filed yet; file each as picked up.
-The **trigger-word overhaul (review §6)** is the recommended first post-launch
-release.
-
-**Settled — do NOT reopen:** the #188–#192 decisions are made (see the ledger
-entry + PR bodies for the deliberately-not-taken options — #189 TTL-at-paste-time,
-#191 stale-caret-same-window / whisper-hallucination-on-silence). S1–S9 done + QA
-passed; the macOS #161 freeze is FIXED and SHIPPED in **v0.6.2** (ADR-0027 native
-AVAudioEngine; QA PASS on the repro device); v0.6.3 (macOS `av` wheel pin) and
-v0.6.4 (README rewrite) shipped; post-#161 cleanup is DONE. Follow-ups tracked:
-#184 (Windows WASAPI), `config.audio.device` on macOS, off-main-thread `stop()`
-teardown. load-on-arm (ADR-0025) stands.
-
-Skills: `verify`/`run`, `tdd`, `diagnose`, `grill-me` (for #91). Your role: the
-macOS track needs a **real Mac** (or the user's signing spend call) — confirm
-availability with the user before picking it up.
+**Superseded 2026-11-01: read [`handoffs/2026-11-01-launch-coordinator.md`](handoffs/2026-11-01-launch-coordinator.md) instead.**
+It is the current coordinator brief: v0.7.0 release (PR #279), macOS QA round 2
+(#281), the remaining Windows bugs, signing (#227), and the docs map (#214),
+which is retiring this roadmap. Don't add ledger entries here.
 
 ---
 
