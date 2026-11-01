@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -283,34 +284,59 @@ class ConfigLoadReport:
         return not self.is_empty
 
 
-_OPEN_CONFIG_HINT = (
-    "Your config.toml was not changed — fix it via “Open config file…” "
-    "in the tray menu, then Restart."
-)
+# Names only the menu item, not the menu, so one string is right on Windows
+# ("tray menu") and macOS ("menu-bar menu").
+_OPEN_CONFIG_HINT = "Fix it via Open config file…, then Restart."
+
+# tomllib appends "(at line N, column M)" to every TOMLDecodeError message.
+_TOML_POSITION = re.compile(r"\(at (line \d+, column \d+)\)")
 
 
 def config_problem_notification(report: ConfigLoadReport) -> tuple[str, str] | None:
     """The ``(title, body)`` of the one startup notification for *report*.
 
-    ``None`` for an empty report — a valid config shows nothing. The summary
-    names what was wrong; the full per-problem detail is already in the log.
+    ``None`` for an empty report — a valid config shows nothing. The body is
+    kept to about three toast lines so Windows never truncates it (#280): it
+    names the first bad key (or the syntax-error position) and the fix. The
+    full per-problem detail, and the promise that config.toml was not
+    changed, go to the log (see ``DaemonCore.notify_config_problems``).
     """
     if report.is_empty:
         return None
     if report.read_only:
-        detail = report.problems[0].message
+        match = _TOML_POSITION.search(report.problems[0].message)
+        what = (
+            f"Syntax error at {match.group(1)}"
+            if match
+            else "The file couldn't be read"
+        )
         return (
             "Dictatem couldn't read config.toml",
-            f"{detail}. Running on the defaults for this machine this session. "
-            + _OPEN_CONFIG_HINT,
+            f"{what} (using defaults). {_OPEN_CONFIG_HINT}",
         )
     keys = [p.key for p in report.problems]
-    shown = ", ".join(keys[:3]) + (f" and {len(keys) - 3} more" if len(keys) > 3 else "")
-    noun = "setting" if len(keys) == 1 else "settings"
+    if len(keys) == 1:
+        what = f"Ignored bad setting {keys[0]} (using default)."
+    else:
+        what = (
+            f"Ignored bad settings {keys[0]} and {len(keys) - 1} more "
+            "(using defaults)."
+        )
+    return ("Dictatem config problem", f"{what} {_OPEN_CONFIG_HINT}")
+
+
+def config_problem_log_summary(report: ConfigLoadReport) -> str:
+    """The full one-line log summary behind the (short) startup notification."""
+    if report.read_only:
+        return (
+            f"config.toml could not be read ({report.problems[0].message}); "
+            "running on this machine's defaults this session. "
+            "config.toml was not changed."
+        )
+    keys = ", ".join(p.key for p in report.problems)
     return (
-        "Dictatem config problem",
-        f"Invalid {noun} ignored, using the default instead: {shown}. "
-        + _OPEN_CONFIG_HINT,
+        f"Ignored {len(report.problems)} invalid config setting(s), using "
+        f"the defaults instead: {keys}. config.toml was not changed."
     )
 
 

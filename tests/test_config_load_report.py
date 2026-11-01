@@ -7,10 +7,12 @@ on the probe-resolved Hardware Tier defaults and is never written.
 
 from __future__ import annotations
 
+import dataclasses
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
 from dictatem.config import (
+    Config,
     ConfigLoadReport,
     ConfigProblem,
     config_problem_notification,
@@ -229,34 +231,114 @@ class TestSampleRate:
         assert report.is_empty
 
 
+# A Windows toast shows roughly three lines of body text; the v0.7.0 message
+# was cut off at ~165 characters (#280). Keep every variant well inside that.
+_TOAST_BODY_MAX = 130
+
+# The longest real key name, so the budget holds for the worst case.
+_LONGEST_KEY = max(
+    (
+        f"[{section.name}].{f.name}"
+        for section in dataclasses.fields(Config)
+        for f in dataclasses.fields(section.default_factory())  # type: ignore[misc]
+    ),
+    key=len,
+)
+
+
+def _body(report: ConfigLoadReport) -> str:
+    note = config_problem_notification(report)
+    assert note is not None
+    return note[1]
+
+
 class TestNotification:
     """The one startup tray notification a non-empty report turns into."""
 
     def test_empty_report_gives_no_notification(self) -> None:
         assert config_problem_notification(ConfigLoadReport()) is None
 
-    def test_wrong_values_name_the_keys_and_say_file_unchanged(self) -> None:
+    def test_one_bad_value_names_the_key_and_the_fix(self) -> None:
         report = ConfigLoadReport(problems=[
             ConfigProblem("[hotkey].tap_threshold_ms", "Wrong type ..."),
-            ConfigProblem("[audio].sample_rate", "Invalid value ..."),
         ])
         note = config_problem_notification(report)
         assert note is not None
         title, body = note
         assert "config" in title.lower()
-        assert "[hotkey].tap_threshold_ms" in body
-        assert "[audio].sample_rate" in body
-        assert "not changed" in body
-        assert "Open config file" in body
+        assert body == (
+            "Ignored bad setting [hotkey].tap_threshold_ms (using default). "
+            "Fix it via Open config file…, then Restart."
+        )
 
-    def test_unreadable_file_names_the_parser_problem(self) -> None:
+    def test_several_bad_values_name_the_first_and_count_the_rest(self) -> None:
+        report = ConfigLoadReport(problems=[
+            ConfigProblem("[hotkey].tap_threshold_ms", "Wrong type ..."),
+            ConfigProblem("[audio].sample_rate", "Invalid value ..."),
+            ConfigProblem("[overlay].position", "Invalid value ..."),
+        ])
+        assert _body(report) == (
+            "Ignored bad settings [hotkey].tap_threshold_ms and 2 more "
+            "(using defaults). Fix it via Open config file…, then Restart."
+        )
+
+    def test_unparseable_file_gives_the_position(self) -> None:
         report = ConfigLoadReport(
-            problems=[ConfigProblem("", "Expected ']' (at line 3, column 7)")],
+            problems=[ConfigProblem(
+                "",
+                "Expected ']' at the end of a table declaration "
+                "(at line 3, column 7)",
+            )],
             read_only=True,
         )
         note = config_problem_notification(report)
         assert note is not None
-        _title, body = note
-        assert "line 3, column 7" in body
-        assert "not changed" in body
-        assert "Open config file" in body
+        title, body = note
+        assert title == "Dictatem couldn't read config.toml"
+        assert body == (
+            "Syntax error at line 3, column 7 (using defaults). "
+            "Fix it via Open config file…, then Restart."
+        )
+
+    def test_unreadable_file_without_a_position(self) -> None:
+        report = ConfigLoadReport(
+            problems=[ConfigProblem(
+                "",
+                "[Errno 13] Permission denied: "
+                r"'C:\Users\someone\.dictatem\config.toml'",
+            )],
+            read_only=True,
+        )
+        assert _body(report) == (
+            "The file couldn't be read (using defaults). "
+            "Fix it via Open config file…, then Restart."
+        )
+
+    def test_wording_is_platform_neutral(self) -> None:
+        # Windows says "tray menu", macOS "menu-bar menu"; the toast names
+        # only the menu item, so one string is right on both.
+        body = _body(ConfigLoadReport(problems=[ConfigProblem("[a].b", "x")]))
+        assert "tray" not in body and "menu-bar" not in body
+
+    def test_every_variant_fits_a_toast(self) -> None:
+        reports = [
+            ConfigLoadReport(problems=[ConfigProblem(_LONGEST_KEY, "x")]),
+            ConfigLoadReport(
+                problems=[ConfigProblem(_LONGEST_KEY, "x")] * 25
+            ),
+            ConfigLoadReport(
+                problems=[ConfigProblem(
+                    "",
+                    "Expected ']' at the end of a table declaration "
+                    "(at line 12345, column 678)",
+                )],
+                read_only=True,
+            ),
+            ConfigLoadReport(
+                problems=[ConfigProblem("", "x" * 500)], read_only=True
+            ),
+        ]
+        for report in reports:
+            body = _body(report)
+            assert len(body) <= _TOAST_BODY_MAX, body
+            assert body.endswith("then Restart.")

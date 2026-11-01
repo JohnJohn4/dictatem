@@ -570,13 +570,19 @@ class DaemonCore:
     def notify_config_problems(self, report: ConfigLoadReport) -> None:
         """Show the one startup notification for a non-empty Config Load Report.
 
-        A valid config shows nothing; the per-problem detail is already logged
-        by ``load_config_with_report``.
+        A valid config shows nothing. The notification is kept short so a
+        Windows toast never truncates it (#280); the full summary — every bad
+        key and the promise that config.toml was not changed — is logged here,
+        on top of the per-problem detail ``load_config_with_report`` logged.
         """
-        from dictatem.config import config_problem_notification
+        from dictatem.config import (
+            config_problem_log_summary,
+            config_problem_notification,
+        )
 
         note = config_problem_notification(report)
         if note is not None:
+            logger.warning("%s", config_problem_log_summary(report))
             self._tray.show_notification(*note)
 
     def on_tray_set_autostart(self, enabled: bool) -> None:
