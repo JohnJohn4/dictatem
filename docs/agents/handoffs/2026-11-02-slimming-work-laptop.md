@@ -259,4 +259,37 @@ the other side of the same contention (the load starves the UI and audio).
 Proposed A/B (owner): after a restart, a ~1 s dictation vs (after another
 restart) a ~12 s dictation, comparing `Model loaded in`.
 
+**A/B run 1 — H5 killed.** A ~1 s dictation ("testing", 1.35 s of audio) right
+after a fresh launch still took `Model loaded in 19.3s (engine import 3.72s,
+weights 15.59s)`, with the same ~12 s before the HF line. Run 2 was skipped
+because recording length isn't the driver.
+
+**Standalone under the daemon's conditions doesn't reproduce it either.**
+`C:\Temp\dictatem-perf\load_bisect.py` under `pythonw.exe` with the load in a
+background thread: import 0.84–0.88 s, download 0.71–0.85 s, ct2 build
+1.15–1.29 s (one first run had a 7.88 s import outlier).
+
+**Profiling the live daemon:** `uvx py-spy dump/record` works once it is
+pointed at the *child* interpreter. The tool venv's `Scripts\pythonw.exe` is a
+redirector that spawns `uv\python\cpython-3.12…\pythonw.exe`. The recorded
+load (22:38:35, owner dictation) happened to be fast: `Model loaded in 3.2s
+(0.46s / 2.72s)`, HF response after 1.5 s.
+
+**Finding C — warm loads are slow after ~15 min of no GPU/model activity,
+fast within a few minutes of the last load:**
+
+| Load | Gap since previous GPU/model use | `Model loaded in` |
+|---|---|---|
+| 11:31 (v0.7.0) | ~6 min | 2.7 s |
+| 21:34 (step 4) | ~17 min | 19.3 s |
+| 21:51 (E2, offline) | ~16 min | 18.0 s |
+| 22:34 (A/B run 1) | ~43 min | 19.3 s |
+| standalone scripts 21:52, 22:35 | 1–2 min | ~3 s |
+| 22:38 (profiled) | ~2 min (after standalone runs) | 3.2 s |
+
+So the cost is not "inside the daemon". Something goes cold on idle:
+dGPU/Optimus power state, the network/proxy path, or an MDE cache TTL. Next:
+leave the machine idle ≥20 min with the daemon stopped (a resident model keeps
+the GPU awake), then run a finer-grained standalone split under py-spy.
+
 E1: · E3:
