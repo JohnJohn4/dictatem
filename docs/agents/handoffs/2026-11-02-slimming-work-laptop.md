@@ -132,12 +132,60 @@ Log: `%APPDATA%\dictatem\logs\daemon.log`.
 
 ## Results
 
-_Fill in: machine, date, commit SHA, then one row per protocol step / experiment._
+Machine: owner's managed work laptop — Windows 11 Enterprise 10.0.26100, NVIDIA
+RTX 500 Ada Laptop 4 GB (driver 596.71), MDE. Date 2026-11-02. Branch commit
+`43330ca`. uv 0.11.16.
 
 | Step | Install time | Env size | Startup timing (total; hw probe) | Model load (import / weights) | 1st transcribe | 2nd transcribe |
 |---|---|---|---|---|---|---|
-| 1 upgrade | | | | | | |
+| 1 upgrade | 29.9 s | 2,928 → 2,489 MB | 11.86 s; 3.64 s | 38.2 s (23.36 s / 14.88 s) | 36.93 s (6.3 s audio) | 1.07 s (6.0 s audio) |
 | 3 cold | | | | | | |
 | 4 warm | | | | | | |
+
+**Step 1 (upgrade from v0.7.0).** Installer output was clean: it stopped the
+running daemon (2 PIDs), removed `pyside6`, `pyside6-addons`, `pyside6-pdf`,
+`pyside6-webengine`, reinstalled `pyside6-essentials` (the migration path
+fired) and rebuilt `dictatem`. Only 2 packages were written; the
+ctranslate2/NVIDIA DLLs were left untouched. Full startup line:
+`interpreter 2.99s | adapters 0.74s | imports 3.28s | lock 0.84s | config 0.01s
+| hw probe 3.64s | autostart 0.00s | qt app 0.10s | setup 0.09s | overlay+tray
+0.10s | wiring 0.05s | total 11.86s`. The tray appeared and the menu opened.
+
+**Step 2 (owner dictation, ~3.8 h after launch).** Three attempts:
+1. Owner-reported *failed*: the pill took a long time to appear. Load-on-arm
+   started at 20:52:58.6 and finished at 20:53:36.9 (`Model loaded in 38.2s`,
+   `engine import 23.36s, weights 14.88s`). Only **0.338 s** of audio was
+   captured; VAD removed all of it and the result was empty
+   (`Transcribe call took 0.72s`, which means no cuBLAS work ran).
+2. The pill was late again and the whole attempt took "a min or two":
+   6.3 s of audio, **`Transcribe call took 36.93s`**. This is the first call
+   that did real decoding, so it is the cuBLAS/cuDNN lazy load (H2).
+3. About 3 s end to end: 6.0 s of audio, `Transcribe call took 1.07s`. The
+   owner says the pill still felt slow to appear after the trigger key, even
+   on this warm attempt.
+
+HF timing inside the load: the engine import ended about 20:53:22.0, the HF
+`GET …/revision/main 200` was logged at 20:53:32.6, and the load finished at
+20:53:36.9. So about **10.6 s** passed between the import and the HTTP
+response, then about 4.3 s for the actual weights. E2 must separate the
+request from hub/SSL import cost.
+
+**Finding A — the cold cost is not limited to newly written files.** This
+upgrade did not rewrite any ctranslate2/NVIDIA DLL, and the same files loaded
+in 2.7 s at 11:31 that morning (v0.7.0, a tray restart). Roughly 9 h later,
+in a fresh process, they cost 23 s (import) + 37 s (cuBLAS). Something
+invalidated the warm state in between (sleep/idle evicting the OS file cache,
+an MDE cache or signature refresh, …). That weakens the H2 fix "one-time
+first-run warm-up": it would not cover this case. E3 and a deliberate
+"wait / sleep, then re-dictate" check should separate MDE from the file cache.
+
+**H4 (new) — the background load starves the UI and capture threads.** The
+load runs on a worker thread (`lifecycle.preload()`), but CPython holds the
+GIL while it imports extension modules and their DLL dependencies. While MDE
+scans a 100s-of-MB DLL, the Qt main thread, the hotkey handling and the audio
+callback cannot run. That fits a pill that doesn't appear, and only 0.338 s
+of audio from the first attempt. Not yet proven; a test would log
+hotkey-press → pill-shown latency and captured-vs-held duration during a cold
+load.
 
 E1: · E2: · E3:
