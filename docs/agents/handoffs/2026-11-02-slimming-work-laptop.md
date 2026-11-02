@@ -140,7 +140,7 @@ RTX 500 Ada Laptop 4 GB (driver 596.71), MDE. Date 2026-11-02. Branch commit
 |---|---|---|---|---|---|---|
 | 1 upgrade | 29.9 s | 2,928 → 2,489 MB | 11.86 s; 3.64 s | 38.2 s (23.36 s / 14.88 s) | 36.93 s (6.3 s audio) | 1.07 s (6.0 s audio) |
 | 3 cold (`UV_LINK_MODE=copy`) | 29.9 s (35 pkgs, 17.1 s link) | 2,483 MB | **37.14 s; 15.10 s** | **60.1 s (46.52 s / 13.54 s)** | **73.74 s** (2.7 s audio) | 0.78 s (9.0 s audio) |
-| 4 warm | | | | | | |
+| 4 restart (tray) | — | — | 19.77 s; 4.80 s | 19.3 s (3.35 s / 15.98 s) | 2.52 s (13.6 s audio) | |
 
 **Step 1 (upgrade from v0.7.0).** Installer output was clean: it stopped the
 running daemon (2 PIDs), removed `pyside6`, `pyside6-addons`, `pyside6-pdf`,
@@ -206,5 +206,25 @@ callback could not be serviced while the background import ran, which is
 consistent with the import holding the GIL. 2026-10-28 shows the same
 warnings during its 120 s cold load. Because of this, the first cold
 dictation can lose audio, not just arrive late.
+
+**Step 4 (Tray → Restart, ~17 min after step 3).** Startup: `interpreter
+4.93s | adapters 1.82s | imports 5.95s | lock 1.28s | config 0.03s | hw probe
+4.80s | … | wiring 0.49s | total 19.77s` (the tray appeared ~20 s after the
+click; `lock` includes waiting for the old instance). The engine import is
+warm now (3.35 s) and so is cuBLAS (2.52 s for 13.6 s of audio). **The weights
+phase stayed slow at 15.98 s.** The import ended about 21:35:00.1 and the HF
+`revision/main` response was logged at 21:35:12.1, i.e. ~12 s; the actual
+weight load after it took ~3.9 s. Step 1 showed the same ~10.6 s gap, and at
+11:31 this morning the gap was ~1 s. **H3 looks like the dominant warm-path
+cost on this network tonight**, on every load. E2 will confirm it.
+
+**Missed hotkey press:** after the restart the owner had to press the hotkey
+twice. The first press left no trace: there is no `Loading model...` line,
+and load-on-arm would have logged one on any RECORD_START. So it never
+reached record-start. The cause is unknown because hotkey events are not
+logged. Candidates: the press landed before the hook was installed (the tray
+appears ~20 s after Restart), or it was dropped somewhere in the hook/state
+machine. A diagnostic hotkey-event log line (no key content beyond the
+configured hotkey) would settle it.
 
 E1: · E2: · E3:
