@@ -227,4 +227,36 @@ appears ~20 s after Restart), or it was dropped somewhere in the hook/state
 machine. A diagnostic hotkey-event log line (no key content beyond the
 configured hotkey) would settle it.
 
-E1: · E2: · E3:
+**E2 (H3) — H3 killed as the main cost.** The daemon was relaunched from a
+shell with `HF_HUB_OFFLINE=1` set for that process only (a tray restart would
+not pick up a new user env var, because the child inherits the old process's
+environment). Startup total was 18.87 s. One owner dictation of 11.1 s audio:
+no HTTP line was logged (offline took effect), but `Model loaded in 18.0s
+(engine import 3.18s, weights 14.86s)` was essentially the same as step 4's
+19.3 s / 15.98 s. Transcribe 1.90 s. The pill was still slow to appear. So
+the ~12 s before the HF line in steps 1 and 4 is **not** the network request.
+(Going offline is still worth doing for the local-first story, but it won't
+buy speed here.)
+
+**Standalone load split (same venv, same machine, warm, daemon idle,
+`C:\Temp\dictatem-perf\load_split.py`):**
+
+| | online | `HF_HUB_OFFLINE=1` |
+|---|---|---|
+| import faster_whisper + ctranslate2 | 0.92 s | 1.07 s |
+| `download_model("small")` | 0.86 s | 0.55 s |
+| `ctranslate2.models.Whisper(cuda, float16)` | 1.59 s | 0.82 s |
+| `WhisperModel(local path)` again | 0.75 s | 0.80 s |
+
+**Finding B / H5 — the load is ~5–10× slower inside the daemon than
+standalone, with warm files.** In step 4, `download_model` (mostly Python:
+hub + httpx) took ~12 s in the daemon vs 0.86 s standalone. The leading
+suspect is GIL contention with the live recording: load-on-arm runs the load
+while the user is still talking, so the audio callback, level meter and Qt
+overlay are all active. This morning's v0.7.0 load of 2.7 s came with a short
+2.9 s utterance; tonight's 15–19 s loads came with 11–14 s utterances. H4 is
+the other side of the same contention (the load starves the UI and audio).
+Proposed A/B (owner): after a restart, a ~1 s dictation vs (after another
+restart) a ~12 s dictation, comparing `Model loaded in`.
+
+E1: · E3:
