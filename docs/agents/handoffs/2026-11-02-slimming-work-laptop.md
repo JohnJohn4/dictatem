@@ -292,4 +292,57 @@ dGPU/Optimus power state, the network/proxy path, or an MDE cache TTL. Next:
 leave the machine idle ≥20 min with the daemon stopped (a resident model keeps
 the GPU awake), then run a finer-grained standalone split under py-spy.
 
-E1: · E3:
+**Idle test (Finding C follow-up), daemon stopped 22:40, run at 23:01 after
+21 min idle.** `C:\Temp\dictatem-perf\idle_split.py`. (The py-spy-wrapped run
+died: `py-spy record -- Scripts\python.exe` attaches to the venv redirector,
+not the child interpreter.) The first full run after the idle was **fast**:
+DNS 0.03 s, register DLL dirs 0.18 s, import ct2 0.15 s, import
+faster_whisper 0.31 s, `download_model` 0.64 s, `get_cuda_device_count`
+1.71 s, ct2 construct 0.68 s, **total 3.69 s**. So a plain idle gap doesn't
+make a standalone load slow, and **Finding C's cause is still open**. It may
+need the daemon to have been resident across the gap. Next step: arm py-spy
+on the live daemon's *child* PID and catch a slow (≥15 min gap) load.
+
+**E1 (H1) — NVML is ~8× cheaper cold.** Fresh `UV_LINK_MODE=copy` venvs
+(`C:\Temp\dictatem-perf\e1`), each with only its own package:
+
+| | 1st run (fresh files) | 2nd run |
+|---|---|---|
+| `import ctranslate2` + `get_cuda_device_count()` | **7.61 s** (5.93 + 1.68) | 0.88 s |
+| `import pynvml` + `nvmlInit()` + `nvmlDeviceGetCount()` | **0.89 s** (0.19 + 0.70) | 0.22 s |
+
+The daemon's cold `hw probe` (15.1 s in step 3) is larger than ct2 alone,
+because it competes with the rest of the cold import tree. Either fix
+direction (tray first, or NVML-only presence check) removes most of it from
+the tray path.
+
+**E3 — every fresh copy pays again, partly.** A second uninstall +
+`UV_LINK_MODE=copy` reinstall (29.3 s): `Startup timing: interpreter 4.42s |
+adapters 0.86s | imports 4.47s | lock 0.13s | hw probe 8.17s | … | total
+19.04s` (step 3: 37.14 s / 15.10 s). A standalone cold load + transcribe of
+4 s of noise with VAD off (`cold_transcribe.py`, which overlapped the
+daemon's own startup for its first ~19 s): **engine import 17.81 s, weights
+7.00 s, 1st transcribe 35.95 s**, 2nd 0.15 s. The immediate repeat was 0.58 s
+/ 2.11 s / 0.95 s. So identical content in new files is **not** free: it is
+roughly half of the first cold cost, and the cuBLAS/cuDNN first-transcribe
+stall (~36 s) is reproducible outside the daemon. Every update that rewrites
+the NVIDIA wheels will pay it again.
+
+## Conclusions (for the owner's fix decision)
+
+1. **H1 confirmed.** On a cold launch the probe is 8–15 s of the 19–37 s
+   before the tray. ct2 detection costs 7.6 s cold vs 0.9 s with NVML.
+2. **H2 confirmed and the biggest cost.** The first real transcribe after
+   new files costs 36–74 s. It reproduces standalone, and E3 shows it recurs
+   on every fresh copy. Finding A shows it can also recur without new files.
+3. **H3 killed as a speed issue** (offline made no difference). It is still
+   an outbound call per load.
+4. **H4 strongly supported.** During the background load the audio callback
+   overflows (3× in step 3, also on 2026-10-28), the pill appears late, and
+   one attempt captured 0.34 s and came back empty. This is a user-visible
+   bug: lost audio, not just latency.
+5. **H5 killed** (recording length isn't the driver). **Finding C (slow warm
+   loads after ~15 min) is still unexplained** and only reproduces inside the
+   resident daemon so far.
+6. **Missed first hotkey press** after a restart: no log trace. Probably
+   pressed before the tray was back (~20 s); hotkey events are not logged.
