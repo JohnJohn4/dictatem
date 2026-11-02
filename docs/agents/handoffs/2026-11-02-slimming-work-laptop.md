@@ -139,7 +139,7 @@ RTX 500 Ada Laptop 4 GB (driver 596.71), MDE. Date 2026-11-02. Branch commit
 | Step | Install time | Env size | Startup timing (total; hw probe) | Model load (import / weights) | 1st transcribe | 2nd transcribe |
 |---|---|---|---|---|---|---|
 | 1 upgrade | 29.9 s | 2,928 → 2,489 MB | 11.86 s; 3.64 s | 38.2 s (23.36 s / 14.88 s) | 36.93 s (6.3 s audio) | 1.07 s (6.0 s audio) |
-| 3 cold | | | | | | |
+| 3 cold (`UV_LINK_MODE=copy`) | 29.9 s (35 pkgs, 17.1 s link) | 2,483 MB | **37.14 s; 15.10 s** | **60.1 s (46.52 s / 13.54 s)** | **73.74 s** (2.7 s audio) | 0.78 s (9.0 s audio) |
 | 4 warm | | | | | | |
 
 **Step 1 (upgrade from v0.7.0).** Installer output was clean: it stopped the
@@ -187,5 +187,24 @@ callback cannot run. That fits a pill that doesn't appear, and only 0.338 s
 of audio from the first attempt. Not yet proven; a test would log
 hotkey-press → pill-shown latency and captured-vs-held duration during a cold
 load.
+
+**Step 3 (true cold).** Full startup line: `interpreter 7.86s | adapters 2.02s |
+imports 9.27s | lock 1.15s | config 0.01s | hw probe 15.10s | autostart 0.00s |
+qt app 0.71s | setup 0.21s | overlay+tray 0.45s | wiring 0.35s | total 37.14s`.
+H1 confirmed: with fresh files the probe is the largest single phase before the
+tray, but interpreter + adapters + imports add another ~19 s. The first
+dictation took about **2 min 14 s** end to end (load 60.1 s + transcribe
+73.7 s). The owner reports a very slow pill on arm and a pill that "took a
+while to go away" (that was the 73.7 s transcribe behind it). Same shape as
+v0.7.0 earlier today (57.4 s load) and on 2026-10-28 (`Model loaded in
+120.4s`), so this is not a regression from this branch. The branch changes no
+runtime behaviour.
+
+**H4 evidence:** three `Audio callback status: input overflow` warnings
+(21:14:20, :33, :43) fell inside the 46.5 s engine import. The PortAudio
+callback could not be serviced while the background import ran, which is
+consistent with the import holding the GIL. 2026-10-28 shows the same
+warnings during its 120 s cold load. Because of this, the first cold
+dictation can lose audio, not just arrive late.
 
 E1: · E2: · E3:
