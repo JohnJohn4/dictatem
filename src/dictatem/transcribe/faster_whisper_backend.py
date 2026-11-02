@@ -133,8 +133,13 @@ class FasterWhisperBackend:
         self._progress_callback: Callable[[int, int], None] | None = None
 
     def load_model(self) -> None:
+        import time
+
+        started = time.perf_counter()
         _register_cuda_dll_directories()
         from faster_whisper import WhisperModel  # type: ignore[import-not-found]
+
+        imported = time.perf_counter()
 
         from dictatem.transcribe.vocabulary import (
             backend_supports_hotwords,
@@ -145,6 +150,14 @@ class FasterWhisperBackend:
             self._model_name,
             device=self._device,
             compute_type=self._compute_type,
+        )
+        # Split the load so a cold-launch AV scan (first import of the
+        # faster-whisper/ctranslate2/onnxruntime DLL tree) is distinguishable
+        # from reading the weights onto the device.
+        logger.info(
+            "Model load breakdown: engine import %.2fs, weights %.2fs",
+            imported - started,
+            time.perf_counter() - imported,
         )
         # Detect the capability on the actual model instance, then bake the
         # hint kwargs so every transcribe call reuses them.

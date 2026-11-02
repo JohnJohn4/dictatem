@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     )
     from dictatem.overlay.state import OverlayState
     from dictatem.permissions.mapper import MacPermission, PermissionGuidance
+    from dictatem.startup_timing import StartupTimer
     from dictatem.state import StateMachine
     from dictatem.transcribe.language import LanguageSelector
     from dictatem.transcribe.latency_monitor import LatencyMonitor
@@ -77,6 +78,17 @@ if TYPE_CHECKING:
     from dictatem.upgrade.core import UpgradeDecision
 
 logger = logging.getLogger(__name__)
+
+# Startup phase timer (diagnostics only): created at main() entry, marked along
+# the launch path, summarised as one `Startup timing:` log line. None when the
+# daemon is driven without main() (tests), so every mark is a no-op there.
+_startup_timer: StartupTimer | None = None
+_startup_interpreter_s: float | None = None
+
+
+def _startup_mark(phase: str) -> None:
+    if _startup_timer is not None:
+        _startup_timer.mark(phase)
 
 
 def _target_name(target: TriggerTarget) -> str:
@@ -1731,6 +1743,12 @@ def main(argv: list[str] | None = None) -> None:
     ``--install-macos-app`` generates the ``Dictatem.app`` identity shell
     (#61 / ADR-0014) instead of starting the daemon.
     """
+    global _startup_timer, _startup_interpreter_s
+    from dictatem.startup_timing import StartupTimer, process_age_s
+
+    _startup_interpreter_s = process_age_s()
+    _startup_timer = StartupTimer()
+
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -2267,6 +2285,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     stay lazy so importing ``dictatem.daemon`` pulls in no GUI/audio/ML
     dependency.
     """
+    _startup_mark("adapters")
     import time
     from pathlib import Path
 
@@ -2309,6 +2328,8 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     )
     from dictatem.transform.recognizer import shadowed_builtin_aliases
     from dictatem.tray.qt_tray import QtTrayIcon
+
+    _startup_mark("imports")
 
     # Configure logging before load_config so the first-run Hardware Tier
     # baking line (logged inside load_config) is actually emitted. Start at
@@ -2353,6 +2374,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     if _instance_lock is None:
         logger.warning("Another Dictatem instance is already running; exiting")
         return
+    _startup_mark("lock")
 
     config_path = default_config_path()
     # First run with no config: probe the machine once and bake the resolved
@@ -2364,6 +2386,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     is_first_run = not config_path.exists()
     probe = adapters.probe
     config, config_report = load_config_with_report(config_path, probe=probe)
+    _startup_mark("config")
 
     # Reconcile the config's pinned transcription hardware against the machine
     # we're actually on (#39 / ADR-0009). A config baked on a GPU box and then
@@ -2383,6 +2406,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         profile=probe.probe(),
     )
     fallback_reason = reconciliation.fallback_reason
+    _startup_mark("hw probe")
     # Transcription hardware only. select_backend reads only the model, device
     # and compute_type: we deliberately do NOT apply the resolved
     # transform_model, because the Transform/Ollama model is independent of
@@ -2421,8 +2445,10 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             # path — must never kill startup; the tray toggle path is wrapped
             # the same way.
             logger.error("Error reconciling autostart on launch", exc_info=True)
+    _startup_mark("autostart")
 
     app = QApplication(sys.argv)
+    _startup_mark("qt app")
     # The daemon is a tray app with no persistent main window: the overlay pill
     # and the guided permission dialogs are transient. Without this, Qt's
     # default quits the whole daemon when the last window closes — on macOS,
@@ -2532,10 +2558,12 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         fade_in_ms=config.overlay.fade_in_ms,
         fade_out_ms=config.overlay.fade_out_ms,
     )
+    _startup_mark("setup")
     overlay_widget = QtOverlayWidget(overlay_state)
     overlay = _OverlayAdapter(state=overlay_state, widget=overlay_widget)
 
     tray_icon = QtTrayIcon(app)
+    _startup_mark("overlay+tray")
     tray = _TrayAdapter(icon=tray_icon)
 
     sm = StateMachine(tap_threshold_ms=config.hotkey.tap_threshold_ms)
@@ -2976,6 +3004,9 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             2000, lambda: tray.show_notification(notice.title, notice.body)
         )
 
+    _startup_mark("wiring")
+    if _startup_timer is not None:
+        logger.info("%s", _startup_timer.summary(interpreter_s=_startup_interpreter_s))
     logger.info("Dictatem daemon started")
     try:
         app.exec()
