@@ -358,11 +358,31 @@ $requirement = "dictatem[$extras] @ $source"
 # an invalid one, so this runs on every arch.
 if (Test-DictatemEnvBroken) { Repair-DictatemToolEnv }
 
+# One-time PySide6 meta -> PySide6-Essentials migration. Releases up to v0.7.0
+# depended on the `PySide6` meta package (which drags in ~450 MB of unused
+# Addons/WebEngine); later ones depend on `PySide6-Essentials` alone. Both wheels
+# ship the SAME `PySide6\__init__.py` (+ _config.py, *.pyi), so an in-place
+# upgrade that uninstalls the meta deletes files Essentials still needs and Qt
+# fails with "DLL load failed while importing QtCore" — a dead tray. Reinstalling
+# Essentials in the same uv transaction rewrites them. Gated on the meta's
+# dist-info (`pyside6-<ver>.dist-info`; the others are `pyside6_<name>-...`) so a
+# steady-state upgrade doesn't rewrite ~200 MB of Qt and re-trigger AV scans.
+function Test-DictatemHasPySide6Meta {
+    $envDir = Get-DictatemToolEnvDir
+    if (-not $envDir) { return $false }
+    $site = Join-Path $envDir 'Lib\site-packages'
+    if (-not (Test-Path -LiteralPath $site)) { return $false }
+    return [bool](Get-ChildItem -LiteralPath $site -Directory -Filter 'pyside6-*.dist-info' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -match '^pyside6-\d' })
+}
+$migrateArgs = @()
+if (Test-DictatemHasPySide6Meta) { $migrateArgs = @('--reinstall-package', 'pyside6-essentials') }
+
 Write-Host "Installing dictatem[$extras] from $source ..."
 # @forceArgs / @pythonArgs pin the interpreter (step 2.5, #90 / ADR-0017 / #181):
 # on x64 they expand to `--managed-python --python 3.12`; on ARM64 to `--force
 # --python cpython-3.11-windows-x86_64` (ARM pins 3.11, not 3.12 — see step 2.5).
-uv tool install @forceArgs @pythonArgs $requirement
+uv tool install @forceArgs @pythonArgs @migrateArgs $requirement
 # $ErrorActionPreference='Stop' does NOT halt on a native exe's non-zero exit,
 # so guard explicitly — otherwise a failed install falls through to the launch
 # below and surfaces as a misleading "cannot find the file" error.
@@ -377,7 +397,7 @@ if ($LASTEXITCODE -ne 0) {
     if (Test-DictatemEnvBroken) {
         Write-Host "uv tool install failed (exit code $LASTEXITCODE) — recovering the broken tool environment and retrying once..."
         Repair-DictatemToolEnv
-        uv tool install @forceArgs @pythonArgs $requirement
+        uv tool install @forceArgs @pythonArgs @migrateArgs $requirement
     }
     if ($LASTEXITCODE -ne 0) {
         # --managed-python (step 2.5) needs a recent uv; step 1 only installs uv
