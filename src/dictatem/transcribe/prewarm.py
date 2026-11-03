@@ -66,9 +66,12 @@ def should_prewarm(
 
 
 # A prewarm this slow means an endpoint scanner checks each file the engine
-# opens, and its verdicts expire after a gap (work laptop: ~6-30 min). A normal
-# machine prewarms in a few seconds.
-SLOW_PREWARM_S = 10.0
+# opens, and its verdicts expire after a gap (work laptop: ~6-30 min). Measured
+# 2026-11-03: a normal consumer PC prewarms in 6-8 s (cold copy / upgrade); the
+# MDE work laptop took 45.8-212 s whenever its files were cold. 20 s leaves a
+# normal PC 2.5x headroom (a slow disk or third-party AV shouldn't flip it) and
+# still sits far below every genuinely slow scan.
+SLOW_PREWARM_S = 20.0
 
 def slow_engine_marker(home: Path) -> Path:
     """Sentinel written when a prewarm was slow (an endpoint scanner is present)."""
