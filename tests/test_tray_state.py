@@ -62,18 +62,16 @@ class TestMenuItemEnabled:
         assert loaded.menu_item_enabled(MenuItem.UNLOAD) is True
         assert not_loaded.menu_item_enabled(MenuItem.UNLOAD) is False
 
-    def test_preload_enabled_only_when_model_not_loaded(self) -> None:
-        loaded = TrayState(is_recording=False, is_model_loaded=True, has_error=False)
-        not_loaded = TrayState(is_recording=False, is_model_loaded=False, has_error=False)
-        assert loaded.menu_item_enabled(MenuItem.PRELOAD) is False
-        assert not_loaded.menu_item_enabled(MenuItem.PRELOAD) is True
+    def test_there_is_no_preload_item(self) -> None:
+        # The model loads on arm; [startup] preload_model covers always-warm.
+        assert "PRELOAD" not in MenuItem.__members__
 
-    def test_preload_disabled_while_loading(self) -> None:
-        loading = TrayState(
-            is_recording=False, is_model_loaded=False, has_error=False,
-            is_model_loading=True,
-        )
-        assert loading.menu_item_enabled(MenuItem.PRELOAD) is False
+    def test_microphone_submenu_is_always_enabled(self) -> None:
+        for state in (
+            TrayState(is_recording=False, is_model_loaded=False, has_error=False),
+            TrayState(is_recording=True, is_model_loaded=True, has_error=False),
+        ):
+            assert state.menu_item_enabled(MenuItem.MICROPHONE) is True
 
     def test_unload_disabled_while_loading(self) -> None:
         loading = TrayState(
@@ -138,7 +136,7 @@ class TestMenuItemEnabled:
 class TestMenuItemOrder:
     def test_enum_order_matches_documented_spec(self) -> None:
         expected = ["HOTKEY_HINT", "START", "STOP", "COPY_LAST_DICTATION",
-                    "PRELOAD", "UNLOAD", "AUTOSTART", "SHOW_LOG", "OPEN_CONFIG",
+                    "UNLOAD", "MICROPHONE", "AUTOSTART", "SHOW_LOG", "OPEN_CONFIG",
                     "HELP", "RESTART", "UPGRADE", "QUIT", "VERSION"]
         actual = [m.name for m in MenuItem]
         assert actual == expected

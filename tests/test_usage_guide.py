@@ -146,7 +146,8 @@ class TestFirstUseSection:
     def test_explains_model_load_and_preload(self) -> None:
         html = usage_guide_html(("win", "alt"), platform="win32")
         assert "First use" in html
-        assert "Preload model" in html
+        assert "preload_model" in html
+        assert "Unload model" in html
 
     def test_explains_one_time_download_then_offline(self) -> None:
         # ADR-0025 / #164: the model downloads once on first run, then offline.

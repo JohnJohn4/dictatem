@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from dictatem.audio.buffer import AudioBuffer
+    from dictatem.audio.input_devices import MicrophoneMenuEntry
     from dictatem.config import Config, ConfigLoadReport
     from dictatem.hardware.resolver import RuntimeFallbackReason
     from dictatem.hotkey.classifier import (
@@ -2670,7 +2671,6 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     tray_icon.on_start = daemon.on_tray_start_recording
     tray_icon.on_stop = daemon.on_tray_stop_recording
     tray_icon.on_copy_last_dictation = daemon.on_tray_copy_last_dictation
-    tray_icon.on_preload = daemon.on_tray_preload
     tray_icon.on_unload = daemon.on_tray_unload
     tray_icon.on_autostart_toggled = daemon.on_tray_set_autostart
     tray_icon.set_autostart_checked(config.startup.autostart)
@@ -2858,6 +2858,48 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         # runs from the tray menu, so no classifier/bridge machinery is built and
         # the hotkey hint stays hidden.
         logger.info("No global-hotkey adapter on this platform — use the tray menu")
+        tray_icon.set_manual_recording_available(True)
+
+    # Microphone handling for the PortAudio capture (Windows). PortAudio is
+    # initialised shortly after launch (so the first hotkey press doesn't pay
+    # for it), re-scanned when idle after each dictation and when the tray's
+    # Microphone menu opens, so a newly plugged-in mic is used from the next
+    # dictation. All on the GUI thread; a re-scan never opens the microphone.
+    from dictatem.audio.input_devices import microphone_menu_entries
+    from dictatem.audio.sounddevice_capture import SoundDeviceCapture
+
+    if isinstance(audio_capture, SoundDeviceCapture):
+        mic_capture = audio_capture
+        QTimer.singleShot(500, mic_capture.initialize)
+
+        def _microphone_menu() -> list[MicrophoneMenuEntry]:
+            if sm.state is State.IDLE:
+                mic_capture.refresh_devices()
+            return microphone_menu_entries(
+                mic_capture.input_device_names(), mic_capture.device_spec
+            )
+
+        def _select_microphone(value: str | None) -> None:
+            mic_capture.set_device(value)
+            config.audio.device = value
+            logger.info(
+                "Microphone set to %s", "system default" if value is None else repr(value)
+            )
+            if config_report.write_protected:
+                # Same rule as Start at login: a config with problems is never
+                # rewritten, so the choice applies for this session only.
+                logger.info("Config has problems; microphone choice is for this session only")
+                return
+            try:
+                write_config(config, config_path)
+            except OSError:
+                logger.error("Could not save the microphone choice", exc_info=True)
+
+        tray_icon.on_microphone_menu = _microphone_menu
+        tray_icon.on_microphone_selected = _select_microphone
+        tray_icon.set_microphone_available(True)
+    else:
+        mic_capture = None
 
     silence_timer = QTimer()
     silence_timer.setInterval(5000)
@@ -2866,6 +2908,8 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         daemon.check_silence(now_ms=int(time.monotonic() * 1000))
         daemon.check_idle()
         daemon.sync_model_loaded()
+        if mic_capture is not None and sm.state is State.IDLE:
+            mic_capture.refresh_if_due()
 
     silence_timer.timeout.connect(_on_silence_tick)
     silence_timer.start()
@@ -2887,23 +2931,6 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         preload_model=config.startup.preload_model,
     ):
         QTimer.singleShot(1000, start_prewarm)
-
-    # Load the PortAudio DLL in the background so the first hotkey press of the
-    # session doesn't pay for it before the mic opens and the pill can show. The
-    # library file only: PortAudio itself still initialises at the first press,
-    # so a headset/dock plugged in after launch is still seen. Never opens the mic.
-    from dictatem.audio.sounddevice_capture import (
-        SoundDeviceCapture,
-        preload_portaudio_library,
-    )
-
-    if sys.platform == "win32" and isinstance(audio_capture, SoundDeviceCapture):
-        QTimer.singleShot(
-            500,
-            lambda: threading.Thread(
-                target=preload_portaudio_library, name="dictatem-audio-preload", daemon=True
-            ).start(),
-        )
 
     # First-run model fetch (ADR-0025 / #162): on the daemon's first run — the
     # run the installer triggers, right after tier resolution, while the network
@@ -2969,6 +2996,8 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
                 if permission is MacPermission.INPUT_MONITORING:
                     # Where the user looks when the hotkey "does nothing".
                     tray_icon.set_hotkey_hint(HOTKEY_OFF_HINT)
+                    # No hotkey: the tray's Start/Stop are the way to record.
+                    tray_icon.set_manual_recording_available(True)
                 if startup_permission_check_done:
                     _handle_permission_report(permission)
                 else:
