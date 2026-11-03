@@ -486,5 +486,9 @@ the work laptop:
   slow prewarms predate the code), the log shows `Engine kept resident in this
   process (1.6s; no model loaded)`.
 - RSS 96 MB → 325 MB; `nvidia-smi` shows no compute process and 0 MiB used.
-- **Pending: owner dictation after a ≥ 30 min gap.** Expect ≈ construct
-  (~3 s) + 1st transcribe (~1 s) instead of 14.5 s.
+- **Owner dictation after a 35 min gap (16:28): `Model loaded in 3.1s`
+  (engine import 0.01s, weights 3.12s (resolve 0.07s, construct 3.05s))**,
+  then `Transcribe call took 1.45s`. Before the fix (15:44, ~50 min gap):
+  14.5 s (4.44 / 6.88 / 3.15). The load finished while the owner was still
+  speaking: stop → paste ~1.5 s (was ~12.8 s). Owner: "wow that was much
+  faster". Remaining: the model-file read (construct ~3 s) after a gap.
