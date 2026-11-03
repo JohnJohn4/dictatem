@@ -21,7 +21,7 @@ with macOS 14+, and runs on the CPU elsewhere.
 ## Install
 
 One command per platform. Both install [`uv`](https://docs.astral.sh/uv/) if
-needed, install Dictatem pinned to the **v0.8.1** release, and launch it — the
+needed, install Dictatem pinned to the **v0.8.2** release, and launch it — the
 tray / menu-bar icon appears a few seconds later. Everything runs as your own
 user (no admin / `sudo`).
 
@@ -35,13 +35,13 @@ is supported via x64 emulation.
 Run in **PowerShell**:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.1/install.ps1 | iex
+Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.2/install.ps1 | iex
 ```
 
 The leading `Set-ExecutionPolicy` clears a restrictive execution policy **for
 this window only** (no admin, reverts when you close the terminal). The installer
 also adds `dictatem` to your user `PATH`. Prefer to read the script first? Open
-[the URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.1/install.ps1)
+[the URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.2/install.ps1)
 and run it once you're satisfied.
 
 ### macOS
@@ -112,7 +112,7 @@ the CPU engine.
 Run in **Terminal**:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.1/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.2/install.sh | sh
 ```
 
 This generates `~/Applications/Dictatem.app` and starts Dictatem in the menu bar
