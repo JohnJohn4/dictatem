@@ -8,6 +8,7 @@ import os
 import queue
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -178,6 +179,44 @@ def _add_rotating_log_file() -> logging.handlers.TimedRotatingFileHandler | None
     return handler
 
 
+
+
+# Hotkey input events get one INFO line each (#283 work-laptop QA): a press that
+# "did nothing" otherwise leaves no trace, and the lag/handled timings show
+# whether the GUI thread was starved (late dispatch) or record-start itself
+# blocked (slow handling). Event and state names only — never key content
+# beyond the configured hotkey, never dictated text (#188).
+_LOGGED_INPUT_EVENTS = frozenset({Event.KEY_DOWN, Event.KEY_UP, Event.ESC})
+
+
+def _log_input_event(
+    event: Event,
+    *,
+    state_before: State,
+    state_after: State,
+    commands: list[Command],
+    event_ms: int,
+    started: float,
+    finished: float,
+) -> None:
+    """Log one hotkey input event with its dispatch lag and handling time.
+
+    ``event_ms`` is the hook's ``time.monotonic()`` stamp in ms; the lag is how
+    long the event waited for the GUI thread. Synthetic tray-driven events pass
+    a non-positive stamp, so their lag is omitted.
+    """
+    lag = (
+        f"{started * 1000 - event_ms:.0f}ms" if event_ms > 0 else "n/a"
+    )
+    logger.info(
+        "Hotkey %s: %s -> %s [%s] lag %s, handled in %.0fms",
+        event.name,
+        state_before.name,
+        state_after.name,
+        ", ".join(c.name for c in commands) or "no-op",
+        lag,
+        (finished - started) * 1000,
+    )
 
 
 class _OverlayAdapter:
@@ -630,8 +669,20 @@ class DaemonCore:
     def on_hotkey_event(self, event: Event, *, now_ms: int = 0) -> None:
         """Feed an event to the state machine and execute resulting commands."""
         try:
+            state_before = self._sm.state
+            started = time.monotonic()
             commands = self._sm.handle(event, now_ms=now_ms)
             self._execute_commands(commands, now_ms=now_ms)
+            if event in _LOGGED_INPUT_EVENTS:
+                _log_input_event(
+                    event,
+                    state_before=state_before,
+                    state_after=self._sm.state,
+                    commands=commands,
+                    event_ms=now_ms,
+                    started=started,
+                    finished=time.monotonic(),
+                )
         except Exception:
             logger.error("Unhandled error in hotkey event handler", exc_info=True)
             self._tray.show_notification(
@@ -2822,6 +2873,20 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     if config.startup.preload_model:
         logger.info("Startup preload enabled — loading model in background")
         daemon.on_tray_preload()
+
+    # Engine prewarm (ADR-0029): load the engine DLLs once in a throwaway
+    # below-normal-priority child so an endpoint scanner's first-load cost is
+    # paid in the background, not by the first dictation. Deferred a moment so
+    # the tray's first paint isn't competing for disk. Never waited on.
+    from dictatem.transcribe.prewarm import should_prewarm, start_prewarm
+
+    if should_prewarm(
+        platform=sys.platform,
+        backend_kind=selection.kind,
+        enabled=config.startup.prewarm_engine,
+        preload_model=config.startup.preload_model,
+    ):
+        QTimer.singleShot(1000, start_prewarm)
 
     # First-run model fetch (ADR-0025 / #162): on the daemon's first run — the
     # run the installer triggers, right after tier resolution, while the network

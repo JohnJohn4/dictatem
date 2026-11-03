@@ -305,6 +305,7 @@ silence_timeout_s = 60          # auto-stop a toggle recording after this much s
 [startup]
 autostart = true
 preload_model = false           # load at startup vs. when you first arm a dictation
+prewarm_engine = true           # Windows: pre-load engine DLLs in the background at launch (no model)
 
 [transform]
 enabled = true                  # master switch for Trigger Words
@@ -365,6 +366,12 @@ next dictation.
 
 Want an instant first response instead? Set `preload_model = true` under
 `[startup]`, raise `idle_unload_minutes`, or use **Preload Model** in the tray menu.
+
+On Windows, a second after launch Dictatem also loads the transcription engine's
+DLLs once in a short-lived, low-priority background process (no model, no GPU
+memory). On machines with endpoint antivirus that scans each new DLL, this moves
+a one-off delay of up to a minute or more from your first dictation into the
+background. Turn it off with `prewarm_engine = false` under `[startup]`.
 
 ### Customising
 
