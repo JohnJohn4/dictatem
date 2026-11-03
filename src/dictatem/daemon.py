@@ -2888,6 +2888,23 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     ):
         QTimer.singleShot(1000, start_prewarm)
 
+    # Load the PortAudio DLL in the background so the first hotkey press of the
+    # session doesn't pay for it before the mic opens and the pill can show. The
+    # library file only: PortAudio itself still initialises at the first press,
+    # so a headset/dock plugged in after launch is still seen. Never opens the mic.
+    from dictatem.audio.sounddevice_capture import (
+        SoundDeviceCapture,
+        preload_portaudio_library,
+    )
+
+    if sys.platform == "win32" and isinstance(audio_capture, SoundDeviceCapture):
+        QTimer.singleShot(
+            500,
+            lambda: threading.Thread(
+                target=preload_portaudio_library, name="dictatem-audio-preload", daemon=True
+            ).start(),
+        )
+
     # First-run model fetch (ADR-0025 / #162): on the daemon's first run — the
     # run the installer triggers, right after tier resolution, while the network
     # is still up — download the resolved tier's weights to disk so the first

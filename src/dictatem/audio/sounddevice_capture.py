@@ -41,6 +41,53 @@ def _resolve_device(device_spec: str | None) -> int | None:
     )
 
 
+def bundled_portaudio_dll_name(*, platform_tag: str, arch_bits: str, asio: bool) -> str:
+    """The bundled PortAudio DLL ``sounddevice`` loads on Windows.
+
+    Mirrors sounddevice's own choice (``libportaudio<64bit|32bit|arm64>[-asio].dll``
+    under ``_sounddevice_data/portaudio-binaries``). If this ever drifts from
+    sounddevice, the preload just loads the wrong file and saves nothing.
+    """
+    suffix = "arm64" if ("arm64" in platform_tag or "aarch64" in platform_tag) else arch_bits
+    return f"libportaudio{suffix}{'-asio' if asio else ''}.dll"
+
+
+def preload_portaudio_library() -> None:
+    """Load the PortAudio DLL (and sounddevice's cffi module) ahead of first use.
+
+    Pill-delay QA (work laptop, 2026-11-03): the first hotkey press of a session
+    blocked the GUI thread ~0.3 s+ importing sounddevice before the mic opened
+    and the pill could show (more when cold). This loads the library file only.
+    It does **not** import ``sounddevice``, whose import runs ``Pa_Initialize``
+    and freezes PortAudio's device list. Initialising at launch would hide a
+    headset or dock plugged in between launch and the first dictation, so that
+    stays at the first press, exactly as before. Never opens the microphone.
+    Best-effort: any failure only forfeits the speed-up.
+    """
+    import os
+    import platform
+    import sysconfig
+
+    try:
+        import ctypes
+
+        import _sounddevice  # type: ignore[import-not-found]  # noqa: F401  (cffi module)
+        import _sounddevice_data  # type: ignore[import-not-found]
+
+        name = bundled_portaudio_dll_name(
+            platform_tag=sysconfig.get_platform(),
+            arch_bits=platform.architecture()[0],
+            asio="SD_ENABLE_ASIO" in os.environ,
+        )
+        path = os.path.join(
+            next(iter(_sounddevice_data.__path__)), "portaudio-binaries", name
+        )
+        ctypes.WinDLL(path)  # type: ignore[attr-defined]
+        logger.debug("Preloaded %s", name)
+    except Exception as exc:
+        logger.debug("PortAudio preload skipped: %s", exc)
+
+
 class SoundDeviceCapture:
     def __init__(self, config: Config, buffer: AudioBuffer) -> None:
         self._sample_rate = config.audio.sample_rate
