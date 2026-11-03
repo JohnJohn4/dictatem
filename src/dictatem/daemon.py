@@ -365,6 +365,13 @@ class _HotkeyBridge:
         to dispatch now or defer. Must be called with ``_lock`` held.
         """
         decision, event = self._classifier.process_event(key, action, timestamp_ms)
+        dropped = getattr(self._classifier, "last_dropped_stale", ())
+        if dropped:
+            logger.info(
+                "Hotkey: ignored stale held key(s) %s (their release was missed, e.g. "
+                "after Win+L or over an admin window); not starting a dictation",
+                ", ".join(k.name for k in dropped),
+            )
         is_combo = self._classifier.combo_held
         actions: list[tuple[Event, int]] = []
 
@@ -2837,9 +2844,17 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 
     bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:
+        physical_state = None
+        if sys.platform == "win32":
+            # Drop a held combo key whose key-up the hook missed (Win+L,
+            # elevated windows) before it can turn a lone Alt into Win+Alt.
+            from dictatem.hotkey.win32_keymap import physical_key_state
+
+            physical_state = physical_key_state
         classifier = HotkeyClassifier(
             tap_threshold_ms=config.hotkey.tap_threshold_ms,
             modifiers=config.hotkey.modifiers,
+            physical_state=physical_state,
         )
         classifier.set_active(True)
         bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)

@@ -9,6 +9,10 @@ before feeding this classifier, and modifier names from config resolve to
 from __future__ import annotations
 
 import enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class Key(enum.Enum):
@@ -94,8 +98,20 @@ class HotkeyClassifier:
         self,
         tap_threshold_ms: int = 200,
         modifiers: tuple[str, ...] = ("win", "alt"),
+        physical_state: Callable[[Key], bool | None] | None = None,
     ) -> None:
         self._tap_threshold_ms = tap_threshold_ms
+        # Asks the OS whether a key is physically down right now: True/False,
+        # or None when it can't tell. Used only at the instant a key-down would
+        # complete the combo, to drop a held key whose key-up the hook never
+        # saw. Win+L releases Win on the secure desktop, and releasing a key
+        # over an elevated window is invisible to a non-elevated hook. Without
+        # this, the stuck key plus the combo's other key alone (e.g. Alt+Enter
+        # in Excel) started a dictation. None = trust the event stream (tests,
+        # platforms without a query).
+        self._physical_state = physical_state
+        # Combo keys dropped as stale by the most recent ``process_event``.
+        self.last_dropped_stale: tuple[Key, ...] = ()
         self._modifier_groups: list[frozenset[Key]] = [
             _MODIFIER_MAP[name] for name in modifiers if name in _MODIFIER_MAP
         ]
@@ -157,6 +173,7 @@ class HotkeyClassifier:
     ) -> tuple[HookDecision, HotkeyEvent | None]:
         # Recomputed for the current event only; a key-down/tick never masks.
         self._pending_mask = False
+        self.last_dropped_stale = ()
         if action is KeyAction.KEY_DOWN:
             return self._on_key_down(key, timestamp_ms)
         return self._on_key_up(key, timestamp_ms)
@@ -181,6 +198,10 @@ class HotkeyClassifier:
 
         was_combo = self.combo_held
         self._keys_down.add(key)
+        if not was_combo and self.combo_held:
+            # This press would complete the combo: the other combo keys must
+            # really be held, not stuck from a missed key-up.
+            self._drop_stale_combo_keys(except_key=key)
         is_combo = self.combo_held
         if key in SIDE_EFFECT_KEYS and self._is_trigger_button(key):
             self._session_lone[key] = True
@@ -208,6 +229,24 @@ class HotkeyClassifier:
             return HookDecision.PASS_THROUGH, HotkeyEvent.ESC
 
         return HookDecision.PASS_THROUGH, None
+
+    def _drop_stale_combo_keys(self, *, except_key: Key) -> None:
+        """Forget combo keys the OS says are not physically down (missed key-up)."""
+        if self._physical_state is None:
+            return
+        stale = [
+            held
+            for held in self._keys_down
+            if held is not except_key
+            and self._is_trigger_button(held)
+            and self._physical_state(held) is False
+        ]
+        for held in stale:
+            self._keys_down.discard(held)
+            self._session_lone.pop(held, None)
+            self._session_dictated.discard(held)
+            self._suppressed_mouse_down.discard(held)
+        self.last_dropped_stale = tuple(sorted(stale, key=lambda k: k.value))
 
     def _is_trigger_button(self, key: Key) -> bool:
         """True if *key* (a mouse button or a keyboard modifier) is bound in the
