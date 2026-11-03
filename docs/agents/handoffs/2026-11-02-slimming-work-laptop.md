@@ -446,3 +446,45 @@ the work laptop:
   and used (record-start 156 ms).
 - **Still open:** Finding C. The first loads at 2.5 min and 20 min after
   launch took 12.6 s and 12.0 s (weights ~10 s, offline).
+
+## Finding C: investigated and fixed on `perf/finding-c` (2026-11-03)
+
+**Diagnosis.**
+- Imitation runs (windowless `pythonw`, idle, then load exactly like dictatem;
+  `C:\Temp\dictatem-perf\idle_load.py`).
+- **py-spy with `--native` at 100 Hz distorts timings 10-15×** (C1 60 s, C3
+  97 s vs unprofiled 6-9 s), so those runs are only good for relative hot
+  spots. Lightweight py-spy (Python-only, 50 Hz) is fine.
+- Opting out of power throttling (`SetProcessInformation` /
+  `PROCESS_POWER_THROTTLING_EXECUTION_SPEED`) did **not** help, so EcoQoS is
+  ruled out as the main cause.
+- Clean unprofiled idle runs: 3 min gap 6.2 s, 21 min gap 9.3 s; warm 4.8 s.
+- The daemon's own launch prewarm took **45.8 s** about 30 min after the files
+  were last loaded (normally 1-4 s): **scan verdicts expire after a gap**.
+- A lightweight profile of a real daemon load after a ~50 min gap (`Model loaded
+  in 14.5s`: import 4.44, resolve 6.88, construct 3.15):
+  - "resolve" was really the lazy import of huggingface_hub/httpx2;
+  - 252 of 326 samples were **PySide6's `shibokensupport.feature._mod_uses_pyside`
+    calling `inspect.getsource()`** on every newly imported module (it reads
+    each `.py` source again to look for "PySide6");
+  - the rest was `FileLoader.get_data` (file opens).
+- Standalone (with Qt imported), stock vs patched hook: first run 1.82 s + 0.66 s
+  vs 0.41 s + 0.33 s; warm runs 0.51 + 0.44 vs 0.43 + 0.33.
+
+**Fix (`1228b77`).**
+- (1) `dictatem.qt_import_hook.limit_pyside_source_scan()`, called right after
+  the daemon first imports PySide6: non-dictatem modules skip the source scan
+  (dictatem never uses `__feature__`).
+- (2) The prewarm child writes `~/.dictatem/.slow_engine_load` when it takes
+  ≥ 10 s. With `[startup] resident_engine = "auto"`, the daemon then imports
+  faster-whisper and maps the NVIDIA DLLs in-process after the launch prewarm,
+  and keeps them.
+
+**Verified so far.**
+- Without the marker, auto stayed light (the prewarm took 3.2 s).
+- With the marker (written by hand from the 14:26 45.8 s run, because today's
+  slow prewarms predate the code), the log shows `Engine kept resident in this
+  process (1.6s; no model loaded)`.
+- RSS 96 MB → 325 MB; `nvidia-smi` shows no compute process and 0 MiB used.
+- **Pending: owner dictation after a ≥ 30 min gap.** Expect ≈ construct
+  (~3 s) + 1st transcribe (~1 s) instead of 14.5 s.
