@@ -117,31 +117,25 @@ class MicrophoneMenuEntry:
     # The value to store in ``[audio] device``; None = system default.
     value: str | None
     checked: bool
-    enabled: bool = True
 
 
 def microphone_menu_entries(
     names: Sequence[str], selected: str | None
 ) -> list[MicrophoneMenuEntry]:
-    """The tray's Microphone submenu: system default, each input, and a
-    disabled "(not connected)" row when the selected device is absent."""
-    default_selected = is_default_spec(selected)
+    """The tray's Microphone submenu: System default, then each connected input.
+
+    The tick shows the microphone actually in use. When the chosen device is
+    unplugged it isn't listed and System default is ticked, because that's what
+    dictation falls back to. The choice itself stays saved, so plugging the
+    device back in switches to it again; picking System default forgets it.
+    """
     wanted = (selected or "").strip().lower()
     match: str | None = None
-    if not default_selected:
+    if not is_default_spec(selected):
         exact = [n for n in names if n.lower() == wanted]
         partial = [n for n in names if wanted in n.lower()]
         match = (exact or partial or [None])[0]
 
-    entries = [MicrophoneMenuEntry("System default", None, checked=default_selected)]
+    entries = [MicrophoneMenuEntry("System default", None, checked=match is None)]
     entries.extend(MicrophoneMenuEntry(n, n, checked=(n == match)) for n in names)
-    if not default_selected and match is None:
-        entries.append(
-            MicrophoneMenuEntry(
-                f"{(selected or '').strip()} (not connected)",
-                selected,
-                checked=True,
-                enabled=False,
-            )
-        )
     return entries

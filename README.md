@@ -233,7 +233,8 @@ only when no global hotkey is available.
 
 A microphone plugged in while Dictatem runs is picked up from the next
 dictation. If the chosen microphone is unplugged, Dictatem uses the system
-default instead.
+default (ticked in the menu) and switches back automatically when it's plugged
+in again; choose **System default** to forget it.
 
 ---
 

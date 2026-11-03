@@ -280,7 +280,6 @@ class QtTrayIcon:
             action = menu.addAction(entry.label)
             action.setCheckable(True)
             action.setChecked(entry.checked)
-            action.setEnabled(entry.enabled)
             action.triggered.connect(
                 lambda _checked=False, value=entry.value: self._on_microphone_chosen(value)
             )

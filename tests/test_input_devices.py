@@ -86,10 +86,21 @@ def test_menu_checks_the_chosen_device_by_name_or_substring() -> None:
     ]
 
 
-def test_menu_shows_a_disconnected_choice_greyed_out() -> None:
+def test_unplugged_choice_disappears_and_system_default_is_ticked() -> None:
+    # Dictation falls back to the system default, so that's what's ticked; the
+    # unplugged device isn't listed.
     entries = microphone_menu_entries(["Mic A"], "Headset B")
-    last = entries[-1]
-    assert last.label == "Headset B (not connected)"
-    assert last.checked is True
-    assert last.enabled is False
-    assert not entries[0].checked
+    assert [(e.label, e.checked) for e in entries] == [
+        ("System default", True),
+        ("Mic A", False),
+    ]
+
+
+def test_replugged_choice_is_ticked_again() -> None:
+    # The saved choice survives the unplug, so it comes back when replugged.
+    entries = microphone_menu_entries(["Mic A", "Headset B"], "Headset B")
+    assert [(e.label, e.checked) for e in entries] == [
+        ("System default", False),
+        ("Mic A", False),
+        ("Headset B", True),
+    ]
