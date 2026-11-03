@@ -35,6 +35,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from dictatem.transcribe.backend_selection import BackendKind
+
 logger = logging.getLogger(__name__)
 
 PREWARM_MODULE = "dictatem.transcribe.prewarm"
@@ -45,12 +47,12 @@ _BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
 
 
 def should_prewarm(
-    *, platform: str, backend_kind: str, enabled: bool, preload_model: bool
+    *, platform: str, backend_kind: BackendKind, enabled: bool, preload_model: bool
 ) -> bool:
     """Whether to spawn the prewarm child on this launch.
 
     Windows only (the scanner cost it targets is a Windows one) and only for
-    the faster-whisper engine (``cuda`` / ``cpu``; MLX is macOS). Skipped when
+    the faster-whisper engine (``cuda`` or ``cpu`` device; MLX is macOS). Skipped when
     the user opted into ``preload_model``, which loads the real model at
     launch anyway.
     """
@@ -58,7 +60,7 @@ def should_prewarm(
         enabled
         and not preload_model
         and platform == "win32"
-        and backend_kind in ("cuda", "cpu")
+        and backend_kind == "faster-whisper"
     )
 
 

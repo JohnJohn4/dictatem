@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -17,29 +17,55 @@ from dictatem.transcribe.prewarm import (
     start_prewarm,
 )
 
+if TYPE_CHECKING:
+    from dictatem.transcribe.backend_selection import BackendKind
+
 
 def test_prewarm_is_on_by_default() -> None:
     assert StartupConfig().prewarm_engine is True
 
 
-@pytest.mark.parametrize("kind", ["cuda", "cpu"])
-def test_prewarms_faster_whisper_on_windows(kind: str) -> None:
+def test_prewarms_faster_whisper_on_windows() -> None:
     assert should_prewarm(
-        platform="win32", backend_kind=kind, enabled=True, preload_model=False
+        platform="win32", backend_kind="faster-whisper", enabled=True, preload_model=False
     )
+
+
+def test_prewarm_gate_matches_the_real_backend_selection() -> None:
+    # Regression: the gate once compared against device names ("cuda"/"cpu")
+    # instead of the BackendKind, so it never fired in the daemon.
+    from dictatem.transcribe.backend_selection import select_backend
+    from dictatem.types import ResolvedHardware
+
+    for device in ("cuda", "cpu"):
+        selection = select_backend(
+            ResolvedHardware(
+                tier="t", model="small", device=device, compute_type="int8",
+                transform_model="x",
+            )
+        )
+        assert should_prewarm(
+            platform="win32",
+            backend_kind=selection.kind,
+            enabled=True,
+            preload_model=False,
+        ), device
 
 
 @pytest.mark.parametrize(
     ("platform", "kind", "enabled", "preload"),
     [
         ("darwin", "mlx", True, False),  # macOS / MLX: not the target
-        ("darwin", "cpu", True, False),
-        ("linux", "cuda", True, False),
-        ("win32", "cuda", False, False),  # user turned it off
-        ("win32", "cuda", True, True),  # preload_model loads the real model anyway
+        ("darwin", "faster-whisper", True, False),
+        ("linux", "faster-whisper", True, False),
+        ("win32", "mlx", True, False),
+        ("win32", "faster-whisper", False, False),  # user turned it off
+        ("win32", "faster-whisper", True, True),  # preload_model loads the model anyway
     ],
 )
-def test_skips_prewarm(platform: str, kind: str, enabled: bool, preload: bool) -> None:
+def test_skips_prewarm(
+    platform: str, kind: BackendKind, enabled: bool, preload: bool
+) -> None:
     assert not should_prewarm(
         platform=platform, backend_kind=kind, enabled=enabled, preload_model=preload
     )
