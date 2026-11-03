@@ -196,5 +196,6 @@ def test_physical_key_state_reads_the_high_bit() -> None:
     from dictatem.hotkey.win32_keymap import physical_key_state
 
     assert physical_key_state(Key.LEFT_META, lambda vk: 0x8000 if vk == 0x5B else 0) is True
-    assert physical_key_state(Key.LEFT_META, lambda vk: 0x0001) is False  # "pressed since" bit only
+    # Only the low "pressed since last call" bit set: not physically down.
+    assert physical_key_state(Key.LEFT_META, lambda vk: 0x0001) is False
     assert physical_key_state(Key.OTHER, lambda vk: 0x8000) is None
