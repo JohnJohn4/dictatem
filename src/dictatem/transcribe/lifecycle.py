@@ -240,7 +240,15 @@ class TranscribeLifecycle:
     ) -> TranscriptionResult:
         self._ensure_loaded()
         try:
-            return call()
+            # Wall time of the engine call alone (load excluded). The first
+            # call after a load also pays the GPU math libraries' lazy load
+            # (cuBLAS/cuDNN) — on an AV-scanned cold install that dominates.
+            # perf_counter, not the injected clock: diagnostics only, and the
+            # idle-unload tests drive self._clock with scripted readings.
+            started = time.perf_counter()
+            result = call()
+            logger.info("Transcribe call took %.2fs", time.perf_counter() - started)
+            return result
         except GPUOutOfMemoryError:
             self._backend.empty_cache()
             try:

@@ -8,6 +8,7 @@ import os
 import queue
 import sys
 import threading
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -45,6 +46,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from dictatem.audio.buffer import AudioBuffer
+    from dictatem.audio.input_devices import MicrophoneMenuEntry
     from dictatem.config import Config, ConfigLoadReport
     from dictatem.hardware.resolver import RuntimeFallbackReason
     from dictatem.hotkey.classifier import (
@@ -67,6 +69,7 @@ if TYPE_CHECKING:
     )
     from dictatem.overlay.state import OverlayState
     from dictatem.permissions.mapper import MacPermission, PermissionGuidance
+    from dictatem.startup_timing import StartupTimer
     from dictatem.state import StateMachine
     from dictatem.transcribe.language import LanguageSelector
     from dictatem.transcribe.latency_monitor import LatencyMonitor
@@ -77,6 +80,17 @@ if TYPE_CHECKING:
     from dictatem.upgrade.core import UpgradeDecision
 
 logger = logging.getLogger(__name__)
+
+# Startup phase timer (diagnostics only): created at main() entry, marked along
+# the launch path, summarised as one `Startup timing:` log line. None when the
+# daemon is driven without main() (tests), so every mark is a no-op there.
+_startup_timer: StartupTimer | None = None
+_startup_interpreter_s: float | None = None
+
+
+def _startup_mark(phase: str) -> None:
+    if _startup_timer is not None:
+        _startup_timer.mark(phase)
 
 
 def _target_name(target: TriggerTarget) -> str:
@@ -166,6 +180,44 @@ def _add_rotating_log_file() -> logging.handlers.TimedRotatingFileHandler | None
     return handler
 
 
+
+
+# Hotkey input events get one INFO line each (#283 work-laptop QA): a press that
+# "did nothing" otherwise leaves no trace, and the lag/handled timings show
+# whether the GUI thread was starved (late dispatch) or record-start itself
+# blocked (slow handling). Event and state names only — never key content
+# beyond the configured hotkey, never dictated text (#188).
+_LOGGED_INPUT_EVENTS = frozenset({Event.KEY_DOWN, Event.KEY_UP, Event.ESC})
+
+
+def _log_input_event(
+    event: Event,
+    *,
+    state_before: State,
+    state_after: State,
+    commands: list[Command],
+    event_ms: int,
+    started: float,
+    finished: float,
+) -> None:
+    """Log one hotkey input event with its dispatch lag and handling time.
+
+    ``event_ms`` is the hook's ``time.monotonic()`` stamp in ms; the lag is how
+    long the event waited for the GUI thread. Synthetic tray-driven events pass
+    a non-positive stamp, so their lag is omitted.
+    """
+    lag = (
+        f"{started * 1000 - event_ms:.0f}ms" if event_ms > 0 else "n/a"
+    )
+    logger.info(
+        "Hotkey %s: %s -> %s [%s] lag %s, handled in %.0fms",
+        event.name,
+        state_before.name,
+        state_after.name,
+        ", ".join(c.name for c in commands) or "no-op",
+        lag,
+        (finished - started) * 1000,
+    )
 
 
 class _OverlayAdapter:
@@ -618,8 +670,20 @@ class DaemonCore:
     def on_hotkey_event(self, event: Event, *, now_ms: int = 0) -> None:
         """Feed an event to the state machine and execute resulting commands."""
         try:
+            state_before = self._sm.state
+            started = time.monotonic()
             commands = self._sm.handle(event, now_ms=now_ms)
             self._execute_commands(commands, now_ms=now_ms)
+            if event in _LOGGED_INPUT_EVENTS:
+                _log_input_event(
+                    event,
+                    state_before=state_before,
+                    state_after=self._sm.state,
+                    commands=commands,
+                    event_ms=now_ms,
+                    started=started,
+                    finished=time.monotonic(),
+                )
         except Exception:
             logger.error("Unhandled error in hotkey event handler", exc_info=True)
             self._tray.show_notification(
@@ -1731,6 +1795,12 @@ def main(argv: list[str] | None = None) -> None:
     ``--install-macos-app`` generates the ``Dictatem.app`` identity shell
     (#61 / ADR-0014) instead of starting the daemon.
     """
+    global _startup_timer, _startup_interpreter_s
+    from dictatem.startup_timing import StartupTimer, process_age_s
+
+    _startup_interpreter_s = process_age_s()
+    _startup_timer = StartupTimer()
+
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -2267,6 +2337,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     stay lazy so importing ``dictatem.daemon`` pulls in no GUI/audio/ML
     dependency.
     """
+    _startup_mark("adapters")
     import time
     from pathlib import Path
 
@@ -2309,6 +2380,8 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     )
     from dictatem.transform.recognizer import shadowed_builtin_aliases
     from dictatem.tray.qt_tray import QtTrayIcon
+
+    _startup_mark("imports")
 
     # Configure logging before load_config so the first-run Hardware Tier
     # baking line (logged inside load_config) is actually emitted. Start at
@@ -2353,6 +2426,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     if _instance_lock is None:
         logger.warning("Another Dictatem instance is already running; exiting")
         return
+    _startup_mark("lock")
 
     config_path = default_config_path()
     # First run with no config: probe the machine once and bake the resolved
@@ -2364,6 +2438,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     is_first_run = not config_path.exists()
     probe = adapters.probe
     config, config_report = load_config_with_report(config_path, probe=probe)
+    _startup_mark("config")
 
     # Reconcile the config's pinned transcription hardware against the machine
     # we're actually on (#39 / ADR-0009). A config baked on a GPU box and then
@@ -2383,6 +2458,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         profile=probe.probe(),
     )
     fallback_reason = reconciliation.fallback_reason
+    _startup_mark("hw probe")
     # Transcription hardware only. select_backend reads only the model, device
     # and compute_type: we deliberately do NOT apply the resolved
     # transform_model, because the Transform/Ollama model is independent of
@@ -2421,8 +2497,10 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             # path — must never kill startup; the tray toggle path is wrapped
             # the same way.
             logger.error("Error reconciling autostart on launch", exc_info=True)
+    _startup_mark("autostart")
 
     app = QApplication(sys.argv)
+    _startup_mark("qt app")
     # The daemon is a tray app with no persistent main window: the overlay pill
     # and the guided permission dialogs are transient. Without this, Qt's
     # default quits the whole daemon when the last window closes — on macOS,
@@ -2532,10 +2610,12 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         fade_in_ms=config.overlay.fade_in_ms,
         fade_out_ms=config.overlay.fade_out_ms,
     )
+    _startup_mark("setup")
     overlay_widget = QtOverlayWidget(overlay_state)
     overlay = _OverlayAdapter(state=overlay_state, widget=overlay_widget)
 
     tray_icon = QtTrayIcon(app)
+    _startup_mark("overlay+tray")
     tray = _TrayAdapter(icon=tray_icon)
 
     sm = StateMachine(tap_threshold_ms=config.hotkey.tap_threshold_ms)
@@ -2591,7 +2671,6 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     tray_icon.on_start = daemon.on_tray_start_recording
     tray_icon.on_stop = daemon.on_tray_stop_recording
     tray_icon.on_copy_last_dictation = daemon.on_tray_copy_last_dictation
-    tray_icon.on_preload = daemon.on_tray_preload
     tray_icon.on_unload = daemon.on_tray_unload
     tray_icon.on_autostart_toggled = daemon.on_tray_set_autostart
     tray_icon.set_autostart_checked(config.startup.autostart)
@@ -2779,6 +2858,48 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         # runs from the tray menu, so no classifier/bridge machinery is built and
         # the hotkey hint stays hidden.
         logger.info("No global-hotkey adapter on this platform — use the tray menu")
+        tray_icon.set_manual_recording_available(True)
+
+    # Microphone handling for the PortAudio capture (Windows). PortAudio is
+    # initialised shortly after launch (so the first hotkey press doesn't pay
+    # for it), re-scanned when idle after each dictation and when the tray's
+    # Microphone menu opens, so a newly plugged-in mic is used from the next
+    # dictation. All on the GUI thread; a re-scan never opens the microphone.
+    from dictatem.audio.input_devices import microphone_menu_entries
+    from dictatem.audio.sounddevice_capture import SoundDeviceCapture
+
+    if isinstance(audio_capture, SoundDeviceCapture):
+        mic_capture = audio_capture
+        QTimer.singleShot(500, mic_capture.initialize)
+
+        def _microphone_menu() -> list[MicrophoneMenuEntry]:
+            if sm.state is State.IDLE:
+                mic_capture.refresh_devices()
+            return microphone_menu_entries(
+                mic_capture.input_device_names(), mic_capture.device_spec
+            )
+
+        def _select_microphone(value: str | None) -> None:
+            mic_capture.set_device(value)
+            config.audio.device = value
+            logger.info(
+                "Microphone set to %s", "system default" if value is None else repr(value)
+            )
+            if config_report.write_protected:
+                # Same rule as Start at login: a config with problems is never
+                # rewritten, so the choice applies for this session only.
+                logger.info("Config has problems; microphone choice is for this session only")
+                return
+            try:
+                write_config(config, config_path)
+            except OSError:
+                logger.error("Could not save the microphone choice", exc_info=True)
+
+        tray_icon.on_microphone_menu = _microphone_menu
+        tray_icon.on_microphone_selected = _select_microphone
+        tray_icon.set_microphone_available(True)
+    else:
+        mic_capture = None
 
     silence_timer = QTimer()
     silence_timer.setInterval(5000)
@@ -2787,6 +2908,8 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         daemon.check_silence(now_ms=int(time.monotonic() * 1000))
         daemon.check_idle()
         daemon.sync_model_loaded()
+        if mic_capture is not None and sm.state is State.IDLE:
+            mic_capture.refresh_if_due()
 
     silence_timer.timeout.connect(_on_silence_tick)
     silence_timer.start()
@@ -2794,6 +2917,20 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     if config.startup.preload_model:
         logger.info("Startup preload enabled — loading model in background")
         daemon.on_tray_preload()
+
+    # Engine prewarm (ADR-0029): load the engine DLLs once in a throwaway
+    # below-normal-priority child so an endpoint scanner's first-load cost is
+    # paid in the background, not by the first dictation. Deferred a moment so
+    # the tray's first paint isn't competing for disk. Never waited on.
+    from dictatem.transcribe.prewarm import should_prewarm, start_prewarm
+
+    if should_prewarm(
+        platform=sys.platform,
+        backend_kind=selection.kind,
+        enabled=config.startup.prewarm_engine,
+        preload_model=config.startup.preload_model,
+    ):
+        QTimer.singleShot(1000, start_prewarm)
 
     # First-run model fetch (ADR-0025 / #162): on the daemon's first run — the
     # run the installer triggers, right after tier resolution, while the network
@@ -2859,6 +2996,8 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
                 if permission is MacPermission.INPUT_MONITORING:
                     # Where the user looks when the hotkey "does nothing".
                     tray_icon.set_hotkey_hint(HOTKEY_OFF_HINT)
+                    # No hotkey: the tray's Start/Stop are the way to record.
+                    tray_icon.set_manual_recording_available(True)
                 if startup_permission_check_done:
                     _handle_permission_report(permission)
                 else:
@@ -2976,6 +3115,9 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
             2000, lambda: tray.show_notification(notice.title, notice.body)
         )
 
+    _startup_mark("wiring")
+    if _startup_timer is not None:
+        logger.info("%s", _startup_timer.summary(interpreter_s=_startup_interpreter_s))
     logger.info("Dictatem daemon started")
     try:
         app.exec()

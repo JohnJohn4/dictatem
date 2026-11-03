@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from typing import TYPE_CHECKING
 
@@ -28,14 +29,18 @@ from dictatem.tray.usage_guide import LIGHT as _GUIDE_LIGHT
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from dictatem.audio.input_devices import MicrophoneMenuEntry
+
+logger = logging.getLogger(__name__)
+
 _MENU_LABELS: dict[MenuItem, str] = {
     # Placeholder; the real text is set from config via set_hotkey_hint (#104).
     MenuItem.HOTKEY_HINT: "Hotkey",
     MenuItem.START: "Start recording",
     MenuItem.STOP: "Stop recording",
     MenuItem.COPY_LAST_DICTATION: "Copy last dictation",
-    MenuItem.PRELOAD: "Preload model",
     MenuItem.UNLOAD: "Unload model",
+    MenuItem.MICROPHONE: "Microphone",
     MenuItem.AUTOSTART: "Start at login",
     MenuItem.SHOW_LOG: "Show log",
     MenuItem.OPEN_CONFIG: "Open config file…",
@@ -52,7 +57,7 @@ _GUIDE_PAGE_DARK = _GUIDE_DARK.page
 
 # Visual groups in the menu: recording actions | model | settings & help |
 # app lifecycle. A separator goes before each of these items.
-_SEPARATOR_BEFORE = frozenset({MenuItem.PRELOAD, MenuItem.AUTOSTART, MenuItem.RESTART})
+_SEPARATOR_BEFORE = frozenset({MenuItem.UNLOAD, MenuItem.MICROPHONE, MenuItem.RESTART})
 
 # Draw a native pixmap at each of these side lengths and add them all to the
 # tray QIcon, so the OS picks a purpose-built size. Procedural bars stay crisp
@@ -154,8 +159,11 @@ class QtTrayIcon:
         self.on_start: Callable[[], None] | None = None
         self.on_stop: Callable[[], None] | None = None
         self.on_copy_last_dictation: Callable[[], None] | None = None
-        self.on_preload: Callable[[], None] | None = None
         self.on_unload: Callable[[], None] | None = None
+        # Microphone submenu: the daemon supplies the entries each time it opens
+        # (after a device re-scan) and receives the chosen [audio] device value.
+        self.on_microphone_menu: Callable[[], list[MicrophoneMenuEntry]] | None = None
+        self.on_microphone_selected: Callable[[str | None], None] | None = None
         # "Start at Login" toggle — receives the new checked state (ADR-0012).
         self.on_autostart_toggled: Callable[[bool], None] | None = None
         self.on_show_log: Callable[[], None] | None = None
@@ -197,7 +205,6 @@ class QtTrayIcon:
                 if self.on_copy_last_dictation
                 else None
             ),
-            MenuItem.PRELOAD: lambda: self.on_preload() if self.on_preload else None,
             MenuItem.UNLOAD: lambda: self.on_unload() if self.on_unload else None,
             MenuItem.SHOW_LOG: lambda: self._open_log(),
             MenuItem.OPEN_CONFIG: lambda: self._open_config(),
@@ -235,6 +242,19 @@ class QtTrayIcon:
                 action.setVisible(False)
                 self._version_separator.setVisible(False)
                 continue
+            if item is MenuItem.MICROPHONE:
+                # Submenu, filled on open so it lists what's plugged in now.
+                # Hidden until the daemon says the capture backend supports it.
+                self._microphone_menu = QMenu(_MENU_LABELS[item])
+                self._microphone_menu.aboutToShow.connect(self._populate_microphone_menu)
+                action.setMenu(self._microphone_menu)
+                action.setVisible(False)
+                self._actions[item] = action
+                self._menu.addAction(action)
+                continue
+            if item in (MenuItem.START, MenuItem.STOP):
+                # Hidden unless there's no global hotkey (set_manual_recording_available).
+                action.setVisible(False)
             if item is MenuItem.AUTOSTART:
                 # Checkable "Start at Login" toggle. triggered passes the new
                 # checked state straight through to the daemon, which flips the
@@ -245,6 +265,42 @@ class QtTrayIcon:
                 action.triggered.connect(callback_map[item])
             self._actions[item] = action
             self._menu.addAction(action)
+
+    def _populate_microphone_menu(self) -> None:
+        menu = self._microphone_menu
+        menu.clear()
+        if self.on_microphone_menu is None:
+            return
+        try:
+            entries = self.on_microphone_menu()
+        except Exception:
+            logger.error("Error listing microphones", exc_info=True)
+            entries = []
+        for entry in entries:
+            action = menu.addAction(entry.label)
+            action.setCheckable(True)
+            action.setChecked(entry.checked)
+            action.triggered.connect(
+                lambda _checked=False, value=entry.value: self._on_microphone_chosen(value)
+            )
+
+    def _on_microphone_chosen(self, value: str | None) -> None:
+        if self.on_microphone_selected is not None:
+            self.on_microphone_selected(value)
+
+    def set_microphone_available(self, available: bool) -> None:
+        """Show or hide the Microphone submenu (PortAudio capture only)."""
+        self._actions[MenuItem.MICROPHONE].setVisible(available)
+
+    def set_manual_recording_available(self, available: bool) -> None:
+        """Show or hide Start/Stop recording.
+
+        Shown only where no global hotkey is live, so there's still a way to
+        record. With a hotkey they're hidden: clicking the tray takes focus away
+        from the window the dictation should paste into.
+        """
+        self._actions[MenuItem.START].setVisible(available)
+        self._actions[MenuItem.STOP].setVisible(available)
 
     def _on_autostart_triggered(self, checked: bool) -> None:
         if self.on_autostart_toggled is not None:

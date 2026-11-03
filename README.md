@@ -224,10 +224,17 @@ To rename a trigger word, edit the `aliases: [...]` line of its prompt file in
 
 ### Tray / menu-bar menu
 
-Right-click the icon for: **Start/Stop Recording**, **Copy last dictation**,
-**Preload / Unload Model**, **Open config file…**, **How to use Dictatem…** (a
-live in-app guide), **Check for updates…**, **Show Log**, **Restart**,
-**Quit**.
+Right-click the icon for: **Copy last dictation**, **Unload model** (frees its
+GPU/RAM now, e.g. before other AI work), **Microphone** (Windows: pick System
+default or any connected input; saved to `[audio] device`), **Open config
+file…**, **How to use Dictatem…** (a live in-app guide), **Check for
+updates…**, **Show Log**, **Restart**, **Quit**. **Start/Stop recording** appear
+only when no global hotkey is available.
+
+A microphone plugged in while Dictatem runs is picked up from the next
+dictation. If the chosen microphone is unplugged, Dictatem uses the system
+default (ticked in the menu) and switches back automatically when it's plugged
+in again; choose **System default** to forget it.
 
 ---
 
@@ -305,6 +312,7 @@ silence_timeout_s = 60          # auto-stop a toggle recording after this much s
 [startup]
 autostart = true
 preload_model = false           # load at startup vs. when you first arm a dictation
+prewarm_engine = true           # Windows: pre-load engine DLLs in the background at launch (no model)
 
 [transform]
 enabled = true                  # master switch for Trigger Words
@@ -364,7 +372,14 @@ model **unloads** to free its memory (~3 GB of VRAM on a GPU) and reloads on you
 next dictation.
 
 Want an instant first response instead? Set `preload_model = true` under
-`[startup]`, raise `idle_unload_minutes`, or use **Preload Model** in the tray menu.
+`[startup]` or raise `idle_unload_minutes`.
+
+On Windows, the installer prepares the transcription engine before it first
+starts Dictatem, and a second after each launch Dictatem repeats this in a
+short-lived, low-priority background process (no model, no GPU memory; seconds
+when already warm). On machines with endpoint antivirus that scans each new DLL, this moves
+a one-off delay of up to a minute or more from your first dictation into the
+background. Turn it off with `prewarm_engine = false` under `[startup]`.
 
 ### Customising
 

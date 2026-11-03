@@ -144,6 +144,24 @@ repair_dictatem_env() {
 # "Invalid environment" validation. Idempotent — a healthy env is left untouched.
 if dictatem_env_broken; then repair_dictatem_env; fi
 
+# One-time PySide6 meta -> PySide6-Essentials migration (see install.ps1 for the
+# full story): releases up to v0.7.0 used the `PySide6` meta package, which
+# shares `PySide6/__init__.py` with Essentials, so an in-place upgrade that
+# uninstalls the meta breaks Qt. Reinstall Essentials in the same transaction —
+# only when the meta's dist-info (`pyside6-<ver>.dist-info`) is present, so
+# steady-state upgrades don't rewrite Qt.
+dictatem_has_pyside6_meta() {
+    _env="$(dictatem_env_dir)"
+    [ -n "$_env" ] && [ -d "$_env" ] || return 1
+    for _d in "$_env"/lib/python3*/site-packages/pyside6-[0-9]*.dist-info; do
+        [ -d "$_d" ] && return 0
+    done
+    return 1
+}
+if dictatem_has_pyside6_meta; then
+    uv_flags="$uv_flags --reinstall-package pyside6-essentials"
+fi
+
 echo "Installing ${requirement} (on managed CPython ${DICTATEM_PYTHON}) ..."
 # $uv_flags is deliberately unquoted: empty by default, two words on override.
 # The else block exists because --managed-python needs a recent uv: step 1 only

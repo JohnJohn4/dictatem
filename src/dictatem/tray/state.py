@@ -29,6 +29,9 @@ class MenuItem(enum.Enum):
     # disabled; its label is set from config by the daemon, hidden where there
     # is no global-hotkey adapter. Kept first so it reads as a menu title.
     HOTKEY_HINT = "hotkey_hint"
+    # Manual Start/Stop recording. Shown only where there is no global hotkey
+    # (then they're the only way to record); hidden otherwise, because clicking
+    # the tray steals focus from the window the dictation should paste into.
     START = "start"
     STOP = "stop"
     # "Copy last dictation" — copies the Most-recent dictation to the clipboard
@@ -36,8 +39,13 @@ class MenuItem(enum.Enum):
     # dictation that landed nowhere when saying "paste" isn't convenient.
     # Disabled until a dictation exists (driven by TrayState.has_last_dictation).
     COPY_LAST_DICTATION = "copy_last_dictation"
-    PRELOAD = "preload"
+    # "Unload model": free GPU/RAM now (e.g. before other AI work). There is no
+    # "Preload model" item: the model loads on arm, and [startup] preload_model
+    # covers an always-warm setup.
     UNLOAD = "unload"
+    # "Microphone ▸": System default + each connected input; the choice is
+    # saved to [audio] device. Shown only for the PortAudio (Windows) capture.
+    MICROPHONE = "microphone"
     # "Start at login" — a checkable toggle bound to config.startup.autostart.
     # Always enabled; its checked state is driven separately by the daemon, not
     # by TrayState (which tracks enable/disable only). See ADR-0012.
@@ -94,8 +102,6 @@ class TrayState:
             return self.is_recording
         if item is MenuItem.UNLOAD:
             return self.is_model_loaded and not self.is_model_loading
-        if item is MenuItem.PRELOAD:
-            return not self.is_model_loaded and not self.is_model_loading
         if item is MenuItem.COPY_LAST_DICTATION:
             # Nothing to copy until the first dictation has been retained.
             return self.has_last_dictation

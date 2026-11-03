@@ -129,6 +129,10 @@ class AudioConfig:
 class StartupConfig:
     autostart: bool = True
     preload_model: bool = False
+    # Windows: shortly after launch, load the engine DLLs once in a short-lived
+    # background process so an endpoint scanner's first-load cost isn't paid by
+    # the first dictation (ADR-0029). No model and no GPU memory.
+    prewarm_engine: bool = True
 
 
 @dataclass

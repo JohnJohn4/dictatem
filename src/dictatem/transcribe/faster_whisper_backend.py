@@ -95,6 +95,34 @@ def transcript_from_segments(segments: Sequence[Any], info: object) -> Transcrip
     )
 
 
+def resolve_model_path(model_name: str, download: Callable[..., str]) -> str:
+    """Resolve *model_name* to a local model directory, cache first.
+
+    ``WhisperModel("small")`` asks the Hugging Face Hub for the latest revision
+    on every load, even when the weights are already cached. That is an
+    outbound call on each first dictation (against the local-first story) and
+    can stall behind a slow proxy. So try the on-disk cache first
+    (``local_files_only=True``: filesystem only, no network) and fall back to
+    the normal online resolution only when that fails, e.g. a cache miss
+    before the first-run fetch has finished. The fallback is exactly what every
+    load did before, so a failure here can never make things worse.
+
+    *download* is faster-whisper's ``download_model`` (injected for tests). A
+    local directory path is returned as-is, as ``WhisperModel`` would.
+    """
+    if os.path.isdir(model_name):
+        return model_name
+    try:
+        return download(model_name, local_files_only=True)
+    except Exception as exc:
+        logger.info(
+            "Model %r not resolvable from the local cache (%s); checking online",
+            model_name,
+            type(exc).__name__,
+        )
+        return download(model_name)
+
+
 class FasterWhisperBackend:
     """TranscriberBackend implementation using faster-whisper.
 
@@ -133,8 +161,16 @@ class FasterWhisperBackend:
         self._progress_callback: Callable[[int, int], None] | None = None
 
     def load_model(self) -> None:
+        import time
+
+        started = time.perf_counter()
         _register_cuda_dll_directories()
-        from faster_whisper import WhisperModel  # type: ignore[import-not-found]
+        from faster_whisper import (  # type: ignore[import-not-found]
+            WhisperModel,
+            download_model,
+        )
+
+        imported = time.perf_counter()
 
         from dictatem.transcribe.vocabulary import (
             backend_supports_hotwords,
@@ -142,9 +178,17 @@ class FasterWhisperBackend:
         )
 
         self._model = WhisperModel(
-            self._model_name,
+            resolve_model_path(self._model_name, download_model),
             device=self._device,
             compute_type=self._compute_type,
+        )
+        # Split the load so a cold-launch AV scan (first import of the
+        # faster-whisper/ctranslate2/onnxruntime DLL tree) is distinguishable
+        # from reading the weights onto the device.
+        logger.info(
+            "Model load breakdown: engine import %.2fs, weights %.2fs",
+            imported - started,
+            time.perf_counter() - imported,
         )
         # Detect the capability on the actual model instance, then bake the
         # hint kwargs so every transcribe call reuses them.

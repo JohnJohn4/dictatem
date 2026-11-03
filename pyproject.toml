@@ -28,7 +28,12 @@ runtime = [
     # Windows/Linux keep the latest av. Revisit if av republishes low-floor wheels.
     "av==14.2.0; sys_platform == 'darwin'",
     "sounddevice>=0.5",
-    "PySide6>=6.7",
+    # Essentials, not the `PySide6` meta package: the meta also pulls
+    # PySide6-Addons (WebEngine, PDF, 3D, Multimedia, ... ~450 MB) and dictatem
+    # uses only QtCore/QtGui/QtWidgets. Same `PySide6` import name and version
+    # line. If a future feature needs an Addons module, add PySide6-Addons
+    # explicitly rather than reverting to the meta package.
+    "PySide6-Essentials>=6.7",
     "nvidia-ml-py>=12",
     "pywin32>=306; sys_platform == 'win32'",
     # macOS native adapters (#56/#59/#61): Cocoa for NSPasteboard/NSWorkspace,

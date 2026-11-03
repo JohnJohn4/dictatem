@@ -309,8 +309,9 @@ def _first_use_section(theme: GuideTheme) -> str:
             "one-time download — is still finishing, the pill shows a "
             "<b>Loading Dict. Model…</b> or <b>Downloading model…</b> caption and "
             "pastes automatically once it's ready, so you never press the hotkey "
-            "again. Use <b>Preload model</b> in the tray menu to warm it up ahead "
-            "of time.",
+            "again. Want it always warm? Set <b>preload_model = true</b> under "
+            "<b>[startup]</b> in the config file. <b>Unload model</b> in the tray "
+            "menu frees its memory now, e.g. before other AI work.",
         )
     )
 
