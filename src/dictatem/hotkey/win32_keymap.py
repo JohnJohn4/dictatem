@@ -8,6 +8,7 @@ platform. The macOS hook supplies its own analogous map (see ADR-0018).
 from __future__ import annotations
 
 import logging
+import sys
 from typing import TYPE_CHECKING
 
 from dictatem.hotkey.classifier import Key
@@ -107,3 +108,44 @@ def vk_to_key(vk: int) -> Key:
     inert (never part of a modifier combo, an arrow, or escape).
     """
     return _VK_TO_KEY.get(vk, Key.OTHER)
+
+
+# Virtual-key codes GetAsyncKeyState understands for each combo-relevant Key
+# (mouse buttons included: VK_MBUTTON / VK_XBUTTON1 / VK_XBUTTON2).
+_KEY_TO_VK: dict[Key, int] = {
+    Key.LEFT_META: VK_LWIN,
+    Key.RIGHT_META: VK_RWIN,
+    Key.LEFT_ALT: VK_LMENU,
+    Key.RIGHT_ALT: VK_RMENU,
+    Key.LEFT_CTRL: VK_LCONTROL,
+    Key.RIGHT_CTRL: VK_RCONTROL,
+    Key.LEFT_SHIFT: VK_LSHIFT,
+    Key.RIGHT_SHIFT: VK_RSHIFT,
+    Key.MOUSE_MIDDLE: 0x04,
+    Key.MOUSE_4: 0x05,
+    Key.MOUSE_5: 0x06,
+}
+
+
+def physical_key_state(
+    key: Key, get_async_key_state: Callable[[int], int] | None = None
+) -> bool | None:
+    """Whether *key* is physically down right now (Windows), or None if unknown.
+
+    Backs the classifier's stale-modifier check. ``GetAsyncKeyState``'s high
+    bit is the live physical state. *get_async_key_state* is injectable for
+    tests; by default it calls user32.
+    """
+    vk = _KEY_TO_VK.get(key)
+    if vk is None:
+        return None
+    if get_async_key_state is None:
+        if sys.platform != "win32":
+            return None
+        import ctypes
+
+        get_async_key_state = ctypes.windll.user32.GetAsyncKeyState  # type: ignore[attr-defined]
+    try:
+        return bool(int(get_async_key_state(vk)) & 0x8000)
+    except Exception:
+        return None
