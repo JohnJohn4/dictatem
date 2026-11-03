@@ -90,7 +90,7 @@ one-off prewarm is not enough on such machines. Two changes:
    nothing.
 
 2. **Resident engine where a prewarm was slow.** The prewarm child times
-   itself. If it took ≥ 10 s, it writes `~/.dictatem/.slow_engine_load` (a
+   itself. If it took ≥ 20 s, it writes `~/.dictatem/.slow_engine_load` (a
    machine property; never removed automatically). With `[startup]
    resident_engine = "auto"` (default), once the launch prewarm finishes and
    that marker exists, the daemon imports faster-whisper and maps the NVIDIA
@@ -98,6 +98,10 @@ one-off prewarm is not enough on such machines. Two changes:
    VRAM. Mapped images aren't rescanned, so a later first dictation opens none
    of those files; CTranslate2's `LoadLibrary("cublas64_12.dll")` gets the
    already-loaded module. `"on"` / `"off"` force it.
+
+Threshold: 20 s. The home-PC smoke test (normal consumer PC) measured 6–8 s
+prewarms, too close to a first-draft 10 s. The work laptop's cold scans were
+45.8–212 s.
 
 Consequences: on scanner machines the daemon holds a few hundred MB more RAM
 while idle, in exchange for not re-paying the scan on every first dictation
