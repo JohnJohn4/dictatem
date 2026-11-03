@@ -346,3 +346,42 @@ the NVIDIA wheels will pay it again.
    resident daemon so far.
 6. **Missed first hotkey press** after a restart: no log trace. Probably
    pressed before the tray was back (~20 s); hotkey events are not logged.
+
+## Fixes implemented (owner go-ahead 2026-11-02) and verification
+
+Commits on `perf/slimming`: `7f49dee` (NVML-first probe, cache-first model
+resolution), `8bd4647` (engine prewarm child, ADR-0029, and the hotkey
+input-event log), `e5909af` (prewarm gate fix: it compared device names
+instead of `BackendKind`, so it never fired in the daemon). Candidate fix 3
+(model warm-up at first run) was **replaced by the prewarm**. The prewarm gets
+the same scan benefit without putting a model in VRAM, so ADR-0025 holds.
+
+Verification on the work laptop, 2026-11-03, installed from the local checkout:
+
+- **Probe:** `CUDA device detected (via nvml)`. On fresh copy-mode files, `hw
+  probe 1.85s` and `total 17.72s` (step 3: 15.10 s / 37.14 s). Warm: 1.7 s.
+- **Prewarm in the daemon:** `Engine prewarm started` 1 s after `daemon
+  started`, then `Engine prewarm finished in 212.6s (exit 0)` in the background.
+  The tray and hotkey were usable throughout.
+- **After the prewarm, a first load + transcribe in a new process**
+  (`cold_transcribe.py`): engine import **0.55 s** (was 17.8–46.5 s), 1st
+  transcribe **0.78 s** (was 36–74 s).
+- **Cache-first resolution:** loading via `FasterWhisperBackend.load_model()`
+  logged no HF request. `load_model 3.83s` (import 0.48 s, weights 3.35 s).
+- **Not yet verified with the owner at the keyboard:** an in-daemon dictation
+  after a cold launch, and the new `Hotkey …` log lines in the field.
+
+Gotchas found along the way:
+
+- `uv tool install "dictatem[...] @ file:///…"` reuses a cached build of the
+  same version. Use `--reinstall-package dictatem --refresh-package dictatem`
+  or you test stale code.
+- Daemons launched with `Start-Process` from an agent shell die when the
+  agent session ends. Launch detached via `Invoke-CimMethod Win32_Process
+  Create` when it must outlive the session.
+- py-spy must target the child interpreter (`uv\python\cpython-…\pythonw.exe`),
+  not the tool venv's `Scripts\pythonw.exe` redirector.
+
+Open: Finding C (warm loads of ~19 s after a long gap in a resident daemon,
+not reproducible standalone) and H4's stall during a mid-session rescan. The
+prewarm only covers launch.
