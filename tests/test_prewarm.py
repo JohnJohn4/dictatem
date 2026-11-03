@@ -135,3 +135,55 @@ def test_installer_prewarms_before_launching_the_daemon() -> None:
     prewarm = script.index(f"-m {PREWARM_MODULE}")
     launch = script.index("Start-Process -FilePath 'dictatem'")
     assert prewarm < launch
+
+
+def test_a_slow_prewarm_leaves_the_scanner_marker(tmp_path: Path) -> None:
+    from dictatem.transcribe.prewarm import (
+        SLOW_PREWARM_S,
+        record_prewarm_duration,
+        slow_engine_marker,
+    )
+
+    marker = slow_engine_marker(tmp_path)
+    assert record_prewarm_duration(SLOW_PREWARM_S - 0.1, marker) is False
+    assert not marker.exists()
+    assert record_prewarm_duration(SLOW_PREWARM_S + 30, marker) is True
+    assert marker.exists()
+
+
+@pytest.mark.parametrize(
+    ("mode", "marker", "expected"),
+    [
+        ("auto", False, False),  # normal machine: stay light
+        ("auto", True, True),  # scanner detected: keep the engine resident
+        ("on", False, True),
+        ("off", True, False),
+        ("bogus", True, True),  # unknown acts like auto
+    ],
+)
+def test_resident_engine_decision(mode: str, marker: bool, expected: bool) -> None:
+    from dictatem.transcribe.prewarm import wants_resident_engine
+
+    assert wants_resident_engine(mode, marker_exists=marker) is expected
+
+
+def test_resident_engine_defaults_to_auto() -> None:
+    assert StartupConfig().resident_engine == "auto"
+
+
+def test_on_done_runs_after_the_child_exits() -> None:
+    order: list[str] = []
+
+    class _P:
+        def wait(self) -> int:
+            order.append("exited")
+            return 0
+
+    watcher = start_prewarm(
+        executable="pythonw.exe",
+        spawn=lambda *a, **k: _P(),
+        on_done=lambda: order.append("on_done"),
+    )
+    assert watcher is not None
+    watcher.join(timeout=5)
+    assert order == ["exited", "on_done"]

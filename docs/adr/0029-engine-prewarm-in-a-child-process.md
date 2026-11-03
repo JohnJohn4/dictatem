@@ -69,3 +69,38 @@ this one step; it still downloads nothing at install.
   hundred MB, briefly.
 - It does **not** cover a scan that recurs later in a long-lived session
   (observed: warm loads of ~19 s after a long gap; cause still open).
+
+## Amendment (2026-11-03): resident engine on slow-scan machines, and PySide6's import hook
+
+Follow-up QA on the work laptop ("Finding C" in
+`docs/agents/handoffs/2026-11-02-slimming-work-laptop.md`) showed that the
+scanner's per-file verdicts **expire after a gap**: ~6–30 minutes was observed.
+The launch prewarm then took 45.8 s instead of 1–4 s. The first dictation after
+a gap re-paid ~12–15 s in a fresh daemon even though the prewarm had run. So a
+one-off prewarm is not enough on such machines. Two changes:
+
+1. **PySide6's import hook stops re-reading every module's source.** PySide6
+   wraps `__import__` for its optional `__feature__` switches, and for each new
+   module calls `inspect.getsource()` to look for the text "PySide6". That
+   doubled the file reads of every module imported after Qt (faster-whisper,
+   huggingface_hub, httpx2…), and on the work laptop it was ~5 s of one slow
+   load. Dictatem never uses `__feature__`, so `dictatem.qt_import_hook`
+   answers "no" for non-dictatem modules without reading any source. It is a
+   patch to a private shiboken module, guarded: if the layout changes it does
+   nothing.
+
+2. **Resident engine where a prewarm was slow.** The prewarm child times
+   itself. If it took ≥ 10 s, it writes `~/.dictatem/.slow_engine_load` (a
+   machine property; never removed automatically). With `[startup]
+   resident_engine = "auto"` (default), once the launch prewarm finishes and
+   that marker exists, the daemon imports faster-whisper and maps the NVIDIA
+   DLLs **into its own process** and keeps them. No model, no CUDA context, no
+   VRAM. Mapped images aren't rescanned, so a later first dictation opens none
+   of those files; CTranslate2's `LoadLibrary("cublas64_12.dll")` gets the
+   already-loaded module. `"on"` / `"off"` force it.
+
+Consequences: on scanner machines the daemon holds a few hundred MB more RAM
+while idle, in exchange for not re-paying the scan on every first dictation
+after a gap. Machines that prewarm quickly never get the marker and keep the
+light idle footprint. Reading the model file itself after a gap (~3 s on the
+work laptop) is not covered.
