@@ -492,3 +492,79 @@ the work laptop:
   14.5 s (4.44 / 6.88 / 3.15). The load finished while the owner was still
   speaking: stop → paste ~1.5 s (was ~12.8 s). Owner: "wow that was much
   faster". Remaining: the model-file read (construct ~3 s) after a gap.
+
+## Home PC smoke test (2026-11-03, `perf/finding-c` @ `d5083f2`)
+
+Owner's home PC: Windows 11 Home, RTX 3050 Laptop 4 GB, consumer Defender.
+Upgraded from an installed v0.7.0 via the real installer (`irm | iex`, SHA
+tarball). The owner dictated; the agent read `daemon.log`.
+
+**Verdict: no regression on a normal PC. The work-laptop-only paths stay off.**
+There's one open question (the prewarm threshold margin) and one pre-existing
+installer bug (below). Neither blocks merging #296/#297.
+
+| Check | Expected | Home PC (branch) | v0.7.0 baseline |
+|---|---|---|---|
+| Upgrade install (warm uv cache) | — | **17 s** | — |
+| Installer `Speech engine ready` | a few s | **8 s** (upgrade); **6 s** (cold, `UV_LINK_MODE=copy`) | n/a |
+| `~/.dictatem/.slow_engine_load` | absent | **absent** (after both installs) | — |
+| `Engine kept resident…` line | absent | **absent** | — |
+| Env size | ~2,490 MB | **2,486 MB** | **2,489 MB** measured (not ~2,930; see note) |
+| PySide6 → Essentials migration | tray works | `pyside6_essentials-6.12.0` only; **tray OK** | — |
+| Idle daemon RSS (no model) | ~100 MB | **103 MB** | — |
+| `Startup timing` total (first launch after upgrade) | ≲ 5 s | **4.99 s** (hw probe 1.40 s) | ~5 s |
+| `Startup timing` total (warm relaunch) | — | **1.26 s** (hw probe 0.67 s); 2.95 s after cold install | — |
+| Probe line | via nvml | `CUDA device detected (via nvml)` | — |
+| Launch `Engine prewarm finished` | a few s | **3.4 s** after upgrade; 0.5–0.6 s afterwards | — |
+| First dictation `Model loaded in` | ≈ 3–4 s | **4.2 s** (import 0.13, weights 4.10: resolve 2.29, construct 1.81) | 3.7 s |
+| 1st `Transcribe call took` | ≈ 1 s | **0.82 s** | 1.3 s |
+| Later transcribes | — | 0.58, 0.40, 0.49, 0.53 s | — |
+| `Hotkey KEY_DOWN` (record start, incl. mic open) | ≪ 1 s | 641, 578, 359, 594, 359 ms | — |
+| `Hotkey KEY_DOWN` (stop → transcribe) | — | 47–63 ms | — |
+| Pill (owner) | — | "felt quick" | — |
+| Tray items | no Preload / Start-Stop; Unload + Microphone ▸ | as expected | — |
+| USB mic (Jabra EVOLVE 20 SE) | used, select, unplug → default, replug → ticked | all four OK; log shows `Microphone set to 'Headset Microphone (Jabra EVOLVE 20 SE MS)'`, then `…is not connected; using the system default` on the next recording | — |
+| Taskbar mic indicator only while recording | yes | **yes** (owner) | — |
+| Unload model → VRAM | freed | **433 → 71 MiB**; RSS stays ~776 MB (CUDA/CT2 DLLs stay mapped) | — |
+| Offline (proxy → 127.0.0.1:9) | works, no `HTTP Request` | **works, 0 HTTP lines**; load 1.4 s (resolve 0.17 s), transcribe 0.53 s | — |
+| `pytest -q` | 2089 passed, 32 skipped | **2075 passed, 46 skipped** (same 2121 total; see note) | — |
+| `ruff check .` | clean | **All checks passed** | — |
+
+**Notes.**
+- **Prewarm threshold margin (owner flagged, open question).** The upgrade
+  install's prewarm took 8 s on this ordinary consumer PC, against the 10 s
+  `.slow_engine_load` threshold: a margin of only 1.25×. The cold copy install
+  took 6 s. A slower home PC (HDD, older CPU, third-party AV) could plausibly
+  cross 10 s and switch on the resident engine (+~230 MB RSS) without needing
+  it. The owner is unsure whether 10 s is the right number. Options for the
+  work-laptop session: raise the threshold (the work laptop's slow prewarms
+  were 45.8 s, far above it), or require it to be exceeded twice or at launch
+  as well, not only at install. The launch prewarm right after was 3.4 s here.
+- **First-load `resolve` 2.29 s** is a cold disk-cache effect, not network
+  access: the offline reload had resolve 0.17 s and no HTTP lines. Model load
+  overall is ~0.5 s slower than the v0.7.0 baseline, but it overlaps with
+  recording, so the owner didn't notice. First transcribe is faster
+  (0.82 vs 1.3 s).
+- One `Audio callback status: input overflow` warning came during the first
+  recording, while the model was loading in parallel. The text pasted correctly.
+- **Env size:** v0.7.0 already measured 2,489 MB on this PC before the
+  upgrade, so the ~440 MB PySide6 saving doesn't show here (this v0.7.0 env
+  probably never had the full meta Addons). The migration path still left
+  Essentials only and a working tray.
+- **Tests:** the 14 extra skips are all `test_apple_gpu_extra.py: needs a
+  POSIX sh` (no `sh` on PATH in the agent's PowerShell). That's environmental,
+  not a regression.
+- **Pre-existing installer bug (same code on `main`):** the agent aborted one
+  cold-install run partway through (a `2>&1` on `iex` turned uv's stderr into a
+  terminating error). That left `Scripts\python.exe` at 0 bytes, and the next
+  installer run exposed two faults:
+  1. `install.ps1:389`: uv exits 2 → the failure branch calls
+     `Test-DictatemEnvBroken`, which runs `uv tool dir` and **resets
+     `$LASTEXITCODE` to 0**. The re-check at `install.ps1:402` then passes, the
+     `throw` never runs, and the installer goes on to prewarm (`could not run`)
+     and launch (`Start-Process: cannot find the file`). Fix: capture uv's exit
+     code in a variable straight after each `uv tool install`.
+  2. `Test-DictatemEnvBroken` only checks that `python.exe` *exists*, so a
+     truncated (0-byte) interpreter isn't treated as broken and repaired.
+     Recovered by hand: `uv tool uninstall dictatem` + remove the env dir.
+     After that the cold install was clean.
