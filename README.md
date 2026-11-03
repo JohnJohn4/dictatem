@@ -367,9 +367,10 @@ next dictation.
 Want an instant first response instead? Set `preload_model = true` under
 `[startup]`, raise `idle_unload_minutes`, or use **Preload Model** in the tray menu.
 
-On Windows, a second after launch Dictatem also loads the transcription engine's
-DLLs once in a short-lived, low-priority background process (no model, no GPU
-memory). On machines with endpoint antivirus that scans each new DLL, this moves
+On Windows, the installer prepares the transcription engine before it first
+starts Dictatem, and a second after each launch Dictatem repeats this in a
+short-lived, low-priority background process (no model, no GPU memory; seconds
+when already warm). On machines with endpoint antivirus that scans each new DLL, this moves
 a one-off delay of up to a minute or more from your first dictation into the
 background. Turn it off with `prewarm_engine = false` under `[startup]`.
 

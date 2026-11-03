@@ -126,3 +126,12 @@ def test_nvidia_dll_paths_lists_only_dlls(tmp_path: Path) -> None:
     paths = nvidia_dll_paths([str(cublas), str(tmp_path / "missing")])
 
     assert [Path(p).name for p in paths] == ["cublas64_12.dll", "cublasLt64_12.DLL"]
+
+
+def test_installer_prewarms_before_launching_the_daemon() -> None:
+    # The install-time prewarm must finish before the tray appears, so a user
+    # can't start dictating into a half-scanned engine.
+    script = (Path(__file__).resolve().parents[1] / "install.ps1").read_text(encoding="utf-8")
+    prewarm = script.index(f"-m {PREWARM_MODULE}")
+    launch = script.index("Start-Process -FilePath 'dictatem'")
+    assert prewarm < launch

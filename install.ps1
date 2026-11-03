@@ -471,6 +471,31 @@ function Add-ToUserPath {
 Add-ToUserPath $toolBin
 Add-ToUserPath "$env:USERPROFILE\.local\bin"
 
+# --- 3.5 Prepare the speech engine before first use (ADR-0029) -----------
+# On managed/work machines, endpoint security (e.g. Defender for Endpoint) scans
+# each newly written engine DLL the first time it loads: measured at 3+ minutes
+# on a work laptop. Paying that here, BEFORE the tray appears, means the user
+# can't start dictating into a half-scanned engine (a minute-plus wait, a late
+# pill, lost audio). The child only loads the engine's DLLs: no model, no GPU
+# memory, no network. On an ordinary machine it takes a few seconds. Best-effort:
+# a failure only costs the speed-up, never the install.
+$envDir = Get-DictatemToolEnvDir
+$toolPython = if ($envDir) { Join-Path $envDir 'Scripts\python.exe' } else { $null }
+if ($toolPython -and (Test-Path -LiteralPath $toolPython)) {
+    Write-Host 'Preparing the speech engine (one-time). This takes a few seconds, or a few minutes on a managed/work machine while its security software scans the new files - please wait...'
+    $prewarmTimer = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        & $toolPython -m dictatem.transcribe.prewarm
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host ("Speech engine ready ({0:N0} s)." -f $prewarmTimer.Elapsed.TotalSeconds)
+        } else {
+            Write-Host "Note: speech engine preparation exited with code $LASTEXITCODE; continuing (the first dictation may be slower)."
+        }
+    } catch {
+        Write-Host 'Note: speech engine preparation could not run; continuing (the first dictation may be slower).'
+    }
+}
+
 # --- 4. Launch the daemon once -------------------------------------------
 Write-Host 'Launching Dictatem...'
 Start-Process -FilePath 'dictatem'

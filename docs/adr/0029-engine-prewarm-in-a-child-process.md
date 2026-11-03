@@ -35,6 +35,16 @@ the daemon spawns `python -m dictatem.transcribe.prewarm`:
   launch anyway.
 - On by default; opt out with `[startup] prewarm_engine = false`.
 
+**At install time too.** `install.ps1` runs the same child, blocking, *before* it
+launches the daemon, with a "Preparing the speech engine… please wait" message.
+The user can't start dictating into a half-scanned engine, because the tray
+only appears once it's done. This covers fresh installs and tray-driven
+updates (both run `install.ps1`). A failure there is reported and the install
+continues. The launch-time prewarm stays: after an install it finishes in
+seconds, and it covers later launches where the scan state has gone cold again
+(observed after a long gap). This amends ADR-0025's "installer stays thin" for
+this one step; it still downloads nothing at install.
+
 ## Why not the alternatives
 
 - **Load + transcribe silence at first run** (a model warm-up). It would also
