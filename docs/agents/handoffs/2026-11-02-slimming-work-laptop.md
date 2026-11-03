@@ -385,3 +385,44 @@ Gotchas found along the way:
 Open: Finding C (warm loads of ~19 s after a long gap in a resident daemon,
 not reproducible standalone) and H4's stall during a mid-session rescan. The
 prewarm only covers launch.
+
+## Owner tests on the fixed build (2026-11-03, local install of `feb6f24`)
+
+**Install-time prewarm.** Real `install.ps1` from the checkout, fresh
+`UV_LINK_MODE=copy` files: `Speech engine ready (130 s)`, install total 151 s,
+then launch. Startup total 14.99 s (`hw probe 0.97s`; `imports 7.83s` is now
+the largest phase, which is the Qt/PySide6 DLLs, not prewarmed). The launch
+prewarm then took 1.9 s.
+
+**Test A: first dictation after the fresh install (~6 min after the
+prewarm).** `Model loaded in 17.1s (engine import 6.45s, weights 10.63s)`,
+then `Transcribe call took 14.63s`. That is about 27 s from stop to paste
+(step 3: about 2 min 14 s). The second dictation took 0.61 s. This is better
+than before the fixes but not the ~1 s seen standalone right after the
+prewarm. It fits Finding C: the warm state fades within minutes here.
+
+**Test B: offline.** The daemon was relaunched with `HTTP(S)_PROXY` /
+`ALL_PROXY` pointing at a dead port (`NO_PROXY=localhost,127.0.0.1`); both
+urllib and httpx2 were verified blocked. The launch prewarm took 13.7 s. The
+owner dictated ~27 s later: **it worked**, with no HF request, `Model loaded
+in 2.9s (0.48s / 2.45s)` and `Transcribe call took 0.95s`. After the
+first-run fetch, dictation needs no network (the update check only runs from
+the tray menu; Ollama is localhost).
+
+**Pill delay = record-start blocks the GUI thread for 1-2 s.** The new hotkey
+log shows `KEY_DOWN … handled in 1938ms` (first press after install), 1000 ms
+(second), 1141 ms (Test B). The pill is drawn only after the mic stream
+opens. py-spy over the Test B press (~0.98 s inside `_do_record_start`):
+**~0.60 s** in `sounddevice.InputStream.__init__` (PortAudio/WASAPI stream
+open), **~0.32 s** importing `sounddevice` (lazily, on the first press of each
+session), ~0.06 s `show_pill`. Candidate fixes for the owner:
+
+1. Import `sounddevice` at launch (after the tray): safe, saves ~0.3 s on
+   every first press, more when cold.
+2. Speed up the stream open. Options: pre-open and keep the stream stopped
+   (check whether Windows shows the mic-in-use indicator for an opened but
+   unstarted stream), or open it off the GUI thread. Do **not** show the pill
+   before the mic is live, or the start of speech is lost.
+
+Still open: Finding C (warm state fades within minutes; Test A paid ~32 s of
+load + transcribe 6 min after the prewarm).
