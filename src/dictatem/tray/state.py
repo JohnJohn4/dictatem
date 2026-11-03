@@ -18,6 +18,17 @@ def glyph_tint_rgba(is_dark_background: bool) -> tuple[int, int, int, int]:
     return (channel, channel, channel, 255)
 
 
+def uses_native_tray_menu(platform: str) -> bool:
+    """Whether the tray menu is shown as an OS-native menu by our own code.
+
+    Windows: yes. A ``TrackPopupMenuEx`` menu on left- or right-click behaves
+    like every other notification-area app (the hidden-icons flyout stays open
+    behind it, an outside click dismisses it). macOS: Qt's context menu
+    already is the native status-item menu, opened on any click.
+    """
+    return platform == "win32"
+
+
 class IconVariant(enum.Enum):
     Idle = "idle"
     Recording = "recording"

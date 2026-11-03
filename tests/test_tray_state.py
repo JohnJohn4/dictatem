@@ -172,3 +172,15 @@ class TestImportSafety:
         assert pyside_violations == [], (
             f"tray.state pulled in PySide6: {pyside_violations}"
         )
+
+
+class TestUsesNativeTrayMenu:
+    def test_windows_uses_the_native_menu(self) -> None:
+        from dictatem.tray.state import uses_native_tray_menu
+
+        assert uses_native_tray_menu("win32") is True
+
+    def test_macos_keeps_qts_status_item_menu(self) -> None:
+        from dictatem.tray.state import uses_native_tray_menu
+
+        assert uses_native_tray_menu("darwin") is False
