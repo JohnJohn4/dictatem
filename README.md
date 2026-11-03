@@ -231,6 +231,10 @@ file…**, **How to use Dictatem…** (a live in-app guide), **Check for
 updates…**, **Show Log**, **Restart**, **Quit**. **Start/Stop recording** appear
 only when no global hotkey is available.
 
+On Windows, left- or right-click the icon. Tip: if it's hidden behind the `^`
+arrow, pin it next to the clock via **Settings → Personalization → Taskbar →
+Other system tray icons → Dictatem**.
+
 A microphone plugged in while Dictatem runs is picked up from the next
 dictation. If the chosen microphone is unplugged, Dictatem uses the system
 default (ticked in the menu) and switches back automatically when it's plugged

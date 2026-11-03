@@ -7,7 +7,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QRectF, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -22,7 +22,8 @@ from dictatem.assets import asset_path
 from dictatem.config import default_config_path
 from dictatem.logpaths import default_daemon_log_path
 from dictatem.tray.glyph import waveform_bars
-from dictatem.tray.state import MenuItem, TrayState, glyph_tint_rgba, opens_menu_on_click
+from dictatem.tray.native_menu import NativeItem, native_label, number_actions, tidy
+from dictatem.tray.state import MenuItem, TrayState, glyph_tint_rgba, uses_native_tray_menu
 from dictatem.tray.usage_guide import DARK as _GUIDE_DARK
 from dictatem.tray.usage_guide import LIGHT as _GUIDE_LIGHT
 
@@ -177,13 +178,18 @@ class QtTrayIcon:
         self._app.styleHints().colorSchemeChanged.connect(self._on_color_scheme_changed)
 
         self._build_menu()
-        self._tray.setContextMenu(self._menu)
-        # Windows tray conventions: a plain left-click opens the menu too, and
-        # the menu must own the foreground or an outside click won't close it.
-        # That showed up whenever the Usage Guide window was open: the menu stayed
-        # on screen until the guide was closed.
-        self._tray.activated.connect(self._on_tray_activated)
-        self._menu.aboutToShow.connect(self._bring_menu_to_foreground)
+        # On Windows the menu is shown as a native notification-area menu
+        # (TrackPopupMenuEx) on left- or right-click; the QMenu's QActions stay
+        # the source of truth for labels, visibility, enablement and checks.
+        # A Qt popup is just a window to the shell: the hidden-icons flyout
+        # closed as soon as the mouse left it, and an outside click didn't
+        # dismiss the menu while the Usage Guide was open. Elsewhere (macOS),
+        # Qt's context menu is the native status-item menu already.
+        self._native_menu_open = False
+        if uses_native_tray_menu(sys.platform):
+            self._tray.activated.connect(self._on_tray_activated)
+        else:
+            self._tray.setContextMenu(self._menu)
         # Defer the first icon render + show until the event loop is running.
         # Creating/showing the status item during __init__ (before app.exec())
         # silently fails to appear under a LaunchServices/.app launch on macOS,
@@ -193,35 +199,60 @@ class QtTrayIcon:
         QTimer.singleShot(0, self._realize)
 
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        if opens_menu_on_click(
-            platform=sys.platform,
-            left_click=reason == QSystemTrayIcon.ActivationReason.Trigger,
-            menu_visible=self._menu.isVisible(),
+        if reason in (
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.Context,
         ):
-            self._menu.popup(QCursor.pos())
+            self._show_native_menu()
 
-    def _bring_menu_to_foreground(self) -> None:
-        """Make the popup the foreground window once it's mapped (Windows).
+    def _snapshot(self, menu: QMenu) -> list[NativeItem]:
+        items: list[NativeItem] = []
+        for action in menu.actions():
+            if not action.isVisible():
+                continue
+            if action.isSeparator():
+                items.append(NativeItem("separator"))
+                continue
+            submenu = action.menu()
+            if submenu is not None:
+                items.append(
+                    NativeItem(
+                        "submenu",
+                        action.text(),
+                        action.isEnabled(),
+                        children=tuple(self._snapshot(submenu)),
+                        key=action,
+                    )
+                )
+                continue
+            items.append(
+                NativeItem(
+                    "action",
+                    action.text(),
+                    action.isEnabled(),
+                    action.isCheckable() and action.isChecked(),
+                    key=action,
+                )
+            )
+        return items
 
-        Win32 only dismisses a popup on an outside click when its app owns the
-        foreground. A tray click doesn't make it so, which is why the menu stuck
-        whenever another dictatem window (the Usage Guide) was open. The tray
-        click grants us the right to take the foreground (Microsoft's documented
-        "SetForegroundWindow before TrackPopupMenu" rule for notification-area
-        menus).
-        """
-        if sys.platform != "win32":
+    def _show_native_menu(self) -> None:
+        """Show the menu with TrackPopupMenuEx and trigger the chosen QAction."""
+        if self._native_menu_open:
             return
-
-        def _foreground() -> None:
-            try:
-                import ctypes
-
-                ctypes.windll.user32.SetForegroundWindow(int(self._menu.winId()))  # type: ignore[attr-defined]
-            except Exception:
-                logger.debug("Could not bring the tray menu to the foreground", exc_info=True)
-
-        QTimer.singleShot(0, _foreground)
+        self._native_menu_open = True
+        try:
+            # The Microphone list is filled on open (after a device re-scan).
+            self._populate_microphone_menu()
+            plan = tidy(self._snapshot(self._menu))
+            ids = number_actions(plan)
+            chosen = _track_native_menu(plan, ids, owner=int(self._parent.winId()))
+            if chosen is not None and isinstance(chosen.key, QAction):
+                chosen.key.trigger()
+        except Exception:
+            logger.error("Error showing the tray menu", exc_info=True)
+        finally:
+            self._native_menu_open = False
 
     def _realize(self) -> None:
         self._refresh_icon()
@@ -493,3 +524,72 @@ class QtTrayIcon:
         window.raise_()
         window.activateWindow()
         return True
+
+
+def _track_native_menu(
+    plan: list[NativeItem], ids: dict[int, NativeItem], *, owner: int
+) -> NativeItem | None:
+    """Render *plan* as a Win32 popup at the cursor and return the chosen item.
+
+    Follows the documented notification-area pattern: SetForegroundWindow on
+    the owner, TrackPopupMenuEx, then post WM_NULL so the menu dismisses
+    properly. TPM_RETURNCMD makes it synchronous (no WM_COMMAND plumbing). The
+    OS menu loop keeps dispatching messages, so Qt's timers keep running.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.CreatePopupMenu.restype = wintypes.HMENU
+    user32.AppendMenuW.argtypes = [
+        wintypes.HMENU, wintypes.UINT, ctypes.c_size_t, wintypes.LPCWSTR,
+    ]
+    user32.AppendMenuW.restype = wintypes.BOOL
+    user32.TrackPopupMenuEx.argtypes = [
+        wintypes.HMENU, wintypes.UINT, ctypes.c_int, ctypes.c_int, wintypes.HWND, ctypes.c_void_p,
+    ]
+    user32.TrackPopupMenuEx.restype = ctypes.c_int
+    user32.DestroyMenu.argtypes = [wintypes.HMENU]
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+    user32.GetSystemMetrics.argtypes = [ctypes.c_int]
+
+    mf_string, mf_grayed, mf_checked, mf_popup, mf_separator = 0x0, 0x1, 0x8, 0x10, 0x800
+    tpm_rightbutton, tpm_rightalign, tpm_bottomalign = 0x2, 0x8, 0x20
+    tpm_nonotify, tpm_returncmd = 0x80, 0x100
+    sm_menudropalignment, wm_null = 40, 0x0
+
+    id_of = {id(item): command for command, item in ids.items()}
+
+    def build(level: list[NativeItem] | tuple[NativeItem, ...]) -> int:
+        hmenu = user32.CreatePopupMenu()
+        for item in level:
+            if item.kind == "separator":
+                user32.AppendMenuW(hmenu, mf_separator, 0, None)
+            elif item.kind == "submenu":
+                sub = build(item.children)
+                flags = mf_popup | (0 if item.enabled else mf_grayed)
+                user32.AppendMenuW(hmenu, flags, sub, native_label(item.text))
+            else:
+                flags = mf_string
+                if not item.enabled:
+                    flags |= mf_grayed
+                if item.checked:
+                    flags |= mf_checked
+                user32.AppendMenuW(hmenu, flags, id_of[id(item)], native_label(item.text))
+        return hmenu
+
+    hmenu = build(plan)
+    try:
+        point = wintypes.POINT()
+        user32.GetCursorPos(ctypes.byref(point))
+        flags = tpm_rightbutton | tpm_bottomalign | tpm_nonotify | tpm_returncmd
+        if user32.GetSystemMetrics(sm_menudropalignment):
+            flags |= tpm_rightalign
+        user32.SetForegroundWindow(owner)
+        command = user32.TrackPopupMenuEx(hmenu, flags, point.x, point.y, owner, None)
+        user32.PostMessageW(owner, wm_null, 0, 0)
+    finally:
+        user32.DestroyMenu(hmenu)  # also destroys the submenus
+    return ids.get(command) if command else None
