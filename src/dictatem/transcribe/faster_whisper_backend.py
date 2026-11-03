@@ -177,18 +177,26 @@ class FasterWhisperBackend:
             select_recognition_hint,
         )
 
+        model_path = resolve_model_path(self._model_name, download_model)
+        resolved = time.perf_counter()
         self._model = WhisperModel(
-            resolve_model_path(self._model_name, download_model),
+            model_path,
             device=self._device,
             compute_type=self._compute_type,
         )
         # Split the load so a cold-launch AV scan (first import of the
         # faster-whisper/ctranslate2/onnxruntime DLL tree) is distinguishable
-        # from reading the weights onto the device.
+        # from reading the weights onto the device. "weights" keeps its old
+        # meaning (everything after the import); resolve/construct split it so
+        # a slow cache lookup is distinguishable from building the model.
+        done = time.perf_counter()
         logger.info(
-            "Model load breakdown: engine import %.2fs, weights %.2fs",
+            "Model load breakdown: engine import %.2fs, weights %.2fs "
+            "(resolve %.2fs, construct %.2fs)",
             imported - started,
-            time.perf_counter() - imported,
+            done - imported,
+            resolved - imported,
+            done - resolved,
         )
         # Detect the capability on the actual model instance, then bake the
         # hint kwargs so every transcribe call reuses them.
