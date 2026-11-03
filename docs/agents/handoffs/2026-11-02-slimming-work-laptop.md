@@ -568,3 +568,15 @@ installer bug (below). Neither blocks merging #296/#297.
      truncated (0-byte) interpreter isn't treated as broken and repaired.
      Recovered by hand: `uv tool uninstall dictatem` + remove the env dir.
      After that the cold install was clean.
+
+**Resolved by the work-laptop session (2026-11-03).**
+- **Threshold:** `SLOW_PREWARM_S` raised to **20 s** (`b5b792b`, PR #297). A
+  normal PC measured 6–8 s; the work laptop's cold scans were 45.8–212 s.
+  "Exceeded twice" was considered and rejected: more state, and it wouldn't
+  change the outcome on either machine.
+- **Installer bug:** fixed in its own PR **#298** (`fix/install-exit-code`,
+  base `main`). `$uvInstallExit` is captured right after each `uv tool
+  install`; a < 1 KB `python.exe` counts as broken. Verified by running the
+  real block under a stub `uv`: `main` doesn't throw (bug reproduced), the fix
+  throws or repairs as appropriate. Merge after #296/#297, rebasing past
+  #296's one-line `@migrateArgs` conflict.
