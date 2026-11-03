@@ -426,3 +426,23 @@ session), ~0.06 s `show_pill`. Candidate fixes for the owner:
 
 Still open: Finding C (warm state fades within minutes; Test A paid ~32 s of
 load + transcribe 6 min after the prewarm).
+
+## Microphone + tray follow-up (owner-requested, 2026-11-03)
+
+Commits `aa2d2bc` (PortAudio DLL preload, superseded), `ce64651` (device
+re-scan, tray Microphone menu, tray slimming), `cfe709f` (an unplugged choice
+is hidden and System default is ticked while it's away). Owner-verified on
+the work laptop:
+
+- **The mic-in-use indicator shows only while recording**, never during the
+  idle re-scan.
+- **Record-start (key press → pill can show):** built-in Realtek array
+  453–782 ms (was 1000–1938 ms); **Jabra headset 47–62 ms**. What's left is
+  the built-in array's driver opening slowly. Holding the stream open was
+  rejected by the owner (privacy; other apps need the mic).
+- **Hot-plug:** the Jabra was picked in the menu and used. Unplugged:
+  `Microphone '…Jabra…' is not connected; using the system default`, and the
+  menu hid it and ticked System default. Replugged: ticked again automatically
+  and used (record-start 156 ms).
+- **Still open:** Finding C. The first loads at 2.5 min and 20 min after
+  launch took 12.6 s and 12.0 s (weights ~10 s, offline).
