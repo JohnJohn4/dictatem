@@ -18,6 +18,17 @@ def glyph_tint_rgba(is_dark_background: bool) -> tuple[int, int, int, int]:
     return (channel, channel, channel, 255)
 
 
+def opens_menu_on_click(*, platform: str, left_click: bool, menu_visible: bool) -> bool:
+    """Whether a tray-icon activation should pop the menu up ourselves.
+
+    On Windows, a plain left-click opens the menu, as most tray apps do;
+    right-click is already handled by Qt's context menu. macOS shows the
+    status-item menu on any click by itself, so there's nothing to do there. A
+    click while the menu is already open is left alone, so it can close.
+    """
+    return platform == "win32" and left_click and not menu_visible
+
+
 class IconVariant(enum.Enum):
     Idle = "idle"
     Recording = "recording"

@@ -7,7 +7,7 @@ import sys
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QRectF, Qt, QTimer, QUrl
-from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QPainter, QPixmap
+from PySide6.QtGui import QAction, QColor, QCursor, QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -22,7 +22,7 @@ from dictatem.assets import asset_path
 from dictatem.config import default_config_path
 from dictatem.logpaths import default_daemon_log_path
 from dictatem.tray.glyph import waveform_bars
-from dictatem.tray.state import MenuItem, TrayState, glyph_tint_rgba
+from dictatem.tray.state import MenuItem, TrayState, glyph_tint_rgba, opens_menu_on_click
 from dictatem.tray.usage_guide import DARK as _GUIDE_DARK
 from dictatem.tray.usage_guide import LIGHT as _GUIDE_LIGHT
 
@@ -178,6 +178,12 @@ class QtTrayIcon:
 
         self._build_menu()
         self._tray.setContextMenu(self._menu)
+        # Windows tray conventions: a plain left-click opens the menu too, and
+        # the menu must own the foreground or an outside click won't close it.
+        # That showed up whenever the Usage Guide window was open: the menu stayed
+        # on screen until the guide was closed.
+        self._tray.activated.connect(self._on_tray_activated)
+        self._menu.aboutToShow.connect(self._bring_menu_to_foreground)
         # Defer the first icon render + show until the event loop is running.
         # Creating/showing the status item during __init__ (before app.exec())
         # silently fails to appear under a LaunchServices/.app launch on macOS,
@@ -185,6 +191,37 @@ class QtTrayIcon:
         # timer fires the moment exec() starts, when NSApplication is fully up.
         # Harmless on Windows — same result, a tick later.
         QTimer.singleShot(0, self._realize)
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if opens_menu_on_click(
+            platform=sys.platform,
+            left_click=reason == QSystemTrayIcon.ActivationReason.Trigger,
+            menu_visible=self._menu.isVisible(),
+        ):
+            self._menu.popup(QCursor.pos())
+
+    def _bring_menu_to_foreground(self) -> None:
+        """Make the popup the foreground window once it's mapped (Windows).
+
+        Win32 only dismisses a popup on an outside click when its app owns the
+        foreground. A tray click doesn't make it so, which is why the menu stuck
+        whenever another dictatem window (the Usage Guide) was open. The tray
+        click grants us the right to take the foreground (Microsoft's documented
+        "SetForegroundWindow before TrackPopupMenu" rule for notification-area
+        menus).
+        """
+        if sys.platform != "win32":
+            return
+
+        def _foreground() -> None:
+            try:
+                import ctypes
+
+                ctypes.windll.user32.SetForegroundWindow(int(self._menu.winId()))  # type: ignore[attr-defined]
+            except Exception:
+                logger.debug("Could not bring the tray menu to the foreground", exc_info=True)
+
+        QTimer.singleShot(0, _foreground)
 
     def _realize(self) -> None:
         self._refresh_icon()

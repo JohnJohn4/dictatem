@@ -172,3 +172,17 @@ class TestImportSafety:
         assert pyside_violations == [], (
             f"tray.state pulled in PySide6: {pyside_violations}"
         )
+
+
+class TestOpensMenuOnClick:
+    def test_left_click_opens_the_menu_on_windows(self) -> None:
+        from dictatem.tray.state import opens_menu_on_click
+
+        assert opens_menu_on_click(platform="win32", left_click=True, menu_visible=False)
+
+    def test_not_on_other_activations_platforms_or_when_already_open(self) -> None:
+        from dictatem.tray.state import opens_menu_on_click
+
+        assert not opens_menu_on_click(platform="win32", left_click=False, menu_visible=False)
+        assert not opens_menu_on_click(platform="darwin", left_click=True, menu_visible=False)
+        assert not opens_menu_on_click(platform="win32", left_click=True, menu_visible=True)
