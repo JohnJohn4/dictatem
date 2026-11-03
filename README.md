@@ -313,6 +313,7 @@ silence_timeout_s = 60          # auto-stop a toggle recording after this much s
 autostart = true
 preload_model = false           # load at startup vs. when you first arm a dictation
 prewarm_engine = true           # Windows: pre-load engine DLLs in the background at launch (no model)
+resident_engine = "auto"        # keep the engine (not the model) loaded where antivirus scanning is slow
 
 [transform]
 enabled = true                  # master switch for Trigger Words
@@ -380,6 +381,13 @@ short-lived, low-priority background process (no model, no GPU memory; seconds
 when already warm). On machines with endpoint antivirus that scans each new DLL, this moves
 a one-off delay of up to a minute or more from your first dictation into the
 background. Turn it off with `prewarm_engine = false` under `[startup]`.
+
+If that preparation is slow, which means security software re-checks the
+engine's files, Dictatem also keeps the engine (not the model, and no GPU
+memory) loaded while it runs. Those checks expire after a while, and this stops
+the first dictation after a break from paying for them again. It costs a few
+hundred MB of RAM on those machines only. Control it with `resident_engine =
+"auto" | "on" | "off"` under `[startup]`.
 
 ### Customising
 
