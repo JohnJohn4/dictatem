@@ -306,12 +306,15 @@ function Get-DictatemToolEnvDir {
 function Test-DictatemEnvBroken {
     # True when a Dictatem tool env dir EXISTS but is invalid the way uv reports
     # on (re)install: the env is present yet its Python executable is gone — the
-    # exact half-removed shape from #110. A healthy env (python.exe present) and
-    # a clean machine (no env dir) both return false, so recovery never touches
-    # a working install.
+    # exact half-removed shape from #110 — or truncated to (near) zero bytes, as
+    # an install interrupted mid-copy leaves it (home-PC QA, 2026-11-03). A
+    # healthy env (a real python.exe is hundreds of KB) and a clean machine (no
+    # env dir) both return false, so recovery never touches a working install.
     $envDir = Get-DictatemToolEnvDir
     if (-not $envDir -or -not (Test-Path -LiteralPath $envDir)) { return $false }
-    return -not (Test-Path -LiteralPath (Join-Path $envDir 'Scripts\python.exe'))
+    $python = Join-Path $envDir 'Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $python)) { return $true }
+    return ((Get-Item -LiteralPath $python).Length -lt 1024)
 }
 
 function Repair-DictatemToolEnv {
@@ -383,10 +386,15 @@ Write-Host "Installing dictatem[$extras] from $source ..."
 # on x64 they expand to `--managed-python --python 3.12`; on ARM64 to `--force
 # --python cpython-3.11-windows-x86_64` (ARM pins 3.11, not 3.12 — see step 2.5).
 uv tool install @forceArgs @pythonArgs @migrateArgs $requirement
+# Capture uv's exit code NOW: every later native call (e.g. `uv tool dir` inside
+# Test-DictatemEnvBroken) overwrites $LASTEXITCODE, and a check against the
+# overwritten value let a failed install fall through to the launch (home-PC
+# QA, 2026-11-03).
+$uvInstallExit = $LASTEXITCODE
 # $ErrorActionPreference='Stop' does NOT halt on a native exe's non-zero exit,
 # so guard explicitly — otherwise a failed install falls through to the launch
 # below and surfaces as a misleading "cannot find the file" error.
-if ($LASTEXITCODE -ne 0) {
+if ($uvInstallExit -ne 0) {
     # The install itself can corrupt the env mid-run if a process slipped past
     # Stop-DictatemDaemon and still held pythonw.exe: uv deletes python.exe, then
     # aborts on the lock, leaving the same half-removed shape (#110). If the env
@@ -395,15 +403,16 @@ if ($LASTEXITCODE -ne 0) {
     # healthy env: it falls straight through to the throw, preserving prior
     # behaviour.
     if (Test-DictatemEnvBroken) {
-        Write-Host "uv tool install failed (exit code $LASTEXITCODE) — recovering the broken tool environment and retrying once..."
+        Write-Host "uv tool install failed (exit code $uvInstallExit) — recovering the broken tool environment and retrying once..."
         Repair-DictatemToolEnv
         uv tool install @forceArgs @pythonArgs @migrateArgs $requirement
+        $uvInstallExit = $LASTEXITCODE
     }
-    if ($LASTEXITCODE -ne 0) {
+    if ($uvInstallExit -ne 0) {
         # --managed-python (step 2.5) needs a recent uv; step 1 only installs uv
         # when ABSENT, so a stale pre-existing uv fails on the unknown flag.
         Write-Host "If the error above calls '--managed-python' unexpected, your pre-existing uv is too old: update it ('uv self update') and re-run this installer."
-        throw "uv tool install failed (exit code $LASTEXITCODE). See the error above; Dictatem was not installed."
+        throw "uv tool install failed (exit code $uvInstallExit). See the error above; Dictatem was not installed."
     }
 }
 
