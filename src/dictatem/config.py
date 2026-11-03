@@ -133,6 +133,10 @@ class StartupConfig:
     # background process so an endpoint scanner's first-load cost isn't paid by
     # the first dictation (ADR-0029). No model and no GPU memory.
     prewarm_engine: bool = True
+    # Keep the engine (not the model) loaded in Dictatem after launch: "auto"
+    # does so only where a prewarm was slow, i.e. an endpoint scanner re-checks
+    # the engine's files after a gap (ADR-0029). "on" / "off" force it.
+    resident_engine: str = "auto"
 
 
 @dataclass

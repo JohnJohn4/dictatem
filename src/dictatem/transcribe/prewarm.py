@@ -30,6 +30,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -64,6 +65,78 @@ def should_prewarm(
     )
 
 
+# A prewarm this slow means an endpoint scanner checks each file the engine
+# opens, and its verdicts expire after a gap (work laptop: ~6-30 min). Measured
+# 2026-11-03: a normal consumer PC prewarms in 6-8 s (cold copy / upgrade); the
+# MDE work laptop took 45.8-212 s whenever its files were cold. 20 s leaves a
+# normal PC 2.5x headroom (a slow disk or third-party AV shouldn't flip it) and
+# still sits far below every genuinely slow scan.
+SLOW_PREWARM_S = 20.0
+
+def slow_engine_marker(home: Path) -> Path:
+    """Sentinel written when a prewarm was slow (an endpoint scanner is present)."""
+    return home / ".dictatem" / ".slow_engine_load"
+
+
+def record_prewarm_duration(seconds: float, marker: Path) -> bool:
+    """Write *marker* if the prewarm took ``SLOW_PREWARM_S`` or more; return whether.
+
+    Best-effort: an unwritable home only forfeits the resident-engine speed-up.
+    Never deleted automatically: a scanner is a property of the machine.
+    """
+    if seconds < SLOW_PREWARM_S:
+        return False
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(f"prewarm took {seconds:.1f}s\n", encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def wants_resident_engine(mode: str, *, marker_exists: bool) -> bool:
+    """Whether to keep the engine loaded in the daemon (ADR-0029, amended).
+
+    ``"auto"`` (default) keeps it only on machines where a prewarm was slow;
+    ``"on"`` / ``"off"`` force it. Unknown values act like ``"auto"``.
+    """
+    if mode == "on":
+        return True
+    if mode == "off":
+        return False
+    return marker_exists
+
+
+# Keeps the in-process DLL handles alive for the daemon's lifetime.
+_RESIDENT_DLLS: list[object] = []
+
+
+def warm_engine_in_process() -> float:  # pragma: no cover - native; manual QA
+    """Import the engine and map the NVIDIA DLLs into *this* process, for good.
+
+    No model, no CUDA context, no GPU memory. Afterwards the first dictation
+    doesn't open (and so doesn't wait for a scan of) the engine's Python files
+    or DLLs: CTranslate2's later ``LoadLibrary("cublas64_12.dll")`` gets the
+    already-loaded module. Returns the seconds it took.
+    """
+    started = time.monotonic()
+    from dictatem.transcribe.faster_whisper_backend import _register_cuda_dll_directories
+
+    _register_cuda_dll_directories()
+    import faster_whisper  # type: ignore[import-not-found]  # noqa: F401
+    import huggingface_hub._snapshot_download  # type: ignore[import-not-found]  # noqa: F401
+
+    if sys.platform == "win32":
+        import ctypes
+
+        for path in nvidia_dll_paths(_nvidia_bin_dirs()):
+            try:
+                _RESIDENT_DLLS.append(ctypes.WinDLL(path))
+            except OSError:
+                continue
+    return time.monotonic() - started
+
+
 def prewarm_command(executable: str) -> list[str]:
     return [executable, "-m", PREWARM_MODULE]
 
@@ -73,11 +146,14 @@ def start_prewarm(
     executable: str = sys.executable,
     spawn: Callable[..., subprocess.Popen[bytes]] = subprocess.Popen,
     clock: Callable[[], float] = time.monotonic,
+    on_done: Callable[[], None] | None = None,
 ) -> threading.Thread | None:
     """Spawn the prewarm child and log its outcome from a daemon thread.
 
-    Returns the watcher thread, or ``None`` if the spawn failed (logged, never
-    raised: a failed prewarm must not affect the daemon).
+    *on_done* runs on that thread once the child has exited (successfully or
+    not), e.g. to keep the engine resident. Returns the watcher thread, or
+    ``None`` if the spawn failed (logged, never raised: a failed prewarm must
+    not affect the daemon).
     """
     started = clock()
     try:
@@ -99,6 +175,11 @@ def start_prewarm(
             logger.warning("Engine prewarm wait failed", exc_info=True)
             return
         logger.info("Engine prewarm finished in %.1fs (exit %s)", clock() - started, code)
+        if on_done is not None:
+            try:
+                on_done()
+            except Exception:
+                logger.warning("Post-prewarm step failed", exc_info=True)
 
     watcher = threading.Thread(target=_watch, name="dictatem-prewarm", daemon=True)
     watcher.start()
@@ -140,6 +221,7 @@ def _nvidia_bin_dirs() -> list[str]:
 
 def main() -> int:  # pragma: no cover - native; exercised by manual QA
     """Child entry point: load the engine's DLLs, then exit."""
+    started = time.monotonic()
     from dictatem.transcribe.faster_whisper_backend import _register_cuda_dll_directories
 
     _register_cuda_dll_directories()
@@ -153,6 +235,8 @@ def main() -> int:  # pragma: no cover - native; exercised by manual QA
             # read (and scanned) by the attempt; nothing more to do.
             with contextlib.suppress(OSError):
                 ctypes.WinDLL(path)
+    # Remember a slow machine so the daemon keeps the engine resident there.
+    record_prewarm_duration(time.monotonic() - started, slow_engine_marker(Path.home()))
     return 0
 
 

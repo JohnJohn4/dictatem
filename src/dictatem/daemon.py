@@ -2344,6 +2344,13 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     from PySide6.QtCore import QTimer  # type: ignore[import-not-found]
     from PySide6.QtWidgets import QApplication  # type: ignore[import-not-found]
 
+    # Before anything else is imported: stop PySide6's import hook re-reading
+    # the source of every module imported after Qt (slow under an endpoint
+    # scanner; dictatem never uses __feature__). See dictatem.qt_import_hook.
+    from dictatem.qt_import_hook import limit_pyside_source_scan
+
+    limit_pyside_source_scan()
+
     from dictatem.audio.buffer import AudioBuffer
     from dictatem.autostart.reconcile import apply_autostart
     from dictatem.config import (
@@ -2922,7 +2929,27 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # below-normal-priority child so an endpoint scanner's first-load cost is
     # paid in the background, not by the first dictation. Deferred a moment so
     # the tray's first paint isn't competing for disk. Never waited on.
-    from dictatem.transcribe.prewarm import should_prewarm, start_prewarm
+    from dictatem.transcribe.prewarm import (
+        should_prewarm,
+        slow_engine_marker,
+        start_prewarm,
+        wants_resident_engine,
+        warm_engine_in_process,
+    )
+
+    def _keep_engine_resident() -> None:
+        # Resident engine (ADR-0029, amended): on machines where an endpoint
+        # scanner made a prewarm slow, its verdicts expire after a gap and the
+        # first dictation re-pays the scan. Keeping the engine (not the model)
+        # loaded in this process means that dictation opens none of those
+        # files. Runs on the prewarm watcher thread, after the files are warm.
+        marker = slow_engine_marker(Path.home())
+        if not wants_resident_engine(
+            config.startup.resident_engine, marker_exists=marker.exists()
+        ):
+            return
+        seconds = warm_engine_in_process()
+        logger.info("Engine kept resident in this process (%.1fs; no model loaded)", seconds)
 
     if should_prewarm(
         platform=sys.platform,
@@ -2930,7 +2957,20 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
         enabled=config.startup.prewarm_engine,
         preload_model=config.startup.preload_model,
     ):
-        QTimer.singleShot(1000, start_prewarm)
+        QTimer.singleShot(1000, lambda: start_prewarm(on_done=_keep_engine_resident))
+    elif (
+        sys.platform == "win32"
+        and selection.kind == "faster-whisper"
+        and not config.startup.preload_model
+        and config.startup.resident_engine == "on"
+    ):
+        # Prewarm turned off but the resident engine forced on: still honour it.
+        QTimer.singleShot(
+            1000,
+            lambda: threading.Thread(
+                target=_keep_engine_resident, name="dictatem-resident-engine", daemon=True
+            ).start(),
+        )
 
     # First-run model fetch (ADR-0025 / #162): on the daemon's first run — the
     # run the installer triggers, right after tier resolution, while the network
