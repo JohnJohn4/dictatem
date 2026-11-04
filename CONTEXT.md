@@ -439,6 +439,28 @@ Transform model is not Dictatem's to manage: Ollama is a separate, user-managed
 process Dictatem only talks to — never installs, pulls, or runs on the user's
 behalf (see [ADR-0008](docs/adr/0008-dictatem-does-not-manage-ollama-lifecycle.md)).
 
+### Engine Prewarm
+
+Loading the transcription engine's DLLs once in a short-lived, low-priority
+background process, with **no model and no GPU memory**. On machines whose
+security software scans each new file (e.g. Defender for Endpoint), this moves
+a one-off delay of minutes off the first dictation. `install.ps1` runs it before
+the first launch ("Preparing the speech engine…"), and the daemon repeats it a
+second after each launch (seconds when warm). Windows only;
+`[startup] prewarm_engine`. See
+[ADR-0029](docs/adr/0029-engine-prewarm-in-a-child-process.md).
+
+### Resident Engine
+
+On a machine where an [Engine Prewarm](#engine-prewarm) ever took ≥ 20 s
+(recorded in `~/.dictatem/.slow_engine_load`), Dictatem keeps the engine (not
+the model, no GPU memory) loaded in its own process after launch. Those
+scanners' verdicts expire after a gap, and this stops the first dictation after
+a break from re-paying the scan: ~14.5 s → ~3 s on the work laptop. Costs about
+230 MB of idle RAM, on those machines only. `[startup] resident_engine =
+"auto" | "on" | "off"`. Distinct from `preload_model`, which loads the model
+itself.
+
 ## Configuration
 
 ### Config Load Report

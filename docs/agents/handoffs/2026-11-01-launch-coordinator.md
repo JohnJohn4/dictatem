@@ -1,5 +1,7 @@
 # Handoff — Dictatem launch coordinator (2026-11-01)
 
+> **Superseded 2026-11-04** by [`2026-11-04-coordinator.md`](2026-11-04-coordinator.md) (v0.8.0–v0.8.3 shipped).
+
 You are the **coordinator** for getting Dictatem out to the public, stable and
 working well. You orchestrate: delegate builds to worktree agents or
 `implement-spec` sessions, merge what's verified, keep the tracker honest, and
