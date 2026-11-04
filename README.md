@@ -231,6 +231,10 @@ file…**, **How to use Dictatem…** (a live in-app guide), **Check for
 updates…**, **Show Log**, **Restart**, **Quit**. **Start/Stop recording** appear
 only when no global hotkey is available.
 
+**Quit it and want it back?** On Windows, search **Dictatem** in the Start
+menu (or Win+R → `dictatem`). With **Start at login** on, it also starts again
+at your next sign-in.
+
 On Windows, left- or right-click the icon. Tip: if it's hidden behind the `^`
 arrow, pin it next to the clock via **Settings → Personalization → Taskbar →
 Other system tray icons → Dictatem**.
@@ -450,7 +454,7 @@ Dictatem owns its start-at-login entry, so removing it cleanly is two steps (a
 bare `uv tool uninstall` would orphan that entry and hit a file lock):
 
 ```powershell
-dictatem --uninstall        # removes the autostart entry and stops the daemon
+dictatem --uninstall        # removes the autostart entry and Start-menu shortcut, stops the daemon
 uv tool uninstall dictatem  # removes the tool
 ```
 

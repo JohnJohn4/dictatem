@@ -480,6 +480,34 @@ function Add-ToUserPath {
 Add-ToUserPath $toolBin
 Add-ToUserPath "$env:USERPROFILE\.local\bin"
 
+# --- 3.4 Start-menu shortcut -----------------------------------------------
+# A per-user "Dictatem" entry in the Start menu, so after Quit the user can
+# search "Dictatem" in Start like any other app (owner request, v0.8.3). It
+# points at the windowless `dictatem.exe` launcher, with the app icon. Per-user
+# Programs folder: no admin needed. Rewritten on every install/update;
+# `dictatem --uninstall` removes it. Best-effort: never fails the install.
+try {
+    $launcherDir = if ($toolBin) { $toolBin } else { "$env:USERPROFILE\.local\bin" }
+    $launcher = Join-Path $launcherDir 'dictatem.exe'
+    $programsDir = [Environment]::GetFolderPath('Programs')
+    if ((Test-Path -LiteralPath $launcher) -and $programsDir) {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut((Join-Path $programsDir 'Dictatem.lnk'))
+        $shortcut.TargetPath = $launcher
+        $shortcut.WorkingDirectory = $env:USERPROFILE
+        $shortcut.Description = 'Dictatem - local push-to-talk dictation'
+        $envDirForIcon = Get-DictatemToolEnvDir
+        if ($envDirForIcon) {
+            $icon = Join-Path $envDirForIcon 'Lib\site-packages\dictatem\assets\app.ico'
+            if (Test-Path -LiteralPath $icon) { $shortcut.IconLocation = "$icon,0" }
+        }
+        $shortcut.Save()
+        Write-Host 'Added Dictatem to the Start menu.'
+    }
+} catch {
+    Write-Host "Note: couldn't add a Start-menu shortcut; start Dictatem with Win+R -> dictatem."
+}
+
 # --- 3.5 Prepare the speech engine before first use (ADR-0029) -----------
 # On managed/work machines, endpoint security (e.g. Defender for Endpoint) scans
 # each newly written engine DLL the first time it loads: measured at 3+ minutes
@@ -517,5 +545,6 @@ Start-Process -FilePath 'dictatem'
 # reads as a glitch, so set expectations instead.
 Write-Host ''
 Write-Host 'Dictatem is installed and starting now.'
+Write-Host 'If you ever Quit it, start it again from the Start menu (search "Dictatem").'
 Write-Host 'The tray icon will appear in a few seconds — on a managed/work machine the first launch can be slower while Windows scans the new files.'
 Write-Host 'Optional Trigger Words (local-LLM rewrites) need Ollama set up yourself — see the README "Trigger Words setup (Ollama)" section: https://github.com/JohnJohn4/dictatem#trigger-words-setup-ollama'
