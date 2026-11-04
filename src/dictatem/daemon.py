@@ -1894,6 +1894,17 @@ def _run_uninstall() -> None:
             unregister_app_identity()
         except Exception:
             logger.warning("Could not remove the AppUserModelID", exc_info=True)
+        # The installer's Start-menu shortcut (v0.8.3). Never fatal.
+        try:
+            from dictatem.process.win32_start_menu import (
+                remove_start_menu_shortcut,
+                start_menu_shortcut_path,
+            )
+
+            if remove_start_menu_shortcut(start_menu_shortcut_path()):
+                lines.insert(0, "Removed the Start-menu shortcut.")
+        except Exception:
+            logger.warning("Could not remove the Start-menu shortcut", exc_info=True)
 
     # Stop the running daemon so step 2 (`uv tool uninstall`) isn't blocked by
     # the `…\Scripts` file lock (#69). Autostart was removed first (above, per
