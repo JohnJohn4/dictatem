@@ -24,7 +24,7 @@ named ADR remain the per-feature spec.
 > _The closing agent of each session rewrites this block using the template in
 > the Handoff protocol. It is the first thing the next agent reads._
 
-**Superseded 2026-11-01: read [`handoffs/2026-11-01-launch-coordinator.md`](handoffs/2026-11-01-launch-coordinator.md) instead.**
+**Superseded: read [`handoffs/2026-11-04-coordinator.md`](handoffs/2026-11-04-coordinator.md) instead** (it replaces the 2026-11-01 launch-coordinator brief).
 It is the current coordinator brief: v0.7.0 release (PR #279), macOS QA round 2
 (#281), the remaining Windows bugs, signing (#227), and the docs map (#214),
 which is retiring this roadmap. Don't add ledger entries here.
