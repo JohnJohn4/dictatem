@@ -162,7 +162,6 @@ DICTATEM_PYTHON="${DICTATEM_PYTHON:-3.12}"
 # recovery is cheap and idempotent. `uv tool uninstall` clears even an invalid
 # env (uv validates on install, not on uninstall), so we clear a broken env (and
 # force-remove any leftover the ledger no longer tracks) before installing.
-# (dictatem_env_dir is defined above, next to the engine-set selection.)
 
 # True (exit 0) only when a Dictatem env dir EXISTS but its Python is gone — the
 # half-removed shape. A healthy env and a clean machine both return non-zero, so

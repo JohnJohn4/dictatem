@@ -167,12 +167,11 @@ _DETECT = "dictatem_env_has_apple_gpu_engine"
 class TestInstallShDetectsInstalledEngine:
     """#324: an update finds the engine in the tool env it is about to replace."""
 
-    def _has_engine(self, env_dir: Path | str) -> bool:
+    def _has_engine(self, env_dir: str) -> bool:
         assert _SH is not None
         script = f'{_shell_function(_DETECT)}\n{_DETECT} "$1"\n'
-        arg = env_dir if isinstance(env_dir, str) else env_dir.as_posix()
         result = subprocess.run(
-            [_SH, "-c", script, "detect", arg],
+            [_SH, "-c", script, "detect", env_dir],
             capture_output=True,
             text=True,
             env={"PATH": "/usr/bin:/bin"},
@@ -187,17 +186,17 @@ class TestInstallShDetectsInstalledEngine:
     def test_env_with_mlx_whisper_has_the_engine(self, tmp_path: Path) -> None:
         site = self._site_packages(tmp_path)
         (site / "mlx_whisper-0.4.3.dist-info").mkdir()
-        assert self._has_engine(tmp_path)
+        assert self._has_engine(tmp_path.as_posix())
 
     def test_cpu_only_env_has_no_engine(self, tmp_path: Path) -> None:
         site = self._site_packages(tmp_path)
         (site / "faster_whisper-1.2.1.dist-info").mkdir()
         # mlx alone (no mlx-whisper) is not the engine.
         (site / "mlx-0.32.4.dist-info").mkdir()
-        assert not self._has_engine(tmp_path)
+        assert not self._has_engine(tmp_path.as_posix())
 
     def test_missing_or_empty_env_has_no_engine(self, tmp_path: Path) -> None:
-        assert not self._has_engine(tmp_path / "absent")
+        assert not self._has_engine((tmp_path / "absent").as_posix())
         assert not self._has_engine("")
 
 

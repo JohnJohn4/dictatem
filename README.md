@@ -444,8 +444,8 @@ overlay flashes a message telling you which step is missing.
   [install one-liner](#macos) at the newer tag: it stops the old daemon,
   refreshes the tool, the `.app`, and the start-at-login entry, and restarts
   Dictatem; your config and permission grants carry over, and so does the Apple
-  GPU engine if you installed it (no `DICTATEM_APPLE_GPU=1` needed). *(A one-click in-app
-  update on macOS is a planned follow-up to
+  GPU engine if you installed it (no `DICTATEM_APPLE_GPU=1` needed). *(A
+  one-click in-app update on macOS is a planned follow-up to
   [#193](https://github.com/JohnJohn4/dictatem/issues/193).)*
 
 You can also update either platform by re-running the one-liner with a newer
