@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import re
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -295,6 +296,12 @@ _OPEN_CONFIG_HINT = (
     "Your config.toml was not changed — fix it via “Open config file…” "
     "in the tray menu, then Restart."
 )
+# A Windows toast shows about three lines of body and silently cuts the rest
+# (#280), so every startup-notice body stays within this many characters; the
+# full detail goes to daemon.log (config_problem_log_text).
+_TOAST_BODY_BUDGET = 140
+_TOAST_FIX_HINT = "File not changed; fix via Open config file…, then Restart."
+_TOML_POSITION = re.compile(r"\(at (line \d+, column \d+)\)\s*$")
 
 
 def config_problem_notification(report: ConfigLoadReport) -> tuple[str, str] | None:
@@ -306,19 +313,58 @@ def config_problem_notification(report: ConfigLoadReport) -> tuple[str, str] | N
     if report.is_empty:
         return None
     if report.read_only:
-        detail = report.problems[0].message
+        # tomllib ends its message with "(at line L, column C)"; the full
+        # message (and any OS error with its long path) is in the log.
+        where = _TOML_POSITION.search(report.problems[0].message)
+        lead = f"Error at {where.group(1)}" if where else "Details in daemon.log"
         return (
             "Dictatem couldn't read config.toml",
-            f"{detail}. Running on the defaults for this machine this session. "
-            + _OPEN_CONFIG_HINT,
+            f"{lead}; using defaults this session. {_TOAST_FIX_HINT}",
         )
     keys = [p.key for p in report.problems]
-    shown = ", ".join(keys[:3]) + (f" and {len(keys) - 3} more" if len(keys) > 3 else "")
-    noun = "setting" if len(keys) == 1 else "settings"
+    n = len(keys)
+    if n == 1:
+        summaries = [f"Ignored bad setting {keys[0]} (using default)."]
+    else:
+        head = f"Ignored {n} bad settings (using defaults):"
+        summaries = [
+            f"{head} {', '.join(keys)}.",
+            f"{head} {keys[0]} and {n - 1} more.",
+        ]
+    noun = "setting (using default)" if n == 1 else "settings (using defaults)"
+    summaries.append(f"Ignored {n} bad {noun}; details in daemon.log.")
+    return ("Dictatem config problem", _first_that_fits(summaries))
+
+
+def _first_that_fits(summaries: list[str]) -> str:
+    """The first ``summary + fix hint`` within the toast budget.
+
+    The last summary is the always-short fallback, so it is used even if
+    nothing fits.
+    """
+    for summary in summaries:
+        body = f"{summary} {_TOAST_FIX_HINT}"
+        if len(body) <= _TOAST_BODY_BUDGET:
+            return body
+    return f"{summaries[-1]} {_TOAST_FIX_HINT}"
+
+
+def config_problem_log_text(report: ConfigLoadReport) -> str | None:
+    """The full, untruncated startup notice for daemon.log (#280).
+
+    The toast (:func:`config_problem_notification`) is cut to fit; this keeps
+    every problem's detail and the complete fix hint. ``None`` for an empty
+    report.
+    """
+    if report.is_empty:
+        return None
+    details = "; ".join(p.message for p in report.problems)
+    session = (
+        " Running on this machine's defaults this session." if report.read_only else ""
+    )
     return (
-        "Dictatem config problem",
-        f"Invalid {noun} ignored, using the default instead: {shown}. "
-        + _OPEN_CONFIG_HINT,
+        f"Config problems at startup ({len(report.problems)}): {details}."
+        f"{session} {_OPEN_CONFIG_HINT}"
     )
 
 

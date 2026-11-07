@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 from dictatem.config import (
@@ -23,6 +24,8 @@ from tests.fakes import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 
 def _core(
@@ -58,6 +61,20 @@ class TestStartupNotification:
         _title, body = tray.notifications[0]
         assert "[hotkey].tap_threshold_ms" in body
         assert "not changed" in body
+
+    def test_full_untruncated_notice_goes_to_the_log(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        core, _tray = _core()
+        with caplog.at_level(logging.WARNING, logger="dictatem.daemon"):
+            core.notify_config_problems(ConfigLoadReport(problems=[
+                ConfigProblem("[hotkey].tap_threshold_ms", "Wrong type detail"),
+            ]))
+        assert (
+            "Config problems at startup (1): Wrong type detail. Your config.toml "
+            "was not changed — fix it via “Open config file…” in the tray menu, "
+            "then Restart."
+        ) in caplog.messages
 
     def test_valid_config_gives_no_notification(self) -> None:
         core, tray = _core()
