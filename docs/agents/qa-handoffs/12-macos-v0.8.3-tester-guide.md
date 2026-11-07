@@ -15,8 +15,14 @@ same as always:
 Send back the filled-in guide (or just the **✍️** boxes and the summary at the
 bottom). "This part was confusing" is a useful result too.
 
-⏱️ **Time:** about **70 minutes**, plus one **35-minute break** (Part 11) where you
-just leave Dictatem alone. You can stop after any Part and send what you have.
+⏱️ **Time:** in **two sittings**:
+- **Sitting 1** (Parts 0–12): about **70 minutes**, plus one **35-minute break**
+  (Part 11) where you just leave Dictatem alone. This is the important one.
+- **Sitting 2** (Parts 13–16, optional): about **35 minutes** for the Apple GPU
+  engine, plus a **10-minute update test** that you run later, **when we tell you a
+  newer version is out**.
+
+You can stop after any Part and send what you have.
 
 > 💡 "**Dictate**" means: hold the hotkey, say a sentence, release. Your words should
 > get typed in.
@@ -420,7 +426,161 @@ L=~/Library/Logs/Dictatem/daemon.log; echo "--- startup"; grep -E "Startup timin
 **✍️** Log pasted? (yes / no) · Saw `Startup timing:` lines? (yes / no) · Saw any
 `Engine prewarm` line? (yes / no) 
 
-When you're done, you can keep Dictatem installed. To remove it later:
+**That's the end of Sitting 1.** Please keep Dictatem installed: Sitting 2 and the
+update test build on it.
+
+---
+
+# Sitting 2 — Apple GPU engine and updates (optional)
+
+> Parts 13–15 are only for **Apple Silicon** Macs (M1/M2/M3/M4) on **macOS 14 or
+> later**. If yours is older, skip to Part 16.
+
+## Part 13 — Install with the Apple GPU engine 🚀 (about 8 min)
+
+This moves your Sitting 1 settings aside (so Dictatem picks fresh GPU settings) and
+installs the extra engine. It adds about 230 MB.
+
+```sh
+mv ~/.dictatem/config.toml ~/.dictatem/config-cpu.toml; curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.3/install.sh | DICTATEM_APPLE_GPU=1 sh
+```
+
+✅ **What you should see:** the engine-set line now says **Apple GPU (MLX)**. No
+permission dialogs (you already granted them). The first dictation afterwards may
+take a while (it downloads the GPU model once); that's expected.
+
+**✍️** Engine line said Apple GPU? **PASS** / **FAIL**: · Permission dialogs
+appeared? (yes / no): · First dictation took ___ seconds
+
+## Part 14 — GPU tests (about 22 min)
+
+### Test J — Speed
+1. Open **Activity Monitor** (⌘ + Space → Activity Monitor), **Memory** tab, and find
+   **`python3.12`**. Write down its memory now: ___ (this is "before").
+2. In Notes, dictate **10 sentences of about 5 seconds** each and count the seconds
+   for each.
+3. Dictate **3 longer ones of about 15 seconds** each.
+4. Look at `python3.12` in Activity Monitor again: ___ ("loaded").
+5. Menu-bar icon → **Unload model**, wait 10 seconds, and look again: ___ ("unloaded").
+
+**✍️** 5 s sentences: ___ / ___ / ___ / ___ / ___ / ___ / ___ / ___ / ___ / ___ s
+· 15 s sentences: ___ / ___ / ___ s · Memory before / loaded / unloaded:
+___ / ___ / ___ · Faster or slower than Sitting 1? 
+
+### Test K — Silence and special words
+1. Dictate while saying **nothing at all** for about 5 seconds, 3 times. Nothing
+   should be typed (no made-up words like "Thank you.").
+2. Open `~/.dictatem/vocabulary.md` (in Terminal: `open -e ~/.dictatem/vocabulary.md`,
+   or create it with TextEdit), put an unusual name you use on its own line (a
+   surname, a product, a place), save, and **Restart**.
+3. Dictate a sentence containing that name **5 times**.
+
+**✍️** Silence typed nothing, 3/3? ___ / 3 · Name you used: ______ · Spelled right
+___ / 5
+
+### Test L — GPU engine works offline ✈️
+1. Turn **Wi-Fi off** (and unplug any network cable).
+2. Menu-bar icon → **Restart**, then dictate 2 sentences. Count the seconds for the
+   first one.
+3. Turn Wi-Fi back on.
+
+**✍️** Dictation worked with no internet? **PASS** / **FAIL**: · First one took ___
+seconds
+
+### Test M — When the GPU engine breaks 🛟
+This makes the GPU engine fail on purpose, to check Dictatem quietly falls back to
+the normal engine.
+
+1. Open the config file. Under `[model]`, **write down** the current `name = …`
+   line here: ______ . Then change it to:
+   ```toml
+   name = "mlx-community/does-not-exist"
+   ```
+   Save and **Restart**.
+2. Dictate a sentence into Notes.
+3. Dictate two more.
+4. **Restart** again and dictate one more.
+5. Put the `name` line back to what you wrote down in step 1, save, and
+   **Restart**.
+
+✅ **What you should see:** step 2's sentence still gets typed (maybe slower), and
+**one** notification says the GPU engine failed and it's using the CPU. Step 3:
+**no** further notifications. Step 4: the notification comes back once (it retries
+the GPU each launch). Dictatem doesn't change the config file itself.
+
+**✍️** Sentence typed despite the failure? **PASS** / **FAIL**: · Exactly one
+notification? **PASS** / **FAIL**: · Notification wording: 
+· After Restart it tried again (one new notification)? **PASS** / **FAIL**: 
+
+## Part 15 — GPU log (about 3 min)
+
+Run the log command from **Part 12** again and paste everything it prints into your
+reply.
+
+**✍️** Log pasted? (yes / no)
+
+---
+
+## Part 16 — The update button 🔄
+
+The **Check for updates…** button is how every future version will reach you, so
+this one matters. It has two halves.
+
+### Part 16a — Right now (2 min, do it today)
+
+Menu-bar icon → **Check for updates…**
+
+✅ **What you should see right now:** a message saying **"Dictatem is up to date
+(v0.8.3)."**, in front of your other windows. Nothing is downloaded or installed.
+
+**✍️** Said "up to date (v0.8.3)", in front? **PASS** / **FAIL**: · Exact wording if
+different: 
+
+### Part 16b — When we tell you a newer version is out (about 10 min)
+
+> ⏸️ **Wait for our message** before doing this part. It only works once a newer
+> version (for example **v0.8.4** or **v0.9.0**) has been published. Until then you'll
+> just see "up to date" again, which is fine.
+
+Don't reinstall or uninstall anything first: this tests updating the copy you
+already have.
+
+1. Click the menu-bar icon. The bottom line should say **Dictatem v0.8.3**.
+2. Menu-bar icon → **Check for updates…**. A dialog should appear **in front of**
+   your other windows: **"Dictatem v______ is available"** (the new version we told
+   you about), **"You have v0.8.3"**, with an install command on its own line, and
+   three buttons: **Copy Update Command**, **Open Instructions**, **Later**.
+3. While it's open, click **Check for updates…** again: no second dialog should
+   appear.
+4. Click **Later**. Check again and click **Open Instructions**: a web page about
+   updating should open.
+5. Check again and click **Copy Update Command**. A notification should say
+   **"Update command copied"**. Nothing else should happen by itself (no Terminal
+   window opens).
+6. Open Terminal, paste the command (**⌘ + V**), press **Return**, and wait for it to
+   finish.
+7. Click the menu-bar icon: the bottom line should now show the **new version**.
+8. Dictate a sentence into Notes. It should work **without** asking for permissions
+   again.
+9. **If you did Sitting 2 (Apple GPU):** watch for a notification saying the GPU
+   engine isn't available and Dictatem is using the CPU. Write down whether it
+   appeared, and its wording.
+10. **Check for updates…** once more: it should say **"Dictatem is up to date
+    (v______)"** with the new version.
+
+**✍️ Your result — Update:**
+- Dialog in front, right versions, three buttons? → **PASS** / **FAIL**: 
+- No second dialog? → **PASS** / **FAIL**: 
+- Later / Open Instructions worked? → **PASS** / **FAIL**: 
+- Copy put the command on the clipboard, nothing ran by itself? → **PASS** / **FAIL**: 
+- Update finished, menu shows the new version? → **PASS** / **FAIL**: 
+- Dictation still worked, no permission dialogs? → **PASS** / **FAIL**: 
+- (Apple GPU only) "GPU engine not available / using CPU" notification? (yes / no,
+  wording): 
+- "Up to date" with the new version afterwards? → **PASS** / **FAIL**: 
+- Then run the log command from **Part 12** and paste the output: (yes / no)
+
+When you're completely done, you can keep Dictatem installed. To remove it:
 
 ```sh
 dictatem --uninstall; uv tool uninstall dictatem
@@ -450,6 +610,15 @@ dictatem --uninstall; uv tool uninstall dictatem
 | 11 | After a ___ min break: ___ s | |
 | H | Survives log out + "Start at login" | |
 | 12 | Log pasted | |
+| | **Sitting 2 (optional)** | |
+| 13 | GPU install | |
+| J | GPU speed (~___ s for 5 s clips) + memory | |
+| K | Silence + special words ___/5 | |
+| L | GPU offline | |
+| M | GPU failure falls back, one notification | |
+| 15 | GPU log pasted | |
+| 16a | Check for updates: "up to date (v0.8.3)" | |
+| 16b | Update to v______ (run when told): dialog, copy, install, still works | |
 
 **Anything else you noticed or found confusing?**
 
@@ -458,10 +627,22 @@ Thank you! 🙏
 
 ---
 <sub>**For the Dictatem team (testers can ignore):** macOS smoke test of v0.8.0–v0.8.3
-for tracking issue #281; build = tag **v0.8.3**. Supersedes guide 11 for Sitting 1; guide
-11's Sitting 2 (Apple-GPU opt-in #230–#233, update button #193 via
-`qa/193-fake-old-version`) and Tests E–G (clipboard, say-again, languages) were not
-carried over (nothing in v0.8 touched them); re-run them separately if still open.
+for tracking issue #281; build = tag **v0.8.3**. Supersedes guide 11, which was
+never run. Carried over from guide 11: Sitting 2's Apple-GPU opt-in (#230–#233; Parts
+13–15 = guide 11's Parts 8–9, targets in its footnote: 5 s p50 ≤ 1.5 s, worst ≤ 2.5 s;
+15 s p50 ≤ 2.5 s; RSS within 300 MB of baseline after Unload; Vocabulary ≥ 3/5;
+Test L also covers the MLX load path, which the v0.8 cache-first change did not touch).
+Part 16 = #193 update button. It replaces guide 11's `qa/193-fake-old-version` branch
+with a real upgrade from installed v0.8.3, so **16b needs a published release newer
+than v0.8.3**: `releases/latest` must return a plain `vX.Y.Z` tag, because
+`parse_version` rejects `-rc` suffixes (an rc there gives "Couldn't check for
+updates", never an offer). Send the tester the version number when it's out. 16b
+step 9 checks a known gap: `install_sh_command()` doesn't carry
+`DICTATEM_APPLE_GPU=1` and `select_dictatem_extra` reads only that env var, so an
+update reinstalls the `runtime` set and drops MLX; an Apple-GPU config then falls back
+to CPU with the notification. Still not carried over: guide 11's Tests E–G (clipboard,
+say-again, languages). Nothing in v0.8 touched them, but since guide 11 never ran
+they have never been confirmed on a Mac (#244, #249, #274); add them to a later round.
 Mapping: Part 0 = install.sh PySide6 meta → Essentials migration (`--reinstall-package
 pyside6-essentials`, only reached on an upgrade from ≤ v0.7.0; a broken Qt shows as no
 icon / import error). Part 3 + Part 5 = ADR-0030 §1 hotkey-first tray on the Qt path
