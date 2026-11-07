@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 
 from dictatem.overlay.state import HELD_CAPTION, PILL_BODY_HEX, PILL_HEX, PillColor
 from dictatem.tray.hotkey_hint import format_hotkey, hotkey_keys
+from dictatem.tray.state import MAKER_CREDIT, MATAVEX_URL
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -373,6 +374,15 @@ def _changing_hotkey_section(
     )
 
 
+def _branding_footer(theme: GuideTheme) -> str:
+    """The one understated maker credit closing the guide (#311)."""
+    return (
+        f'<p style="color:{theme.muted}; margin-top:22px; margin-bottom:0;">'
+        f'Dictatem — <a href="{MATAVEX_URL}" style="color:{theme.muted};">'
+        f"{MAKER_CREDIT}</a></p>"
+    )
+
+
 def usage_guide_html(
     modifiers: tuple[str, ...],
     *,
@@ -402,6 +412,7 @@ def usage_guide_html(
         _recovery_section(theme),
         _first_use_section(theme),
         _changing_hotkey_section(theme, modifiers, platform),
+        _branding_footer(theme),
     ]
     return (
         f'<html><body style="background-color:{theme.page}; color:{theme.text}; '

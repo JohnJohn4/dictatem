@@ -123,13 +123,21 @@ class TestMenuItemEnabled:
         )
         assert state.menu_item_enabled(MenuItem.COPY_LAST_DICTATION) is True
 
-    def test_hotkey_hint_and_version_are_always_disabled(self) -> None:
-        # The hotkey header and version footer are non-interactive labels.
+    def test_hotkey_hint_is_always_disabled(self) -> None:
+        # The hotkey header is a non-interactive label.
         for state in (
             TrayState(is_recording=False, is_model_loaded=False, has_error=False),
             TrayState(is_recording=True, is_model_loaded=True, has_error=True),
         ):
             assert state.menu_item_enabled(MenuItem.HOTKEY_HINT) is False
+
+    def test_version_footer_is_a_passive_label(self) -> None:
+        # #311: the version footer carries "free from Matavex" but is not
+        # clickable (owner decision) — disabled in every state.
+        for state in (
+            TrayState(is_recording=False, is_model_loaded=False, has_error=False),
+            TrayState(is_recording=True, is_model_loaded=True, has_error=True),
+        ):
             assert state.menu_item_enabled(MenuItem.VERSION) is False
 
 
@@ -184,3 +192,17 @@ class TestUsesNativeTrayMenu:
         from dictatem.tray.state import uses_native_tray_menu
 
         assert uses_native_tray_menu("darwin") is False
+
+
+class TestVersionLabel:
+    """#311: the tray footer reads "Dictatem v<version> — free from Matavex"."""
+
+    def test_names_the_version_and_matavex(self) -> None:
+        from dictatem.tray.state import version_label
+
+        assert version_label("0.8.3") == "Dictatem v0.8.3 — free from Matavex"
+
+    def test_unreadable_version_hides_the_footer(self) -> None:
+        from dictatem.tray.state import version_label
+
+        assert version_label("") == ""

@@ -2748,6 +2748,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as _installed_version
 
+    from dictatem.tray.state import version_label
     from dictatem.upgrade.core import GITHUB_REPO
     from dictatem.upgrade.github import fetch_latest_tag
     from dictatem.upgrade.prompt import UpdateMode, update_mode_for
@@ -2802,7 +2803,7 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
     # Footer showing the installed version, so the user can confirm which build
     # they're on (e.g. after an upgrade). Hidden if the version can't be read.
     _ver = _current_version()
-    tray_icon.set_version_label(f"Dictatem v{_ver}" if _ver else "")
+    tray_icon.set_version_label(version_label(_ver))
 
     # Ready signal for the installer (#95): once the loop runs and the tray icon
     # is realized (QtTrayIcon queued its own 0 ms realize first), drop a marker

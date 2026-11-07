@@ -23,7 +23,12 @@ from dictatem.config import default_config_path
 from dictatem.logpaths import default_daemon_log_path
 from dictatem.tray.glyph import waveform_bars
 from dictatem.tray.native_menu import NativeItem, native_label, number_actions, tidy
-from dictatem.tray.state import MenuItem, TrayState, glyph_tint_rgba, uses_native_tray_menu
+from dictatem.tray.state import (
+    MenuItem,
+    TrayState,
+    glyph_tint_rgba,
+    uses_native_tray_menu,
+)
 from dictatem.tray.usage_guide import DARK as _GUIDE_DARK
 from dictatem.tray.usage_guide import LIGHT as _GUIDE_LIGHT
 
@@ -299,11 +304,11 @@ class QtTrayIcon:
                 self._hotkey_separator.setVisible(False)
                 continue
             if item is MenuItem.VERSION:
-                # Non-interactive footer showing the installed version (#100), so
-                # the user can confirm which build they're on. A leading separator
-                # sets it off from Quit; both stay hidden until the daemon sets the
-                # text.
-                action.setEnabled(False)
+                # Footer showing the installed version (#100), so the user can
+                # confirm which build they're on, with the "free from Matavex"
+                # credit (#311). It is a passive label (owner decision: not
+                # clickable). A leading separator sets it off from Quit; both
+                # stay hidden until the daemon sets the text.
                 self._version_separator = self._menu.addSeparator()
                 self._actions[item] = action
                 self._menu.addAction(action)
@@ -388,10 +393,10 @@ class QtTrayIcon:
         self._hotkey_separator.setVisible(bool(text))
 
     def set_version_label(self, text: str) -> None:
-        """Set the disabled installed-version footer (#100).
+        """Set the installed-version footer (#100 / #311).
 
         Empty *text* hides the footer and its separator (e.g. when the version
-        can't be resolved). The daemon supplies ``"Dictatem v<version>"``.
+        can't be resolved). The daemon supplies ``tray.state.version_label``.
         """
         action = self._actions[MenuItem.VERSION]
         if text:

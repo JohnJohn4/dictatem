@@ -283,3 +283,19 @@ class TestVisualDesign:
         dark = usage_guide_html(("win", "alt"), platform="win32", dark=True)
         assert DARK.page in dark
         assert LIGHT.page not in dark
+
+
+class TestBrandingFooter:
+    """#311: one understated "Dictatem — free from Matavex" line with a link."""
+
+    def test_ends_with_the_free_from_matavex_line(self) -> None:
+        html = usage_guide_html(("win", "alt"), platform="win32")
+        body = html[: html.index("</body>")]
+        footer = body[body.rindex("<p") :]
+        assert "Dictatem — " in footer
+        assert '<a href="https://matavex.com"' in footer
+        assert ">free from Matavex</a>" in footer
+
+    def test_appears_exactly_once(self) -> None:
+        html = usage_guide_html(("win", "alt"), platform="darwin", dark=True)
+        assert html.count("https://matavex.com") == 1
