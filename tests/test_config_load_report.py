@@ -12,7 +12,7 @@ from textwrap import dedent
 from typing import TYPE_CHECKING
 
 from dictatem.config import (
-    _SECTION_CLASSES,
+    Config,
     ConfigLoadReport,
     ConfigProblem,
     config_problem_log_text,
@@ -362,11 +362,13 @@ class TestNotification:
         assert config_problem_log_text(ConfigLoadReport()) is None
 
     def test_every_variant_fits_the_toast_budget(self) -> None:
+        cfg = Config()
+        sections = [f.name for f in fields(cfg)]
         keys = [
             f"[{section}].{f.name}"
-            for section, cls in _SECTION_CLASSES.items()
-            for f in fields(cls)
-        ] + [f"[{section}]" for section in _SECTION_CLASSES]
+            for section in sections
+            for f in fields(getattr(cfg, section))
+        ] + [f"[{section}]" for section in sections]
         reports = [
             *(ConfigLoadReport(problems=[ConfigProblem(k, "x")]) for k in keys),
             *(

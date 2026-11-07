@@ -322,17 +322,17 @@ def config_problem_notification(report: ConfigLoadReport) -> tuple[str, str] | N
             f"{lead}; using defaults this session. {_TOAST_FIX_HINT}",
         )
     keys = [p.key for p in report.problems]
-    n = len(keys)
-    if n == 1:
+    count = len(keys)
+    if count == 1:
         summaries = [f"Ignored bad setting {keys[0]} (using default)."]
     else:
-        head = f"Ignored {n} bad settings (using defaults):"
+        head = f"Ignored {count} bad settings (using defaults):"
         summaries = [
             f"{head} {', '.join(keys)}.",
-            f"{head} {keys[0]} and {n - 1} more.",
+            f"{head} {keys[0]} and {count - 1} more.",
         ]
-    noun = "setting (using default)" if n == 1 else "settings (using defaults)"
-    summaries.append(f"Ignored {n} bad {noun}; details in daemon.log.")
+    noun = "setting (using default)" if count == 1 else "settings (using defaults)"
+    summaries.append(f"Ignored {count} bad {noun}; details in daemon.log.")
     return ("Dictatem config problem", _first_that_fits(summaries))
 
 
