@@ -35,6 +35,19 @@ class IconVariant(enum.Enum):
     Error = "error"
 
 
+# The understated maker credit (#311): one line, no logo, no colour change.
+MATAVEX_URL = "https://matavex.com"
+MAKER_CREDIT = "free from Matavex"
+
+
+def version_label(version: str) -> str:
+    """The tray's version footer, e.g. ``Dictatem v0.8.3 — free from Matavex``.
+
+    Empty when the version can't be read, which hides the footer.
+    """
+    return f"Dictatem v{version} — {MAKER_CREDIT}" if version else ""
+
+
 class MenuItem(enum.Enum):
     # Non-interactive header showing the activation hotkey (#104). Always
     # disabled; its label is set from config by the daemon, hidden where there
@@ -77,9 +90,10 @@ class MenuItem(enum.Enum):
     # re-runs the install one-liner at that tag (ADR-0011/0015). Always enabled.
     UPGRADE = "upgrade"
     QUIT = "quit"
-    # Non-interactive footer showing the installed version, so the user can
-    # confirm which build they're on (e.g. after an upgrade). Always disabled;
-    # its label is set from importlib.metadata by the daemon.
+    # Footer showing the installed version, so the user can confirm which build
+    # they're on (e.g. after an upgrade), plus the understated "free from
+    # Matavex" credit (#311). Always enabled: clicking it opens MATAVEX_URL.
+    # Its label comes from version_label(), fed from importlib.metadata.
     VERSION = "version"
 
 
@@ -106,8 +120,8 @@ class TrayState:
         return IconVariant.Idle
 
     def menu_item_enabled(self, item: MenuItem) -> bool:
-        if item is MenuItem.HOTKEY_HINT or item is MenuItem.VERSION:
-            # Non-interactive header/footer labels — always disabled.
+        if item is MenuItem.HOTKEY_HINT:
+            # Non-interactive header label — always disabled.
             return False
         if item is MenuItem.STOP:
             return self.is_recording

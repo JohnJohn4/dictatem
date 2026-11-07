@@ -1,5 +1,7 @@
 # dictatem
 
+<sub>Dictatem — free from [Matavex](https://matavex.com)</sub>
+
 **Local, offline voice dictation for Windows & macOS.** Press a hotkey, speak,
 and your words are transcribed on-device and pasted into whatever window has
 focus. No cloud, no accounts, nothing leaves your machine.
