@@ -1,10 +1,10 @@
-# Testing Dictatem v0.8.3 on your Mac 🎤
+# Testing Dictatem v0.8.4 on your Mac 🎤
 
 Thanks for testing **Dictatem** again. It turns your voice into typed text anywhere
 on your Mac: hold a hotkey, talk, let go, and your words appear wherever you're
 typing.
 
-This round tests the **v0.8.3 release**. Most of the changes since last time were made
+This round tests the **v0.8.4 release**. Most of the changes since last time were made
 and tested on Windows, and **none of them has run on a real Mac yet**. Your job is the
 same as always:
 
@@ -19,8 +19,7 @@ bottom). "This part was confusing" is a useful result too.
 - **Sitting 1** (Parts 0–12): about **70 minutes**, plus one **35-minute break**
   (Part 11) where you just leave Dictatem alone. This is the important one.
 - **Sitting 2** (Parts 13–16, optional): about **35 minutes** for the Apple GPU
-  engine, plus a **10-minute update test** that you run later, **when we tell you a
-  newer version is out**.
+  engine, plus a **15-minute update test** (Part 16b).
 
 You can stop after any Part and send what you have.
 
@@ -69,18 +68,18 @@ Part 1**.
 2. Run the install command for the new version:
 
    ```sh
-   curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.3/install.sh | sh
+   curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.4/install.sh | sh
    ```
 
 3. When it finishes, click the menu-bar icon again.
 
 ✅ **What you should see:** the install finishes without errors, the icon comes back,
-and the bottom line of the menu now says **Dictatem v0.8.3**. Dictate one sentence
+and the bottom line of the menu now says **Dictatem v0.8.4**. Dictate one sentence
 into **Notes**: it should still work, without asking for permissions again.
 
 **✍️ Your result — Update:**
 - Finished without errors? → **PASS** / **FAIL**: 
-- Icon came back, menu says v0.8.3? → **PASS** / **FAIL**: 
+- Icon came back, menu says v0.8.4? → **PASS** / **FAIL**: 
 - Dictation still worked, no new permission dialogs? → **PASS** / **FAIL**: 
 - If anything failed, copy the last 20 lines Terminal printed here: 
 
@@ -93,19 +92,19 @@ user sees. It also moves your old settings aside. **Run it even if you're not su
 Errors like "not found" or "No such file" are fine.
 
 ```sh
-dictatem --uninstall; uv tool uninstall dictatem; tccutil reset Accessibility; tccutil reset ListenEvent; mv ~/.dictatem ~/.dictatem-before-v0.8.3
+dictatem --uninstall; uv tool uninstall dictatem; tccutil reset Accessibility; tccutil reset ListenEvent; mv ~/.dictatem ~/.dictatem-before-v0.8.4
 ```
 
 **✍️ Done?** (yes / no): 
 
 ---
 
-## Part 2 — Install v0.8.3 (about 8 min)
+## Part 2 — Install v0.8.4 (about 8 min)
 
 Before you start, **note the time on the clock**. Then run:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.3/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.4/install.sh | sh
 ```
 
 It downloads a few hundred megabytes and can take several minutes.
@@ -195,7 +194,7 @@ whole menu from top to bottom.
    **⌥⌘ to dictate** (gray) · **Copy last dictation** · **Unload model** ·
    **Start at login** (with a checkmark) · **Show log** · **Open config file…** ·
    **How to use Dictatem…** · **Restart** · **Check for updates…** · **Quit** ·
-   **Dictatem v0.8.3** (gray).
+   **Dictatem v0.8.4** (gray).
 2. It should **not** contain **Preload model**, **Start recording**, **Stop
    recording** or **Microphone**. (The Microphone choice is a Windows feature; on a
    Mac, Dictatem uses whatever microphone is selected in System Settings.)
@@ -208,7 +207,7 @@ whole menu from top to bottom.
    Close the guide.
 6. Choose **Copy last dictation**, click into a note and press **⌘ + V**: your last
    sentence from Part 4 should paste in.
-7. Choose **Check for updates…**: it should say **Dictatem is up to date (v0.8.3)**.
+7. Choose **Check for updates…**: it should say **Dictatem is up to date (v0.8.4)**.
 
 **✍️ Your result — Menu:**
 - Items as listed, in that order? → **PASS** / **FAIL** (what was different?): 
@@ -217,7 +216,7 @@ whole menu from top to bottom.
 - Clicking outside and Esc both close the menu? → **PASS** / **FAIL**: 
 - Closes on an outside click while the guide is open? → **PASS** / **FAIL**: 
 - Copy last dictation pasted your sentence? → **PASS** / **FAIL**: 
-- "Up to date (v0.8.3)"? → **PASS** / **FAIL**: 
+- "Up to date (v0.8.4)"? → **PASS** / **FAIL**: 
 
 ---
 
@@ -442,7 +441,7 @@ This moves your Sitting 1 settings aside (so Dictatem picks fresh GPU settings) 
 installs the extra engine. It adds about 230 MB.
 
 ```sh
-mv ~/.dictatem/config.toml ~/.dictatem/config-cpu.toml; curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.3/install.sh | DICTATEM_APPLE_GPU=1 sh
+mv ~/.dictatem/config.toml ~/.dictatem/config-cpu.toml; curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.4/install.sh | DICTATEM_APPLE_GPU=1 sh
 ```
 
 ✅ **What you should see:** the engine-set line now says **Apple GPU (MLX)**. No
@@ -531,52 +530,67 @@ this one matters. It has two halves.
 Menu-bar icon → **Check for updates…**
 
 ✅ **What you should see right now:** a message saying **"Dictatem is up to date
-(v0.8.3)."**, in front of your other windows. Nothing is downloaded or installed.
+(v0.8.4)."**, in front of your other windows. Nothing is downloaded or installed.
 
-**✍️** Said "up to date (v0.8.3)", in front? **PASS** / **FAIL**: · Exact wording if
+**✍️** Said "up to date (v0.8.4)", in front? **PASS** / **FAIL**: · Exact wording if
 different: 
 
-### Part 16b — When we tell you a newer version is out (about 10 min)
+### Part 16b — Update from the previous version (about 15 min)
 
-> ⏸️ **Wait for our message** before doing this part. It only works once a newer
-> version (for example **v0.8.4** or **v0.9.0**) has been published. Until then you'll
-> just see "up to date" again, which is fine.
+This tests the real thing: going **back** to v0.8.3, then letting the update button
+bring you to v0.8.4.
 
-Don't reinstall or uninstall anything first: this tests updating the copy you
-already have.
+1. Put the previous version back. Copy and run this in Terminal (it keeps your
+   settings):
 
-1. Click the menu-bar icon. The bottom line should say **Dictatem v0.8.3**.
-2. Menu-bar icon → **Check for updates…**. A dialog should appear **in front of**
-   your other windows: **"Dictatem v______ is available"** (the new version we told
-   you about), **"You have v0.8.3"**, with an install command on its own line, and
-   three buttons: **Copy Update Command**, **Open Instructions**, **Later**.
-3. While it's open, click **Check for updates…** again: no second dialog should
+   ```sh
+   dictatem --uninstall; uv tool uninstall dictatem
+   curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.3/install.sh | sh
+   ```
+
+   **If you did Sitting 2 (Apple GPU):** use this second line instead, so v0.8.3 has
+   the GPU engine:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.3/install.sh | DICTATEM_APPLE_GPU=1 sh
+   ```
+
+   If macOS asks for permissions again, allow them as in Part 3.
+2. Click the menu-bar icon. The bottom line should say **Dictatem v0.8.3**.
+3. Menu-bar icon → **Check for updates…**. A dialog should appear **in front of**
+   your other windows: **"Dictatem v0.8.4 is available"**, **"You have v0.8.3"**,
+   with an install command on its own line, and three buttons: **Copy Update
+   Command**, **Open Instructions**, **Later**.
+4. While it's open, click **Check for updates…** again: no second dialog should
    appear.
-4. Click **Later**. Check again and click **Open Instructions**: a web page about
+5. Click **Later**. Check again and click **Open Instructions**: a web page about
    updating should open.
-5. Check again and click **Copy Update Command**. A notification should say
+6. Check again and click **Copy Update Command**. A notification should say
    **"Update command copied"**. Nothing else should happen by itself (no Terminal
    window opens).
-6. Open Terminal, paste the command (**⌘ + V**), press **Return**, and wait for it to
-   finish.
-7. Click the menu-bar icon: the bottom line should now show the **new version**.
-8. Dictate a sentence into Notes. It should work **without** asking for permissions
+7. Open Terminal, paste the command (**⌘ + V**), press **Return**, and wait for it to
+   finish. **If you did Sitting 2:** the output should include a line saying it is
+   **keeping the engine already installed**.
+8. Click the menu-bar icon: the bottom line should now say **Dictatem v0.8.4**.
+9. Dictate a sentence into Notes. It should work **without** asking for permissions
    again.
-9. **If you did Sitting 2 (Apple GPU):** watch for a notification saying the GPU
-   engine isn't available and Dictatem is using the CPU. Write down whether it
-   appeared, and its wording.
-10. **Check for updates…** once more: it should say **"Dictatem is up to date
-    (v______)"** with the new version.
+10. **If you did Sitting 2 (Apple GPU):** there should be **no** notification saying
+    the GPU engine isn't available or that Dictatem is using the CPU. Write down
+    whether one appeared, and its wording.
+11. **Check for updates…** once more: it should say **"Dictatem is up to date
+    (v0.8.4)"**.
 
 **✍️ Your result — Update:**
+- Back on v0.8.3 (menu says v0.8.3)? → **PASS** / **FAIL**: 
 - Dialog in front, right versions, three buttons? → **PASS** / **FAIL**: 
 - No second dialog? → **PASS** / **FAIL**: 
 - Later / Open Instructions worked? → **PASS** / **FAIL**: 
 - Copy put the command on the clipboard, nothing ran by itself? → **PASS** / **FAIL**: 
 - Update finished, menu shows the new version? → **PASS** / **FAIL**: 
 - Dictation still worked, no permission dialogs? → **PASS** / **FAIL**: 
-- (Apple GPU only) "GPU engine not available / using CPU" notification? (yes / no,
-  wording): 
+- (Apple GPU only) "keeping the engine already installed" in the output? (yes / no): 
+- (Apple GPU only) any "GPU engine not available / using CPU" notification? (should be
+  no; wording if yes): 
 - "Up to date" with the new version afterwards? → **PASS** / **FAIL**: 
 - Then run the log command from **Part 12** and paste the output: (yes / no)
 
@@ -592,7 +606,7 @@ dictatem --uninstall; uv tool uninstall dictatem
 
 | # | Test | PASS / FAIL / SKIP |
 |---|------|--------------------|
-| 0 | Update from v0.7.0 (menu says v0.8.3, still dictates) | |
+| 0 | Update from v0.7.0 (menu says v0.8.4, still dictates) | |
 | 2 | Install (engine line + waiting line + setup message; ___ min) | |
 | 3 | Permissions: two dialogs, "Hotkey off" + Start/Stop, then "⌥⌘ to dictate" without Start/Stop | |
 | 4 | First dictation ___ s, then ~___ s each | |
@@ -617,8 +631,8 @@ dictatem --uninstall; uv tool uninstall dictatem
 | L | GPU offline | |
 | M | GPU failure falls back, one notification | |
 | 15 | GPU log pasted | |
-| 16a | Check for updates: "up to date (v0.8.3)" | |
-| 16b | Update to v______ (run when told): dialog, copy, install, still works | |
+| 16a | Check for updates: "up to date (v0.8.4)" | |
+| 16b | Back to v0.8.3, then update to v0.8.4: dialog, copy, install, still works (GPU kept) | |
 
 **Anything else you noticed or found confusing?**
 
@@ -626,21 +640,19 @@ dictatem --uninstall; uv tool uninstall dictatem
 Thank you! 🙏
 
 ---
-<sub>**For the Dictatem team (testers can ignore):** macOS smoke test of v0.8.0–v0.8.3
-for tracking issue #281; build = tag **v0.8.3**. Supersedes guide 11, which was
+<sub>**For the Dictatem team (testers can ignore):** macOS smoke test of v0.8.0–v0.8.4
+for tracking issue #281; build = tag **v0.8.4** (the v1.0 test build; v1.0.0 is cut
+from it if this round has no blockers). Supersedes guide 11, which was
 never run. Carried over from guide 11: Sitting 2's Apple-GPU opt-in (#230–#233; Parts
 13–15 = guide 11's Parts 8–9, targets in its footnote: 5 s p50 ≤ 1.5 s, worst ≤ 2.5 s;
 15 s p50 ≤ 2.5 s; RSS within 300 MB of baseline after Unload; Vocabulary ≥ 3/5;
 Test L also covers the MLX load path, which the v0.8 cache-first change did not touch).
 Part 16 = #193 update button. It replaces guide 11's `qa/193-fake-old-version` branch
-with a real upgrade from installed v0.8.3, so **16b needs a published release newer
-than v0.8.3**: `releases/latest` must return a plain `vX.Y.Z` tag, because
-`parse_version` rejects `-rc` suffixes (an rc there gives "Couldn't check for
-updates", never an offer). Send the tester the version number when it's out. 16b
-step 9 checks a known gap: `install_sh_command()` doesn't carry
-`DICTATEM_APPLE_GPU=1` and `select_dictatem_extra` reads only that env var, so an
-update reinstalls the `runtime` set and drops MLX; an Apple-GPU config then falls back
-to CPU with the notification. Still not carried over: guide 11's Tests E–G (clipboard,
+with a real upgrade: 16b reinstalls v0.8.3 and updates it to v0.8.4 through the
+button (`releases/latest` = v0.8.4). 16b steps 7 and 10 check the #324 fix (PR #327):
+install.sh now keeps the `apple-gpu` extra when the existing environment has
+`mlx_whisper-*.dist-info`, so an Apple-GPU v0.8.3 must stay on MLX after the update
+with no CPU-fallback notification. Still not carried over: guide 11's Tests E–G (clipboard,
 say-again, languages). Nothing in v0.8 touched them, but since guide 11 never ran
 they have never been confirmed on a Mac (#244, #249, #274); add them to a later round.
 Mapping: Part 0 = install.sh PySide6 meta → Essentials migration (`--reinstall-package
@@ -659,9 +671,10 @@ AVAudioEngine follows the system default input; the ADR-0031 re-scan and Microph
 menu are PortAudio-only and hidden on macOS, `[audio] device` is ignored there; the
 engine and input node are created once and reused, with no configuration-change
 observer, so hot-plug is the risk; README "A microphone plugged in…" paragraph is
-Windows wording. Part 7 = ADR-0032: no physical-key-state query is wired on darwin
-(`physical_state=None`), so a ⌘ key-up missed under secure input or the lock screen
-could leave ⌘ "held" and a lone ⌥ tap would then complete ⌥⌘ (look for `Hotkey
-KEY_DOWN: IDLE -> …[RECORD_START]` at the times the tester notes). Part 9 = ADR-0030
+Windows wording (fixed in v0.8.4, #309). Part 7 = ADR-0032 + its macOS amendment (#308,
+PR #325): darwin now answers `physical_state` from the tap event's per-side modifier
+flags, so a ⌘ key-up missed under secure input or the lock screen should be logged as
+`Hotkey: ignored stale held key(s)` instead of a lone ⌥ completing ⌥⌘. A FAIL shows as
+`Hotkey KEY_DOWN: IDLE -> …[RECORD_START]` at the times the tester notes. Part 9 = ADR-0030
 §3 has no macOS counterpart (README says don't launch from Spotlight / the .app;
 check whether that warning is still true after the `TransformProcessType` fix).</sub>
