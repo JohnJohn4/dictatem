@@ -16,6 +16,7 @@ to a main-thread poller).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 import threading
@@ -148,12 +149,12 @@ class CGEventTapHook:
                 # two clocks have a non-zero offset, a single tap fires a
                 # spurious HOLD_START → PTT_REC → instant stop.
                 timestamp_ms = int(time.monotonic() * 1000)
-                key = keycode_to_key(keycode)
-                if self._event_flags is None:
-                    self._on_key_event(key, action, timestamp_ms)
-                else:
-                    with self._event_flags.classifying(int(flags)):
-                        self._on_key_event(key, action, timestamp_ms)
+                with (
+                    contextlib.nullcontext()
+                    if self._event_flags is None
+                    else self._event_flags.classifying(int(flags))
+                ):
+                    self._on_key_event(keycode_to_key(keycode), action, timestamp_ms)
             except Exception:
                 logger.error("Error in event tap callback", exc_info=True)
             return event

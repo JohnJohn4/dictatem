@@ -1,8 +1,8 @@
 # The hotkey checks the physical key state before a combo can start
 
 > Applies to the [Hotkey Combo](../../CONTEXT.md#hotkey-combo) classifier
-> (ADR-0010/0018/0020). Shipped in v0.8.2 (#303); extended to macOS in v1.0
-> (#308, see the amendment).
+> (ADR-0010/0018/0020). Shipped in v0.8.2 (#303); extended to macOS by the
+> 2026-11-07 amendment (#308).
 
 Field bug, and a top reason users uninstalled: **Alt+Enter in Excel (or any
 lone Alt) sometimes started a dictation.** It was intermittent, so the owner
@@ -42,10 +42,10 @@ on platforms without a query.
   15% missed key-ups, never genuinely holding Win+Alt, went from 209/300
   sessions with a false dictation to 0/300. Genuine taps still fire after the
   noise.
-- ~~macOS has no equivalent query wired yet.~~ Superseded by the amendment
-  below.
+- macOS has no equivalent query wired yet. Its hook sees lock-screen
+  transitions differently; revisit if the bug is reported there.
 
-## Amendment: macOS (#308, v1.0)
+## Amendment (2026-11-07): the same check on macOS (#308)
 
 The CGEventTap misses modifier releases too: under Secure Keyboard Entry
 (Terminal, password fields) and across the ⌃⌘Q lock screen. A stuck ⌘ then
@@ -65,4 +65,9 @@ would be a second native call whose device-bit content under secure input is
 unverified.
 
 Mouse buttons have no device bit and answer `None` (trust the events). macOS
-has no mouse-trigger hook yet (#121).
+has no mouse-trigger hook yet (#121). As on Windows, the check runs only when a
+press would complete the combo: if *every* combo key is stuck, the combo
+already reads as held and isn't re-checked. If an event lacks the per-side bits
+(some remapping tools), a genuinely held key reads as up and that press is
+missed. That's the safe failure mode, and `flags_changed_action` already
+depends on the same bits.

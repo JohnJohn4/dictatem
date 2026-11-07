@@ -25,8 +25,12 @@ from dictatem.hotkey.classifier import HotkeyClassifier, HotkeyEvent, Key, KeyAc
 from dictatem.hotkey.mac_keymap import (
     KVK_COMMAND,
     KVK_OPTION,
+    KVK_RIGHT_COMMAND,
+    KVK_RIGHT_OPTION,
     NX_DEVICELALTKEYMASK,
     NX_DEVICELCMDKEYMASK,
+    NX_DEVICERALTKEYMASK,
+    NX_DEVICERCMDKEYMASK,
     EventFlagsState,
     flags_changed_action,
     keycode_to_key,
@@ -244,6 +248,31 @@ def test_mac_stuck_command_then_a_lone_option_tap_is_ignored() -> None:
             # ... Command released under Secure Keyboard Entry: never seen ...
             (KVK_OPTION, OPT, 60_000),  # this event's flags: Command is up
             (KVK_OPTION, 0, 60_080),
+        ]
+    )
+    assert events == []
+
+
+def test_mac_stuck_option_then_a_lone_command_tap_is_ignored() -> None:
+    events = _feed_mac(
+        [
+            (KVK_OPTION, OPT, 0),
+            # ... Option released across the ⌃⌘Q lock screen: never seen ...
+            (KVK_COMMAND, CMD, 30_000),
+            (KVK_COMMAND, 0, 30_080),
+        ]
+    )
+    assert events == []
+
+
+def test_mac_stuck_right_command_then_a_lone_right_option_tap_is_ignored() -> None:
+    rcmd, ropt = NX_DEVICERCMDKEYMASK, NX_DEVICERALTKEYMASK
+    k_cg_event_flag_mask_command = 0x00100000  # a stale group bit must not count
+    events = _feed_mac(
+        [
+            (KVK_RIGHT_COMMAND, rcmd, 0),
+            (KVK_RIGHT_OPTION, k_cg_event_flag_mask_command | ropt, 60_000),
+            (KVK_RIGHT_OPTION, 0, 60_080),
         ]
     )
     assert events == []
