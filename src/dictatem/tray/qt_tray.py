@@ -24,7 +24,6 @@ from dictatem.logpaths import default_daemon_log_path
 from dictatem.tray.glyph import waveform_bars
 from dictatem.tray.native_menu import NativeItem, native_label, number_actions, tidy
 from dictatem.tray.state import (
-    MATAVEX_URL,
     MenuItem,
     TrayState,
     glyph_tint_rgba,
@@ -307,10 +306,9 @@ class QtTrayIcon:
             if item is MenuItem.VERSION:
                 # Footer showing the installed version (#100), so the user can
                 # confirm which build they're on, with the "free from Matavex"
-                # credit (#311); clicking it opens matavex.com. A leading
-                # separator sets it off from Quit; both stay hidden until the
-                # daemon sets the text.
-                action.triggered.connect(self._open_matavex)
+                # credit (#311). It is a passive label (owner decision: not
+                # clickable). A leading separator sets it off from Quit; both
+                # stay hidden until the daemon sets the text.
                 self._version_separator = self._menu.addSeparator()
                 self._actions[item] = action
                 self._menu.addAction(action)
@@ -480,10 +478,6 @@ class QtTrayIcon:
             # Qt's cross-platform "open with the OS default app" — no
             # per-platform branch (os.startfile is Windows-only).
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(log_path)))
-
-    def _open_matavex(self) -> None:
-        """Open the maker's site from the version footer (#311)."""
-        QDesktopServices.openUrl(QUrl(MATAVEX_URL))
 
     def _open_config(self) -> None:
         """Open ``~/.dictatem/config.toml`` in the OS default editor (ADR-0022).

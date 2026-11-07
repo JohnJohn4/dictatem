@@ -92,7 +92,7 @@ class MenuItem(enum.Enum):
     QUIT = "quit"
     # Footer showing the installed version, so the user can confirm which build
     # they're on (e.g. after an upgrade), plus the understated "free from
-    # Matavex" credit (#311). Always enabled: clicking it opens MATAVEX_URL.
+    # Matavex" credit (#311). A non-interactive label — always disabled.
     # Its label comes from version_label(), fed from importlib.metadata.
     VERSION = "version"
 
@@ -120,8 +120,8 @@ class TrayState:
         return IconVariant.Idle
 
     def menu_item_enabled(self, item: MenuItem) -> bool:
-        if item is MenuItem.HOTKEY_HINT:
-            # Non-interactive header label — always disabled.
+        if item is MenuItem.HOTKEY_HINT or item is MenuItem.VERSION:
+            # Non-interactive labels (header hint, version footer) — always disabled.
             return False
         if item is MenuItem.STOP:
             return self.is_recording

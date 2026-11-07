@@ -131,14 +131,14 @@ class TestMenuItemEnabled:
         ):
             assert state.menu_item_enabled(MenuItem.HOTKEY_HINT) is False
 
-    def test_version_footer_is_always_clickable(self) -> None:
-        # #311: the version footer carries "free from Matavex" and opens
-        # matavex.com, so it is a live item in every state.
+    def test_version_footer_is_a_passive_label(self) -> None:
+        # #311: the version footer carries "free from Matavex" but is not
+        # clickable (owner decision) — disabled in every state.
         for state in (
             TrayState(is_recording=False, is_model_loaded=False, has_error=False),
             TrayState(is_recording=True, is_model_loaded=True, has_error=True),
         ):
-            assert state.menu_item_enabled(MenuItem.VERSION) is True
+            assert state.menu_item_enabled(MenuItem.VERSION) is False
 
 
 class TestMenuItemOrder:
