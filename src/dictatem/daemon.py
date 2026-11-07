@@ -369,7 +369,8 @@ class _HotkeyBridge:
         if dropped:
             logger.info(
                 "Hotkey: ignored stale held key(s) %s (their release was missed, e.g. "
-                "after Win+L or over an admin window); not starting a dictation",
+                "after Win+L, over an admin window, or under macOS Secure Keyboard "
+                "Entry); not starting a dictation",
                 ", ".join(k.name for k in dropped),
             )
         is_combo = self._classifier.combo_held
@@ -2135,6 +2136,11 @@ class _PlatformAdapters:
     bind_hook_failure_reporter: (
         Callable[[Callable[[HookFailure], None]], None] | None
     ) = None
+    # Stale-held-key check (ADR-0032): asks whether a combo key is physically
+    # down right now (True/False, None = unknown), so a held key whose release
+    # the hook missed can't complete the combo. Windows: GetAsyncKeyState;
+    # macOS: the tap event's own modifier flags (#308). None = trust the events.
+    physical_key_state: Callable[[Key], bool | None] | None = None
 
 
 def _make_sounddevice_capture(config: Config, buffer: AudioBuffer) -> AudioCapture:
@@ -2855,17 +2861,13 @@ def _run_daemon(adapters: _PlatformAdapters) -> None:
 
     bridge: _HotkeyBridge | None = None
     if adapters.install_keyboard_hook is not None:
-        physical_state = None
-        if sys.platform == "win32":
-            # Drop a held combo key whose key-up the hook missed (Win+L,
-            # elevated windows) before it can turn a lone Alt into Win+Alt.
-            from dictatem.hotkey.win32_keymap import physical_key_state
-
-            physical_state = physical_key_state
+        # The platform's physical-key query drops a held combo key whose
+        # release the hook missed (Win+L, elevated windows; macOS Secure
+        # Keyboard Entry, ⌃⌘Q) before it can turn a lone Alt into Win+Alt.
         classifier = HotkeyClassifier(
             tap_threshold_ms=config.hotkey.tap_threshold_ms,
             modifiers=config.hotkey.modifiers,
-            physical_state=physical_state,
+            physical_state=adapters.physical_key_state,
         )
         classifier.set_active(True)
         bridge = _HotkeyBridge(classifier=classifier, callback=daemon.on_hotkey_event)
@@ -3218,6 +3220,7 @@ def _start_windows_daemon() -> None:
     from dictatem.hotkey.hook_failure import HookFailure, HookKind
     from dictatem.hotkey.wh_keyboard_ll import WHKeyboardLLHook
     from dictatem.hotkey.wh_mouse_ll import WHMouseLLHook
+    from dictatem.hotkey.win32_keymap import physical_key_state
     from dictatem.paste.win32_clipboard import Win32ClipboardIO
     from dictatem.paste.win32_foreground import Win32ForegroundTracker
     from dictatem.paste.win32_keystroke import Win32KeystrokeSender
@@ -3278,6 +3281,7 @@ def _start_windows_daemon() -> None:
             check_permissions=None,
             relaunch=spawn_restart,
             bind_hook_failure_reporter=_bind_hook_failure_reporter,
+            physical_key_state=physical_key_state,
         )
     )
 
@@ -3301,6 +3305,7 @@ def _start_macos_daemon() -> None:
     """
     from dictatem.hardware.mac_probe import MacHardwareProbe
     from dictatem.hotkey.mac_hook import CGEventTapHook
+    from dictatem.hotkey.mac_keymap import EventFlagsState
     from dictatem.macapp.bundle import default_app_bundle_path
     from dictatem.macapp.relaunch import MANUAL_RELAUNCH_HINT, spawn_launchd_relaunch
     from dictatem.paste.mac_clipboard import MacClipboardIO
@@ -3323,12 +3328,18 @@ def _start_macos_daemon() -> None:
         reporter[:] = [report]
         keystroke.on_access_blocked = lambda: _report(MacPermission.ACCESSIBILITY)
 
+    # Stale-held-key check (ADR-0032, #308): the hook publishes each tap event's
+    # modifier flags here while the classifier runs on that event, so a ⌘ whose
+    # release the tap missed (Secure Keyboard Entry, ⌃⌘Q) can't complete ⌥⌘.
+    event_flags = EventFlagsState()
+
     def _install_hook(handler: Callable[[Key, KeyAction, int], bool]) -> object:
         # macOS has no menu/Start side-effect to mask (#171 is Windows-only); the
         # CGEventTap hook ignores the handler's bool return and injects nothing.
         hook = CGEventTapHook(
             handler,
             on_tap_failed=lambda: _report(MacPermission.INPUT_MONITORING),
+            event_flags=event_flags,
         )
         hook.install()
         return hook
@@ -3386,5 +3397,6 @@ def _start_macos_daemon() -> None:
             bind_permission_reporter=_bind_permission_reporter,
             relaunch=spawn_launchd_relaunch,
             relaunch_failed_hint=MANUAL_RELAUNCH_HINT,
+            physical_key_state=event_flags,
         )
     )

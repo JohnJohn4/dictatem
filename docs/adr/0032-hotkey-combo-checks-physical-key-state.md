@@ -1,7 +1,8 @@
 # The hotkey checks the physical key state before a combo can start
 
 > Applies to the [Hotkey Combo](../../CONTEXT.md#hotkey-combo) classifier
-> (ADR-0010/0018/0020). Shipped in v0.8.2 (#303).
+> (ADR-0010/0018/0020). Shipped in v0.8.2 (#303); extended to macOS by the
+> 2026-11-07 amendment (#308).
 
 Field bug, and a top reason users uninstalled: **Alt+Enter in Excel (or any
 lone Alt) sometimes started a dictation.** It was intermittent, so the owner
@@ -43,3 +44,30 @@ on platforms without a query.
   noise.
 - macOS has no equivalent query wired yet. Its hook sees lock-screen
   transitions differently; revisit if the bug is reported there.
+
+## Amendment (2026-11-07): the same check on macOS (#308)
+
+The CGEventTap misses modifier releases too: under Secure Keyboard Entry
+(Terminal, password fields) and across the ⌃⌘Q lock screen. A stuck ⌘ then
+lets a lone ⌥ complete ⌥⌘. The same decision now applies on Mac, through the
+same `physical_state` seam, now an adapter field
+(`_PlatformAdapters.physical_key_state`) rather than a `sys.platform` branch.
+
+macOS has no `GetAsyncKeyState`, but every tap event carries the full
+device-dependent modifier flags (`NX_DEVICE…KEYMASK`, the per-side bits
+`flags_changed_action` already reads). The hook publishes each event's flags
+to `mac_keymap.EventFlagsState` while the classifier runs on that event
+(synchronously, on the tap thread). The event that would complete the combo
+then answers whether the combo's other modifiers are really down. That's
+exact for that instant: no polling, no lag, no extra permission. We chose this
+over `CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState)`, which
+would be a second native call whose device-bit content under secure input is
+unverified.
+
+Mouse buttons have no device bit and answer `None` (trust the events). macOS
+has no mouse-trigger hook yet (#121). As on Windows, the check runs only when a
+press would complete the combo: if *every* combo key is stuck, the combo
+already reads as held and isn't re-checked. If an event lacks the per-side bits
+(some remapping tools), a genuinely held key reads as up and that press is
+missed. That's the safe failure mode, and `flags_changed_action` already
+depends on the same bits.
