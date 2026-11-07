@@ -273,6 +273,11 @@ class TestStarterAdapterSets:
         assert adapters.keystroke is not None
         assert adapters.foreground is not None
         assert adapters.install_keyboard_hook is not None
+        # Stale-held-key check (ADR-0032, #308): answered from the tap event's
+        # own modifier flags, so a missed Command release can't complete ⌥⌘.
+        from dictatem.hotkey.mac_keymap import EventFlagsState
+
+        assert isinstance(adapters.physical_key_state, EventFlagsState)
         # The macOS mouse-trigger hook (#121) is not built yet — absent, not faked.
         assert adapters.install_mouse_hook is None
         # The CGPreflight permission check (#57) — passed as a reference,
@@ -382,3 +387,7 @@ class TestStarterAdapterSets:
 
         assert adapters.relaunch is spawn_restart
         assert adapters.relaunch_failed_hint is None
+        # Stale-held-key check (ADR-0032): GetAsyncKeyState backs it on Windows.
+        from dictatem.hotkey.win32_keymap import physical_key_state
+
+        assert adapters.physical_key_state is physical_key_state

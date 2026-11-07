@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from dictatem.hotkey.classifier import Key, KeyAction
+    from dictatem.hotkey.mac_keymap import EventFlagsState
 
 if sys.platform != "darwin":
     raise ImportError("mac_hook requires macOS")
@@ -70,6 +71,7 @@ class CGEventTapHook:
         on_key_event: Callable[[Key, KeyAction, int], bool],
         *,
         on_tap_failed: Callable[[], None] | None = None,
+        event_flags: EventFlagsState | None = None,
     ) -> None:
         # The handler returns a Win+Alt-mask flag (#171); macOS has no such
         # side-effect, so the return is ignored here (listen-only tap).
@@ -77,6 +79,10 @@ class CGEventTapHook:
         # Called ON THE HOOK THREAD when the tap can't be created (Input
         # Monitoring missing) — must be thread-safe (the daemon enqueues).
         self._on_tap_failed = on_tap_failed
+        # The classifier's physical_state (ADR-0032, #308): each event's flags
+        # are published here for the (synchronous) handler call, so a modifier
+        # whose release the tap missed can't complete the combo.
+        self._event_flags = event_flags
         self._tap: object | None = None  # CFMachPortRef while the tap is live
         self._run_loop: object | None = None  # the hook thread's CFRunLoopRef
 
@@ -121,11 +127,12 @@ class CGEventTapHook:
                 keycode = CGEventGetIntegerValueField(
                     event, kCGKeyboardEventKeycode
                 )
+                flags = CGEventGetFlags(event)
                 if event_type == kCGEventFlagsChanged:
                     # Modifier keys never produce keyDown/keyUp through a
                     # tap; press vs release is derived from the event's flags
                     # by the pure helper (see mac_keymap.flags_changed_action).
-                    action = flags_changed_action(keycode, CGEventGetFlags(event))
+                    action = flags_changed_action(keycode, flags)
                     if action is None:
                         return event  # caps lock / fn — not combo modifiers
                 elif event_type == kCGEventKeyDown:
@@ -141,7 +148,12 @@ class CGEventTapHook:
                 # two clocks have a non-zero offset, a single tap fires a
                 # spurious HOLD_START → PTT_REC → instant stop.
                 timestamp_ms = int(time.monotonic() * 1000)
-                self._on_key_event(keycode_to_key(keycode), action, timestamp_ms)
+                key = keycode_to_key(keycode)
+                if self._event_flags is None:
+                    self._on_key_event(key, action, timestamp_ms)
+                else:
+                    with self._event_flags.classifying(int(flags)):
+                        self._on_key_event(key, action, timestamp_ms)
             except Exception:
                 logger.error("Error in event tap callback", exc_info=True)
             return event

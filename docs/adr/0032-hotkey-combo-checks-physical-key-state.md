@@ -1,7 +1,8 @@
 # The hotkey checks the physical key state before a combo can start
 
 > Applies to the [Hotkey Combo](../../CONTEXT.md#hotkey-combo) classifier
-> (ADR-0010/0018/0020). Shipped in v0.8.2 (#303).
+> (ADR-0010/0018/0020). Shipped in v0.8.2 (#303); extended to macOS in v1.0
+> (#308, see the amendment).
 
 Field bug, and a top reason users uninstalled: **Alt+Enter in Excel (or any
 lone Alt) sometimes started a dictation.** It was intermittent, so the owner
@@ -41,5 +42,27 @@ on platforms without a query.
   15% missed key-ups, never genuinely holding Win+Alt, went from 209/300
   sessions with a false dictation to 0/300. Genuine taps still fire after the
   noise.
-- macOS has no equivalent query wired yet. Its hook sees lock-screen
-  transitions differently; revisit if the bug is reported there.
+- ~~macOS has no equivalent query wired yet.~~ Superseded by the amendment
+  below.
+
+## Amendment: macOS (#308, v1.0)
+
+The CGEventTap misses modifier releases too: under Secure Keyboard Entry
+(Terminal, password fields) and across the ⌃⌘Q lock screen. A stuck ⌘ then
+lets a lone ⌥ complete ⌥⌘. The same decision now applies on Mac, through the
+same `physical_state` seam, now an adapter field
+(`_PlatformAdapters.physical_key_state`) rather than a `sys.platform` branch.
+
+macOS has no `GetAsyncKeyState`, but every tap event carries the full
+device-dependent modifier flags (`NX_DEVICE…KEYMASK`, the per-side bits
+`flags_changed_action` already reads). The hook publishes each event's flags
+to `mac_keymap.EventFlagsState` while the classifier runs on that event
+(synchronously, on the tap thread). The event that would complete the combo
+then answers whether the combo's other modifiers are really down. That's
+exact for that instant: no polling, no lag, no extra permission. We chose this
+over `CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState)`, which
+would be a second native call whose device-bit content under secure input is
+unverified.
+
+Mouse buttons have no device bit and answer `None` (trust the events). macOS
+has no mouse-trigger hook yet (#121).

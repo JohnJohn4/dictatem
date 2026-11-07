@@ -16,7 +16,13 @@ lives here — unit-tested on any platform — rather than in the native hook.
 
 from __future__ import annotations
 
+import contextlib
+from typing import TYPE_CHECKING
+
 from dictatem.hotkey.classifier import Key, KeyAction
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # macOS virtual key codes the classifier cares about, named after their
 # Carbon HIToolbox ``kVK_*`` constants (Events.h). Like Windows, the codes
@@ -109,3 +115,45 @@ def flags_changed_action(keycode: int, flags: int) -> KeyAction | None:
     if device_bit is None:
         return None
     return KeyAction.KEY_DOWN if flags & device_bit else KeyAction.KEY_UP
+
+
+# The same device bits, keyed by neutral Key, for the stale-modifier check.
+_KEY_TO_DEVICE_BIT: dict[Key, int] = {
+    _KEYCODE_TO_KEY[keycode]: bit for keycode, bit in _KEYCODE_TO_DEVICE_BIT.items()
+}
+
+
+class EventFlagsState:
+    """macOS ``physical_state`` for the classifier's stale-held-key check (ADR-0032).
+
+    A CGEventTap can miss a modifier's release (Secure Keyboard Entry, the
+    Control-Command-Q lock screen), leaving it "held" so a later lone Option
+    completes Option+Command. macOS has no ``GetAsyncKeyState``, but every tap
+    event carries the full device-dependent modifier flags at that instant, so
+    the event that would complete the combo already says whether the combo's
+    other keys are really down.
+
+    The hook wraps each classifier call in :meth:`classifying` with the event's
+    flags; calling the instance with a ``Key`` answers from those flags. Outside
+    a ``classifying`` block, or for a key with no device bit (mouse buttons,
+    ``Key.OTHER``), the answer is ``None`` (trust the event stream). The
+    classifier runs synchronously on the hook thread, so no lock is needed.
+    """
+
+    def __init__(self) -> None:
+        self._flags: int | None = None
+
+    @contextlib.contextmanager
+    def classifying(self, flags: int) -> Iterator[None]:
+        """Answer from *flags* (the current tap event's) for the duration."""
+        self._flags = flags
+        try:
+            yield
+        finally:
+            self._flags = None
+
+    def __call__(self, key: Key) -> bool | None:
+        bit = _KEY_TO_DEVICE_BIT.get(key)
+        if bit is None or self._flags is None:
+            return None
+        return bool(self._flags & bit)

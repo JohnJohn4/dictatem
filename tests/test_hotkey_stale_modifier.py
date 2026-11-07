@@ -22,6 +22,15 @@ import random
 import pytest
 
 from dictatem.hotkey.classifier import HotkeyClassifier, HotkeyEvent, Key, KeyAction
+from dictatem.hotkey.mac_keymap import (
+    KVK_COMMAND,
+    KVK_OPTION,
+    NX_DEVICELALTKEYMASK,
+    NX_DEVICELCMDKEYMASK,
+    EventFlagsState,
+    flags_changed_action,
+    keycode_to_key,
+)
 
 DOWN, UP = KeyAction.KEY_DOWN, KeyAction.KEY_UP
 
@@ -199,3 +208,54 @@ def test_physical_key_state_reads_the_high_bit() -> None:
     # Only the low "pressed since last call" bit set: not physically down.
     assert physical_key_state(Key.LEFT_META, lambda vk: 0x0001) is False
     assert physical_key_state(Key.OTHER, lambda vk: 0x8000) is None
+
+
+# --- macOS (#308): a stuck Command/Option -------------------------------------
+#
+# The CGEventTap can miss a modifier release too (Secure Keyboard Entry in
+# Terminal, the Control-Command-Q lock screen). macOS has no GetAsyncKeyState,
+# but every kCGEventFlagsChanged event carries the full device-dependent
+# modifier flags, so the event that would complete the combo already says
+# whether the combo's other key is really down.
+
+CMD, OPT = NX_DEVICELCMDKEYMASK, NX_DEVICELALTKEYMASK
+
+
+def _feed_mac(events: list[tuple[int, int, int]]) -> list[HotkeyEvent]:
+    """Feed (keycode, flags, t) flags-changed events the way the mac hook does:
+    the event's flags are the physical state while the classifier runs."""
+    state = EventFlagsState()
+    c = HotkeyClassifier(tap_threshold_ms=200, physical_state=state)
+    out: list[HotkeyEvent] = []
+    for keycode, flags, t in events:
+        action = flags_changed_action(keycode, flags)
+        assert action is not None
+        with state.classifying(flags):
+            _d, ev = c.process_event(keycode_to_key(keycode), action, t)
+        if ev is not None:
+            out.append(ev)
+    return out
+
+
+def test_mac_stuck_command_then_a_lone_option_tap_is_ignored() -> None:
+    events = _feed_mac(
+        [
+            (KVK_COMMAND, CMD, 0),
+            # ... Command released under Secure Keyboard Entry: never seen ...
+            (KVK_OPTION, OPT, 60_000),  # this event's flags: Command is up
+            (KVK_OPTION, 0, 60_080),
+        ]
+    )
+    assert events == []
+
+
+def test_mac_a_real_command_option_tap_still_fires() -> None:
+    events = _feed_mac(
+        [
+            (KVK_COMMAND, CMD, 0),
+            (KVK_OPTION, CMD | OPT, 30),
+            (KVK_OPTION, CMD, 120),
+            (KVK_COMMAND, 0, 140),
+        ]
+    )
+    assert events == [HotkeyEvent.TAP]

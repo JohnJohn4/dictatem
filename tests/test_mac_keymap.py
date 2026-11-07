@@ -27,6 +27,7 @@ from dictatem.hotkey.mac_keymap import (
     NX_DEVICERCMDKEYMASK,
     NX_DEVICERCTLKEYMASK,
     NX_DEVICERSHIFTKEYMASK,
+    EventFlagsState,
     flags_changed_action,
     keycode_to_key,
 )
@@ -110,3 +111,35 @@ def test_non_modifier_keycodes_yield_none() -> None:
     assert flags_changed_action(0x39, 0xFFFFFFFF) is None  # kVK_CapsLock
     assert flags_changed_action(0x3F, 0xFFFFFFFF) is None  # kVK_Function
     assert flags_changed_action(KVK_ESCAPE, 0xFFFFFFFF) is None
+
+
+# --- EventFlagsState: the macOS stale-held-key check (ADR-0032, #308) ---------
+
+
+def test_event_flags_state_answers_per_side_from_the_event_flags() -> None:
+    state = EventFlagsState()
+    k_cg_event_flag_mask_command = 0x00100000  # group bit: says nothing per side
+    with state.classifying(k_cg_event_flag_mask_command | NX_DEVICERCMDKEYMASK):
+        assert state(Key.RIGHT_META) is True
+        assert state(Key.LEFT_META) is False
+        assert state(Key.LEFT_ALT) is False
+    with state.classifying(NX_DEVICERSHIFTKEYMASK | NX_DEVICELCTLKEYMASK):
+        assert state(Key.RIGHT_SHIFT) is True
+        assert state(Key.LEFT_CTRL) is True
+        assert state(Key.RIGHT_CTRL) is False
+
+
+def test_event_flags_state_is_unknown_outside_an_event_or_for_unmapped_keys() -> None:
+    state = EventFlagsState()
+    assert state(Key.LEFT_META) is None  # no event being classified
+    with state.classifying(0xFFFFFFFF):
+        assert state(Key.MOUSE_4) is None  # no device bit: trust the events
+        assert state(Key.OTHER) is None
+    assert state(Key.LEFT_META) is None  # cleared after the event
+
+
+def test_event_flags_state_clears_even_if_classifying_raises() -> None:
+    state = EventFlagsState()
+    with pytest.raises(RuntimeError), state.classifying(NX_DEVICELCMDKEYMASK):
+        raise RuntimeError
+    assert state(Key.LEFT_META) is None
