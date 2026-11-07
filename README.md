@@ -241,10 +241,17 @@ On Windows, left- or right-click the icon. Tip: if it's hidden behind the `^`
 arrow, pin it next to the clock via **Settings → Personalization → Taskbar →
 Other system tray icons → Dictatem**.
 
-A microphone plugged in while Dictatem runs is picked up from the next
-dictation. If the chosen microphone is unplugged, Dictatem uses the system
-default (ticked in the menu) and switches back automatically when it's plugged
-in again; choose **System default** to forget it.
+**Choosing a microphone** works differently per platform:
+
+- **Windows** — use the tray's **Microphone** menu. A microphone plugged in
+  while Dictatem runs is picked up from the next dictation. If the chosen
+  microphone is unplugged, Dictatem uses the system default (ticked in the
+  menu) and switches back automatically when it's plugged in again; choose
+  **System default** to forget it.
+- **macOS** — there is no Microphone menu. Dictatem records from the input
+  chosen in **System Settings → Sound → Input**, so switch microphones there.
+  An `[audio] device` setting is ignored on macOS (Dictatem logs a warning to
+  `daemon.log` saying so).
 
 ---
 
