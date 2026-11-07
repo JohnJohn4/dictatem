@@ -73,7 +73,9 @@ real Macs: run the one-liner with `DICTATEM_APPLE_GPU=1` in front of `sh`
 (`… | DICTATEM_APPLE_GPU=1 sh`). Intel Macs and macOS 12/13 can't use it (its
 wheels need macOS 14+ on Apple Silicon) and always get the CPU set. The
 installer prints which engine set it chose. Re-running the installer later adds
-the engine without touching your config.
+the engine without touching your config. Once installed, the engine stays
+through updates (including **Check for updates…**), with or without the
+variable; to remove it, re-run the one-liner with `DICTATEM_APPLE_GPU=0`.
 
 **Existing installs: opting into the Apple GPU.** A config written before the GPU
 engine arrived stays on the CPU. With the engine installed (re-run the
@@ -441,8 +443,9 @@ overlay flashes a message telling you which step is missing.
   Dictatem never runs the update itself on macOS. The command is just the
   [install one-liner](#macos) at the newer tag: it stops the old daemon,
   refreshes the tool, the `.app`, and the start-at-login entry, and restarts
-  Dictatem; your config and permission grants carry over. *(A one-click in-app
-  update on macOS is a planned follow-up to
+  Dictatem; your config and permission grants carry over, and so does the Apple
+  GPU engine if you installed it (no `DICTATEM_APPLE_GPU=1` needed). *(A
+  one-click in-app update on macOS is a planned follow-up to
   [#193](https://github.com/JohnJohn4/dictatem/issues/193).)*
 
 You can also update either platform by re-running the one-liner with a newer
