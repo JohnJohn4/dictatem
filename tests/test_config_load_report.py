@@ -7,12 +7,15 @@ on the probe-resolved Hardware Tier defaults and is never written.
 
 from __future__ import annotations
 
+from dataclasses import fields
 from textwrap import dedent
 from typing import TYPE_CHECKING
 
 from dictatem.config import (
+    Config,
     ConfigLoadReport,
     ConfigProblem,
+    config_problem_log_text,
     config_problem_notification,
     load_config_with_report,
 )
@@ -21,6 +24,12 @@ from tests.fakes import FakeHardwareProbe
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+# A Windows toast shows only about three lines of body text and cuts the rest
+# with no ellipsis (#280: owner QA saw the old notice end at ~165 characters,
+# "…in the tray menu, then"). 140 characters leaves headroom for wide glyphs
+# and display scaling; every notification body must fit inside it.
+TOAST_BODY_BUDGET = 140
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -235,28 +244,166 @@ class TestNotification:
     def test_empty_report_gives_no_notification(self) -> None:
         assert config_problem_notification(ConfigLoadReport()) is None
 
-    def test_wrong_values_name_the_keys_and_say_file_unchanged(self) -> None:
+    def test_one_bad_setting_gives_a_short_complete_sentence(self) -> None:
         report = ConfigLoadReport(problems=[
             ConfigProblem("[hotkey].tap_threshold_ms", "Wrong type ..."),
-            ConfigProblem("[audio].sample_rate", "Invalid value ..."),
+        ])
+        note = config_problem_notification(report)
+        assert note is not None
+        _title, body = note
+        assert body == (
+            "Ignored bad setting [hotkey].tap_threshold_ms (using default). "
+            "File not changed; fix via Open config file…, then Restart."
+        )
+        assert len(body) <= TOAST_BODY_BUDGET
+
+    def test_several_bad_settings_are_all_named_when_they_fit(self) -> None:
+        report = ConfigLoadReport(problems=[
+            ConfigProblem("[audio].device", "Wrong type ..."),
+            ConfigProblem("[overlay].position", "Invalid value ..."),
         ])
         note = config_problem_notification(report)
         assert note is not None
         title, body = note
         assert "config" in title.lower()
-        assert "[hotkey].tap_threshold_ms" in body
-        assert "[audio].sample_rate" in body
-        assert "not changed" in body
-        assert "Open config file" in body
+        assert body == (
+            "Ignored 2 bad settings (using defaults): [audio].device, "
+            "[overlay].position. "
+            "File not changed; fix via Open config file…, then Restart."
+        )
+
+    def test_too_many_keys_to_list_names_the_first_and_counts_the_rest(
+        self,
+    ) -> None:
+        report = ConfigLoadReport(problems=[
+            ConfigProblem("[hotkey].tap_threshold_ms", "Wrong type ..."),
+            ConfigProblem("[audio].sample_rate", "Invalid value ..."),
+            ConfigProblem("[overlay].position", "Invalid value ..."),
+        ])
+        note = config_problem_notification(report)
+        assert note is not None
+        _title, body = note
+        assert body == (
+            "Ignored 3 bad settings (using defaults): "
+            "[hotkey].tap_threshold_ms and 2 more. "
+            "File not changed; fix via Open config file…, then Restart."
+        )
+        assert len(body) <= TOAST_BODY_BUDGET
+
+    def test_long_first_key_and_many_problems_falls_back_to_a_count(
+        self,
+    ) -> None:
+        report = ConfigLoadReport(problems=[
+            ConfigProblem("[behaviour].max_recording_seconds", "Wrong type ..."),
+            *(ConfigProblem(f"[audio].k{i}", "Invalid value ...") for i in range(11)),
+        ])
+        note = config_problem_notification(report)
+        assert note is not None
+        _title, body = note
+        assert body == (
+            "Ignored 12 bad settings (using defaults); details in daemon.log. "
+            "File not changed; fix via Open config file…, then Restart."
+        )
 
     def test_unreadable_file_names_the_parser_problem(self) -> None:
         report = ConfigLoadReport(
+            problems=[ConfigProblem(
+                "",
+                "Expected ']' at the end of a table declaration "
+                "(at line 3, column 7)",
+            )],
+            read_only=True,
+        )
+        note = config_problem_notification(report)
+        assert note is not None
+        title, body = note
+        assert title == "Dictatem couldn't read config.toml"
+        assert body == (
+            "Error at line 3, column 7; using defaults this session. "
+            "File not changed; fix via Open config file…, then Restart."
+        )
+
+    def test_log_text_keeps_every_problem_and_the_full_fix_hint(self) -> None:
+        report = ConfigLoadReport(problems=[
+            ConfigProblem(
+                "[hotkey].tap_threshold_ms",
+                "Wrong type for [hotkey].tap_threshold_ms: 'x' (expected int) "
+                "— using default 200",
+            ),
+            ConfigProblem(
+                "[audio].sample_rate",
+                "Invalid value for [audio].sample_rate: 0 — using default 16000",
+            ),
+        ])
+        assert config_problem_log_text(report) == (
+            "Config problems at startup (2): "
+            "Wrong type for [hotkey].tap_threshold_ms: 'x' (expected int) "
+            "— using default 200; "
+            "Invalid value for [audio].sample_rate: 0 — using default 16000. "
+            "Your config.toml was not changed — fix it via “Open config file…” "
+            "in the tray menu, then Restart."
+        )
+
+    def test_log_text_for_an_unreadable_file_says_defaults_are_in_use(
+        self,
+    ) -> None:
+        report = ConfigLoadReport(
             problems=[ConfigProblem("", "Expected ']' (at line 3, column 7)")],
+            read_only=True,
+        )
+        assert config_problem_log_text(report) == (
+            "Config problems at startup (1): Expected ']' (at line 3, column 7). "
+            "Running on this machine's defaults this session. "
+            "Your config.toml was not changed — fix it via “Open config file…” "
+            "in the tray menu, then Restart."
+        )
+
+    def test_log_text_is_none_for_a_valid_config(self) -> None:
+        assert config_problem_log_text(ConfigLoadReport()) is None
+
+    def test_every_variant_fits_the_toast_budget(self) -> None:
+        cfg = Config()
+        sections = [f.name for f in fields(cfg)]
+        keys = [
+            f"[{section}].{f.name}"
+            for section in sections
+            for f in fields(getattr(cfg, section))
+        ] + [f"[{section}]" for section in sections]
+        reports = [
+            *(ConfigLoadReport(problems=[ConfigProblem(k, "x")]) for k in keys),
+            *(
+                ConfigLoadReport(problems=[ConfigProblem(a, "x"), ConfigProblem(b, "x")])
+                for a in keys for b in keys
+            ),
+            ConfigLoadReport(problems=[ConfigProblem(k, "x") for k in keys]),
+            ConfigLoadReport(
+                problems=[ConfigProblem("", "Invalid value (at line 123456, column 789)")],
+                read_only=True,
+            ),
+            ConfigLoadReport(
+                problems=[ConfigProblem("", "x" * 500)], read_only=True
+            ),
+        ]
+        for report in reports:
+            note = config_problem_notification(report)
+            assert note is not None
+            _title, body = note
+            assert len(body) <= TOAST_BODY_BUDGET, body
+            assert body.endswith("then Restart."), body
+
+    def test_unreadable_file_without_a_position_points_at_the_log(self) -> None:
+        report = ConfigLoadReport(
+            problems=[ConfigProblem(
+                "",
+                "[Errno 13] Permission denied: "
+                "'C:\\\\Users\\\\someone-with-a-long-name\\\\.dictatem\\\\config.toml'",
+            )],
             read_only=True,
         )
         note = config_problem_notification(report)
         assert note is not None
         _title, body = note
-        assert "line 3, column 7" in body
-        assert "not changed" in body
-        assert "Open config file" in body
+        assert body == (
+            "Details in daemon.log; using defaults this session. "
+            "File not changed; fix via Open config file…, then Restart."
+        )

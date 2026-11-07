@@ -468,10 +468,11 @@ itself.
 The list of problems found while loading `config.toml`: an unreadable or
 unparseable file (with the parser's message and position), or a key with the
 wrong type or an invalid value (which falls back to its default). The daemon
-turns a non-empty report into exactly one startup tray notification; the detail
-goes to the log. Any problem makes the config **read-only for the session**:
-Dictatem writes nothing, not even the Start-at-login toggle (which then applies
-for the session only). An unreadable file also runs the session on the
+turns a non-empty report into exactly one startup tray notification, a short
+summary that fits a Windows toast; the full detail goes to the log. Any
+problem makes the config **read-only for the session**: Dictatem writes
+nothing, not even the Start-at-login toggle (which then applies for the
+session only). An unreadable file also runs the session on the
 [Hardware Tier](#hardware-tier) defaults. Unknown keys and sections
 are not problems; they stay info-only in the log. Dictatem never rewrites the
 file to "fix" it (ADR-0009 / ADR-0022).
