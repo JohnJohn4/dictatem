@@ -69,11 +69,26 @@ fi
 # asking for them there would fail the whole install. A PEP 508 marker can't
 # express "macOS 14+", hence this gate. faster-whisper is in both sets (it is the
 # fallback engine). The user's config is never touched.
-# Args: $1 = `uname -m`, $2 = `sw_vers -productVersion`. Prints the extra name.
+#
+# Updates keep the engine already installed (#324). "Check for updates…" copies
+# the plain one-liner, with no DICTATEM_APPLE_GPU=1, and a user re-running the
+# README command won't remember the prefix either. So when the existing tool
+# environment already has mlx-whisper ($3 = 1), that counts as the opt-in. This
+# mirrors install.ps1, whose NVIDIA auto-detect re-picks `runtime-gpu` on every
+# run. The arm64 / macOS 14+ gate still applies either way (the wheels need it),
+# and an explicit DICTATEM_APPLE_GPU=0 drops the engine.
+# Args: $1 = `uname -m`, $2 = `sw_vers -productVersion`, $3 = 1 when the
+# existing env has the Apple GPU engine (see dictatem_env_has_apple_gpu_engine),
+# else empty. Prints the extra name.
 # tests/test_apple_gpu_extra.py runs this function under sh — keep it top-level
 # and self-contained.
 select_dictatem_extra() {
-    if [ "${DICTATEM_APPLE_GPU:-}" != "1" ] || [ "$1" != "arm64" ]; then
+    case "${DICTATEM_APPLE_GPU:-}" in
+        1) ;;
+        0) echo runtime; return ;;
+        *) if [ "${3:-}" != "1" ]; then echo runtime; return; fi ;;
+    esac
+    if [ "$1" != "arm64" ]; then
         echo runtime
         return
     fi
@@ -84,10 +99,39 @@ select_dictatem_extra() {
     esac
 }
 
-dictatem_extra="$(select_dictatem_extra "$(uname -m)" "$(sw_vers -productVersion 2>/dev/null || true)")"
-if [ "$dictatem_extra" = "apple-gpu" ]; then
+# Where uv keeps Dictatem's tool environment (prints nothing if uv can't say).
+dictatem_env_dir() {
+    _tools="$(uv tool dir 2>/dev/null || true)"
+    [ -n "$_tools" ] && printf '%s/dictatem' "$_tools"
+}
+
+# True (exit 0) when the tool env at $1 already has the Apple GPU engine: an
+# mlx-whisper dist-info in its site-packages (#324). mlx alone doesn't count; it
+# is mlx-whisper that the engine imports. It only reads files, so it also works
+# on a half-removed env, and it runs before the repair below clears one.
+# tests/test_apple_gpu_extra.py runs this function under sh — keep it top-level
+# and self-contained.
+dictatem_env_has_apple_gpu_engine() {
+    [ -n "$1" ] && [ -d "$1" ] || return 1
+    for _d in "$1"/lib/python3*/site-packages/mlx_whisper-[0-9]*.dist-info; do
+        [ -d "$_d" ] && return 0
+    done
+    return 1
+}
+
+apple_gpu_installed=""
+if dictatem_env_has_apple_gpu_engine "$(dictatem_env_dir || true)"; then
+    apple_gpu_installed=1
+fi
+
+dictatem_extra="$(select_dictatem_extra "$(uname -m)" "$(sw_vers -productVersion 2>/dev/null || true)" "$apple_gpu_installed")"
+if [ "$dictatem_extra" = "apple-gpu" ] && [ "${DICTATEM_APPLE_GPU:-}" = "1" ]; then
     echo "Engine set: Apple GPU (MLX, beta) + CPU fallback — DICTATEM_APPLE_GPU=1 on Apple Silicon, macOS 14+."
-elif [ "${DICTATEM_APPLE_GPU:-}" = "1" ]; then
+elif [ "$dictatem_extra" = "apple-gpu" ]; then
+    echo "Engine set: Apple GPU (MLX, beta) + CPU fallback — keeping the engine already installed (DICTATEM_APPLE_GPU=0 removes it)."
+elif [ "${DICTATEM_APPLE_GPU:-}" = "0" ]; then
+    echo "Engine set: CPU (faster-whisper) — DICTATEM_APPLE_GPU=0."
+elif [ "${DICTATEM_APPLE_GPU:-}" = "1" ] || [ -n "$apple_gpu_installed" ]; then
     echo "Engine set: CPU (faster-whisper) — the Apple GPU engine needs Apple Silicon on macOS 14+."
 else
     echo "Engine set: CPU (faster-whisper)."
@@ -118,10 +162,7 @@ DICTATEM_PYTHON="${DICTATEM_PYTHON:-3.12}"
 # recovery is cheap and idempotent. `uv tool uninstall` clears even an invalid
 # env (uv validates on install, not on uninstall), so we clear a broken env (and
 # force-remove any leftover the ledger no longer tracks) before installing.
-dictatem_env_dir() {
-    _tools="$(uv tool dir 2>/dev/null || true)"
-    [ -n "$_tools" ] && printf '%s/dictatem' "$_tools"
-}
+# (dictatem_env_dir is defined above, next to the engine-set selection.)
 
 # True (exit 0) only when a Dictatem env dir EXISTS but its Python is gone — the
 # half-removed shape. A healthy env and a clean machine both return non-zero, so

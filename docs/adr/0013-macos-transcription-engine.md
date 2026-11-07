@@ -209,3 +209,23 @@ an M-series Mac on macOS 14+ with a warm model, and measures stop-to-paste from
 - CI's macOS leg must resolve the `apple-gpu` extra on every supported Python.
   A static test guards the `install.sh` gate.
 - Importing the daemon on Windows or Intel never imports `mlx`.
+
+## Amendment (2026-11-07): updates keep the installed engine (#324)
+
+The install gate shipped opt-in (`DICTATEM_APPLE_GPU=1`, owner decision for
+v0.7.0), not with the `DICTATEM_NO_APPLE_GPU=1` opt-out described above. On its
+own that broke updates. **Check for updates…** copies the plain one-liner, so an
+update reinstalled the CPU-only `runtime` extra and the MLX engine fell back
+with a notification on every new release.
+
+- `install.sh` now also treats an existing tool environment that has
+  mlx-whisper installed as the opt-in. It checks for an `mlx_whisper-*.dist-info`
+  before it repairs or replaces the environment. So **Check for updates…** and
+  a re-run of the README one-liner both keep the engine.
+- The arm64 / macOS 14+ gate still applies. `DICTATEM_APPLE_GPU=0` is the
+  explicit opt-out: it installs `runtime` even over an installed engine.
+- This lives in the installer, not in the copied command, because the
+  installer sees what is actually installed. It covers every way of re-running
+  it, and the app's update prompt stays the same command the README documents.
+  It mirrors `install.ps1`, whose NVIDIA auto-detect picks `runtime-gpu` again
+  on every run.

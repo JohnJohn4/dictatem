@@ -94,11 +94,11 @@ class TestAppleGpuExtra:
 _FUNC = "select_dictatem_extra"
 
 
-def _gate_function() -> str:
-    """The installer's selection function, extracted verbatim."""
+def _shell_function(name: str) -> str:
+    """A top-level install.sh function, extracted verbatim."""
     text = _INSTALL_SH.read_text(encoding="utf-8")
-    match = re.search(rf"^{_FUNC}\(\)\s*\{{\n.*?^\}}$", text, re.MULTILINE | re.DOTALL)
-    assert match, f"install.sh must define a top-level `{_FUNC}()` function"
+    match = re.search(rf"^{name}\(\)\s*\{{\n.*?^\}}$", text, re.MULTILINE | re.DOTALL)
+    assert match, f"install.sh must define a top-level `{name}()` function"
     return match.group(0)
 
 
@@ -107,14 +107,16 @@ _SH = shutil.which("sh")
 
 @pytest.mark.skipif(_SH is None, reason="needs a POSIX sh")
 class TestInstallShGate:
-    def _select(self, arch: str, version: str, opt_in: str | None = "1") -> str:
+    def _select(
+        self, arch: str, version: str, opt_in: str | None = "1", *, installed: bool = False
+    ) -> str:
         assert _SH is not None
-        script = f'{_gate_function()}\n{_FUNC} "$1" "$2"\n'
+        script = f'{_shell_function(_FUNC)}\n{_FUNC} "$1" "$2" "$3"\n'
         env = {"PATH": "/usr/bin:/bin"}
         if opt_in is not None:
             env["DICTATEM_APPLE_GPU"] = opt_in
         result = subprocess.run(
-            [_SH, "-c", script, "gate", arch, version],
+            [_SH, "-c", script, "gate", arch, version, "1" if installed else ""],
             capture_output=True,
             text=True,
             env=env,
@@ -142,6 +144,62 @@ class TestInstallShGate:
         assert self._select("arm64", "15.3", opt_in="") == "runtime"
         assert self._select("arm64", "15.3", opt_in="yes") == "runtime"
 
+    # #324: "Check for updates…" copies the plain one-liner (no opt-in), so an
+    # update must keep an engine that is already installed.
+    @pytest.mark.parametrize("opt_in", [None, "", "yes"])
+    def test_update_keeps_an_installed_apple_gpu_engine(self, opt_in: str | None) -> None:
+        assert self._select("arm64", "15.3", opt_in=opt_in, installed=True) == "apple-gpu"
+
+    def test_explicit_opt_out_drops_an_installed_engine(self) -> None:
+        assert self._select("arm64", "15.3", opt_in="0", installed=True) == "runtime"
+
+    @pytest.mark.parametrize(("arch", "version"), [("arm64", "13.6.7"), ("x86_64", "15.3")])
+    def test_installed_engine_still_needs_apple_silicon_on_macos_14(
+        self, arch: str, version: str
+    ) -> None:
+        assert self._select(arch, version, opt_in=None, installed=True) == "runtime"
+
+
+_DETECT = "dictatem_env_has_apple_gpu_engine"
+
+
+@pytest.mark.skipif(_SH is None, reason="needs a POSIX sh")
+class TestInstallShDetectsInstalledEngine:
+    """#324: an update finds the engine in the tool env it is about to replace."""
+
+    def _has_engine(self, env_dir: Path | str) -> bool:
+        assert _SH is not None
+        script = f'{_shell_function(_DETECT)}\n{_DETECT} "$1"\n'
+        arg = env_dir if isinstance(env_dir, str) else env_dir.as_posix()
+        result = subprocess.run(
+            [_SH, "-c", script, "detect", arg],
+            capture_output=True,
+            text=True,
+            env={"PATH": "/usr/bin:/bin"},
+        )
+        return result.returncode == 0
+
+    def _site_packages(self, env_dir: Path) -> Path:
+        site = env_dir / "lib" / "python3.12" / "site-packages"
+        site.mkdir(parents=True)
+        return site
+
+    def test_env_with_mlx_whisper_has_the_engine(self, tmp_path: Path) -> None:
+        site = self._site_packages(tmp_path)
+        (site / "mlx_whisper-0.4.3.dist-info").mkdir()
+        assert self._has_engine(tmp_path)
+
+    def test_cpu_only_env_has_no_engine(self, tmp_path: Path) -> None:
+        site = self._site_packages(tmp_path)
+        (site / "faster_whisper-1.2.1.dist-info").mkdir()
+        # mlx alone (no mlx-whisper) is not the engine.
+        (site / "mlx-0.32.4.dist-info").mkdir()
+        assert not self._has_engine(tmp_path)
+
+    def test_missing_or_empty_env_has_no_engine(self, tmp_path: Path) -> None:
+        assert not self._has_engine(tmp_path / "absent")
+        assert not self._has_engine("")
+
 
 class TestInstallShWiring:
     def _code(self) -> str:
@@ -152,6 +210,21 @@ class TestInstallShWiring:
         assert re.search(
             rf'{_FUNC}\s+"\$\(uname -m\)"\s+"\$\(sw_vers -productVersion[^"]*\)"', self._code()
         )
+
+    def test_gate_is_fed_the_installed_engine_found_before_the_env_is_touched(self) -> None:
+        # #324: the detection must read the OLD env, i.e. run before the
+        # broken-env repair can clear it and before uv replaces it.
+        code = self._code()
+        detect = re.search(
+            rf'^if {_DETECT} "\$\(dictatem_env_dir[^"]*\)"; then\n\s+(\w+)=1$', code, re.MULTILINE
+        )
+        assert detect, "install.sh must record the detection result in a variable"
+        var = detect.group(1)
+        gate = re.search(rf'{_FUNC}\s+"\$\(uname -m\)"\s+"\$\([^)]*\)"\s+"\${var}"', code)
+        assert gate, f"the gate's third argument must be ${var}"
+        first_repair = code.index("then repair_dictatem_env")
+        first_install = code.index("uv tool install $uv_flags")
+        assert detect.start() < gate.start() < min(first_repair, first_install)
 
     def test_requirement_uses_the_selected_extra(self) -> None:
         code = self._code()
