@@ -20,7 +20,7 @@ your own computer: no cloud, no account, nothing leaves your machine.
 ## Install
 
 One command, copied and pasted. It sets up everything Dictatem needs (pinned to
-the **v0.8.3** release) and starts it. The Dictatem icon appears in your tray
+the **v0.8.4** release) and starts it. The Dictatem icon appears in your tray
 or menu bar a few seconds later. No admin rights or `sudo` needed.
 
 ### Windows
@@ -29,7 +29,7 @@ For **Windows 11** with about 8 GB of memory, on an **x64** (Intel or AMD) or
 an **ARM** (Snapdragon) PC. Open **PowerShell** and run:
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.3/install.ps1 | iex
+Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.4/install.ps1 | iex
 ```
 
 The same command works for both kinds of PC:
@@ -48,7 +48,7 @@ picks the CUDA or CPU-lean dependency set for your hardware. The leading
 only** (no admin, reverts when you close the terminal). The installer also adds
 `dictatem` to your user `PATH` and a **Dictatem** entry to the Start menu.
 Prefer to read the script first? Open
-[the URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.3/install.ps1)
+[the URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.4/install.ps1)
 and run it once you're satisfied.
 </details>
 
@@ -57,7 +57,7 @@ and run it once you're satisfied.
 For **macOS 12 or later**, on Apple Silicon or Intel. Open **Terminal** and run:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.3/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.4/install.sh | sh
 ```
 
 This generates `~/Applications/Dictatem.app` and starts Dictatem in the menu bar
