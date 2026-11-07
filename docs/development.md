@@ -115,3 +115,15 @@ regenerate the committed cross-platform icon set (multi-resolution `.ico`,
 ```powershell
 uv run python scripts/gen_icons.py
 ```
+
+### Regenerating the README pill images
+
+The README's pictures of the [Overlay Pill](../CONTEXT.md#overlay-pill) are
+rendered from the real Qt widget, offscreen (no window appears), with a fake
+clock and a scripted microphone level. After changing the pill, regenerate the
+PNGs and the animated GIF in `docs/images/` (needs the `runtime` extra for
+PySide6 and the `dev` group for Pillow):
+
+```powershell
+uv run python scripts/gen_pill_images.py
+```

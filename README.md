@@ -3,117 +3,58 @@
 <sub>Dictatem — free from [Matavex](https://matavex.com)</sub>
 
 **Local, offline voice dictation for Windows & macOS.** Press a hotkey, speak,
-and your words are transcribed on-device and pasted into whatever window has
-focus. No cloud, no accounts, nothing leaves your machine.
+and your words are typed into whatever you're writing in. It all happens on
+your own computer: no cloud, no account, nothing leaves your machine.
 
-```mermaid
-flowchart LR
-    K["Hold or tap<br/>the hotkey"] --> S["Speak"]
-    S --> T["Transcribed<br/>on-device"]
-    T --> P["Pasted into the<br/>focused window"]
-```
+<p align="center">
+  <img src="docs/images/pill-dictation.gif" width="224"
+       alt="The Dictatem pill: white bars follow your voice while you speak, then turn amber while your words are transcribed">
+</p>
 
-Transcription is GPU-accelerated on Windows (NVIDIA) and on Apple-Silicon Macs
-with macOS 14+, and runs on the CPU elsewhere.
-
-**Jump to install → [Windows](#windows) · [macOS](#macos)**
+**Install → [Windows](#windows) · [macOS](#macos)** ·
+[Your first dictation](#your-first-dictation) ·
+[What the pill tells you](#what-the-pill-tells-you)
 
 ---
 
 ## Install
 
-One command per platform. Both install [`uv`](https://docs.astral.sh/uv/) if
-needed, install Dictatem pinned to the **v0.8.3** release, and launch it — the
-tray / menu-bar icon appears a few seconds later. Everything runs as your own
-user (no admin / `sudo`).
+One command, copied and pasted. It sets up everything Dictatem needs (pinned to
+the **v0.8.3** release) and starts it. The Dictatem icon appears in your tray
+or menu bar a few seconds later. No admin rights or `sudo` needed.
 
 ### Windows
 
-Requires **Windows 11**, an x64 CPU, and ~8 GB RAM. An NVIDIA GPU is optional but
-recommended (larger models, sub-realtime speed) — the installer auto-detects it
-and picks the CUDA or CPU-lean dependency set for you. [Windows on ARM](docs/adr/0017-windows-on-arm-installs-under-x64-emulation.md)
-is supported via x64 emulation.
-
-Run in **PowerShell**:
+For **Windows 11** with about 8 GB of memory, on an **x64** (Intel or AMD) or
+an **ARM** (Snapdragon) PC. Open **PowerShell** and run:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass -Force; irm https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.3/install.ps1 | iex
 ```
 
-The leading `Set-ExecutionPolicy` clears a restrictive execution policy **for
-this window only** (no admin, reverts when you close the terminal). The installer
-also adds `dictatem` to your user `PATH`. Prefer to read the script first? Open
+The same command works for both kinds of PC:
+
+- **x64:** if you have an NVIDIA graphics card, Dictatem uses it (faster, and a
+  larger, more accurate model). Otherwise it runs on the processor.
+- **ARM:** detected automatically. Dictatem runs under Windows' built-in x64
+  emulation ([why](docs/adr/0017-windows-on-arm-installs-under-x64-emulation.md)).
+
+<details>
+<summary>What does that command do?</summary>
+
+It installs [`uv`](https://docs.astral.sh/uv/) if needed, then Dictatem, and
+picks the CUDA or CPU-lean dependency set for your hardware. The leading
+`Set-ExecutionPolicy` clears a restrictive execution policy **for this window
+only** (no admin, reverts when you close the terminal). The installer also adds
+`dictatem` to your user `PATH` and a **Dictatem** entry to the Start menu.
+Prefer to read the script first? Open
 [the URL](https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.3/install.ps1)
 and run it once you're satisfied.
+</details>
 
 ### macOS
 
-Requires **macOS 12+** (Apple Silicon or Intel). On first run Dictatem picks a
-transcription tier for your Mac
-([ADR-0013](docs/adr/0013-macos-transcription-engine.md)):
-
-| Your Mac | Tier | Engine and model |
-|---|---|---|
-| Apple Silicon, macOS 14+, **12 GB or more** memory | `Apple-GPU` | Apple GPU (MLX), `large-v3-turbo` |
-| Apple Silicon, macOS 14+, under 12 GB (or memory unreadable) | `Apple-GPU-low` | Apple GPU (MLX), `small` |
-| Apple Silicon without the GPU engine (macOS 12/13, or opted out) | `Apple-Silicon` | CPU, `small` |
-| Intel | `CPU` | CPU, `base` |
-
-The memory split exists because the Apple GPU shares memory with everything
-else, including the local Transform (Ollama) model. On an 8 GB Mac the smaller
-`small` model leaves room for both. The first run downloads the chosen model
-(about 1.6 GB for `large-v3-turbo`) so your first dictation works offline, and
-`daemon.log` records the tier, model and detected memory. The choice is written
-into `~/.dictatem/config.toml` once and never re-made, so an existing config
-keeps whatever it already says.
-
-**Apple GPU engine (beta, opt-in).** On **Apple Silicon with macOS 14 or
-later** you can also install the Apple GPU (MLX) transcription engine, which is
-much faster for the larger models and adds about **230 MB** to the download
-(torch, mlx, mlx-metal and friends). It is opt-in while it is being tested on
-real Macs: run the one-liner with `DICTATEM_APPLE_GPU=1` in front of `sh`
-(`… | DICTATEM_APPLE_GPU=1 sh`). Intel Macs and macOS 12/13 can't use it (its
-wheels need macOS 14+ on Apple Silicon) and always get the CPU set. The
-installer prints which engine set it chose. Re-running the installer later adds
-the engine without touching your config. Once installed, the engine stays
-through updates (including **Check for updates…**), with or without the
-variable; to remove it, re-run the one-liner with `DICTATEM_APPLE_GPU=0`.
-
-**Existing installs: opting into the Apple GPU.** A config written before the GPU
-engine arrived stays on the CPU. With the engine installed (re-run the
-installer), switch to the Apple GPU by setting these three lines under `[model]`
-in `~/.dictatem/config.toml`, then choose **Restart** from the menu-bar menu:
-
-```toml
-[model]
-name = "large-v3-turbo"         # or "small" on an 8 GB Mac, or an mlx-community repo id
-device = "mlx"
-compute_type = "float16"
-```
-
-In this case the first dictation fetches the MLX model; after that it loads from
-the cache with no network.
-
-**Pinning back to the CPU.** To run on the CPU instead (on a new install that
-picked an Apple-GPU tier, or after opting in), set these under `[model]` and
-Restart:
-
-```toml
-[model]
-name = "small"
-device = "cpu"
-compute_type = "int8"
-```
-
-Your config is authoritative, so Dictatem keeps it that way. If the GPU engine
-isn't usable on the machine (Intel Mac, macOS 12/13, the engine not installed,
-or a config copied to Windows), Dictatem runs on CPU for that session, shows one notification saying
-why, and leaves your config as it is. **Vocabulary caveat:** the GPU engine has
-no `hotwords` support, so your `vocabulary.md` terms are fed through
-`initial_prompt` instead. They still bias recognition, but more weakly than on
-the CPU engine.
-
-Run in **Terminal**:
+For **macOS 12 or later**, on Apple Silicon or Intel. Open **Terminal** and run:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/JohnJohn4/dictatem/v0.8.3/install.sh | sh
@@ -131,12 +72,53 @@ missing later, Dictatem tells you when the hotkey or a paste is blocked rather
 than failing silently. See
 [Troubleshooting](#troubleshooting) below for the macOS details that trip people up.
 
+Apple-Silicon Macs on macOS 14+ can also use the faster Apple GPU engine (beta,
+opt-in): see [macOS: model tiers and the Apple GPU engine](#macos-model-tiers-and-the-apple-gpu-engine).
+
 > **macOS support is new.** The core flow is validated on Apple Silicon, but a
 > few secondary flows are still being confirmed on-device
 > ([#94](https://github.com/JohnJohn4/dictatem/issues/94),
 > [#93](https://github.com/JohnJohn4/dictatem/issues/93)). Please file anything you hit.
 
 Hacking on Dictatem instead of just running it? See [`docs/development.md`](docs/development.md).
+
+---
+
+## Your first dictation
+
+1. Click into anything you can type in: an email, a chat, a document.
+2. **Hold** **Win+Alt** (on a Mac, **⌥⌘** Option+Command), say a sentence, and
+   let go.
+3. Your words appear where you were typing.
+
+The very first one takes a little longer while the speech model gets ready;
+after that it's quick. The **How to use Dictatem** guide opens by itself on
+first run, and you can reopen it from the tray menu any time.
+
+Want to talk for longer? **Tap** the hotkey instead of holding it, speak
+hands-free, and tap again to finish. **Esc** cancels.
+
+---
+
+## What the pill tells you
+
+While you dictate, a small pill sits in the corner of your screen. Its colour
+says what Dictatem is doing. It's information only: you never need to click it.
+
+| The pill | What it means |
+|---|---|
+| <img src="docs/images/pill-listening.png" width="200" alt="White bars"> | **Listening.** The bars follow your voice. |
+| <img src="docs/images/pill-transcribing.png" width="200" alt="Amber wave"> | **Transcribing.** Turning your speech into text. |
+| <img src="docs/images/pill-loading-model.png" width="200" alt="Loading Dict. Model…"> | **Loading the model.** Your dictation is pasted automatically once it's ready. |
+| <img src="docs/images/pill-downloading-model.png" width="200" alt="Downloading model…"> | **Downloading the model.** Happens once, on first use. |
+| <img src="docs/images/pill-still-working.png" width="200" alt="Still working — Esc cancels"> | **Still working.** You pressed the hotkey before the last dictation finished. |
+| <img src="docs/images/pill-held.png" width="200" alt="Saved — say paste"> | **Saved, not pasted.** Dictatem kept your text instead of typing it into the wrong place (say, you switched windows while talking). Click where it belongs and say **"paste"**. |
+| <img src="docs/images/pill-trigger-word.png" width="200" alt="Purple wave"> | **Running a [Trigger Word](#trigger-words)**, such as *polish*. |
+| <img src="docs/images/pill-say-again.png" width="200" alt="Sky-blue bars"> | **Say again.** That sounded close to a trigger word, but Dictatem wasn't sure, so nothing was pasted. |
+| <img src="docs/images/pill-error.png" width="200" alt="Coral bars"> | **Didn't catch that.** Nothing to paste. |
+
+These images are rendered from the app's real pill by
+[`scripts/gen_pill_images.py`](scripts/gen_pill_images.py).
 
 ---
 
@@ -157,7 +139,7 @@ stretch of silence (a long pause finishes your dictation rather than discarding
 it); a hold records only while held. Transcribed text is pasted into the focused
 window automatically. Press **Esc** to cancel without transcribing. While
 recording, a small **pill** appears in the corner of the active screen with a
-live waveform.
+live waveform ([what its colours mean](#what-the-pill-tells-you)).
 
 **Dictation is never lost.** If text lands nowhere (no window focused, or focus
 drifted mid-dictation), Dictatem holds it — focus where it should go and say
@@ -320,7 +302,7 @@ tap_threshold_ms = 200          # below this = toggle tap; above = push-to-talk 
 
 [model]
 name = "large-v3-turbo"         # auto-picked from your hardware on first run
-device = "cuda"                 # cuda, cpu, or mlx (Apple GPU; see macOS above)
+device = "cuda"                 # cuda, cpu, or mlx (Apple GPU; see macOS below)
 idle_unload_minutes = 30        # free the model's memory after this much idle time
 # language = "zh"               # unset = English; a Whisper code pins it; "auto" detects
 # languages = ["en", "zh"]      # Preferred Languages: detect only among these
@@ -346,7 +328,21 @@ paste_aliases = []              # extra words that mean `paste`, e.g. ["haste"]
 `[audio].sample_rate` is fixed at `16000` (the transcriber needs 16 kHz). Any
 other value is reported and ignored.
 
+**Config problems are reported, and Dictatem never changes your file.** Every
+value is checked against its type. A whole number is fine for a decimal setting
+like `silence_timeout_s`, but `true` is not a number. A wrong or invalid value
+falls back to that key's default. If `config.toml` has a syntax error, this
+session runs on the defaults Dictatem would pick for your hardware on first run.
+Either way you get one tray notification at startup that says what was wrong,
+and the full detail goes to the log. While the file has a problem, the **Start
+at login** toggle applies for that session only and is not saved. Unknown keys
+are ignored quietly; they show up only in the log. Fix the file with **Open
+config file…**, then use **Restart**.
+
 ### Language
+
+<details>
+<summary>English by default; how to pick or detect other languages</summary>
 
 **Dictatem transcribes in English unless you tell it otherwise.** (Earlier
 builds guessed the language on every clip, and a one-word clip like "Summer."
@@ -369,19 +365,12 @@ short Trigger Words, put the language you use most first in `languages`. An
 unknown code is reported at startup like any other config problem and the
 default is used. The log records each clip's chosen language and why (the code
 only, never the text).
-
-**Config problems are reported, and Dictatem never changes your file.** Every
-value is checked against its type. A whole number is fine for a decimal setting
-like `silence_timeout_s`, but `true` is not a number. A wrong or invalid value
-falls back to that key's default. If `config.toml` has a syntax error, this
-session runs on the defaults Dictatem would pick for your hardware on first run.
-Either way you get one tray notification at startup that says what was wrong,
-and the full detail goes to the log. While the file has a problem, the **Start
-at login** toggle applies for that session only and is not saved. Unknown keys
-are ignored quietly; they show up only in the log. Fix the file with **Open
-config file…**, then use **Restart**.
+</details>
 
 ### Model loading & memory
+
+<details>
+<summary>When the model loads and unloads, and the Windows engine warm-up</summary>
 
 Dictatem doesn't hold the model in memory at startup. The load **starts the
 instant you arm a dictation**, so it overlaps the seconds you spend talking — a
@@ -407,6 +396,77 @@ memory) loaded while it runs. Those checks expire after a while, and this stops
 the first dictation after a break from paying for them again. It costs a few
 hundred MB of RAM on those machines only. Control it with `resident_engine =
 "auto" | "on" | "off"` under `[startup]`.
+</details>
+
+### macOS: model tiers and the Apple GPU engine
+
+<details>
+<summary>Which model your Mac gets, opting into the Apple GPU, and pinning back to the CPU</summary>
+
+On first run Dictatem picks a transcription tier for your Mac
+([ADR-0013](docs/adr/0013-macos-transcription-engine.md)):
+
+| Your Mac | Tier | Engine and model |
+|---|---|---|
+| Apple Silicon, macOS 14+, **12 GB or more** memory | `Apple-GPU` | Apple GPU (MLX), `large-v3-turbo` |
+| Apple Silicon, macOS 14+, under 12 GB (or memory unreadable) | `Apple-GPU-low` | Apple GPU (MLX), `small` |
+| Apple Silicon without the GPU engine (macOS 12/13, or opted out) | `Apple-Silicon` | CPU, `small` |
+| Intel | `CPU` | CPU, `base` |
+
+The memory split exists because the Apple GPU shares memory with everything
+else, including the local Transform (Ollama) model. On an 8 GB Mac the smaller
+`small` model leaves room for both. The first run downloads the chosen model
+(about 1.6 GB for `large-v3-turbo`) so your first dictation works offline, and
+`daemon.log` records the tier, model and detected memory. The choice is written
+into `~/.dictatem/config.toml` once and never re-made, so an existing config
+keeps whatever it already says.
+
+**Apple GPU engine (beta, opt-in).** On **Apple Silicon with macOS 14 or
+later** you can also install the Apple GPU (MLX) transcription engine, which is
+much faster for the larger models and adds about **230 MB** to the download
+(torch, mlx, mlx-metal and friends). It is opt-in while it is being tested on
+real Macs: run the one-liner with `DICTATEM_APPLE_GPU=1` in front of `sh`
+(`… | DICTATEM_APPLE_GPU=1 sh`). Intel Macs and macOS 12/13 can't use it (its
+wheels need macOS 14+ on Apple Silicon) and always get the CPU set. The
+installer prints which engine set it chose. Re-running the installer later adds
+the engine without touching your config. Once installed, the engine stays
+through updates (including **Check for updates…**), with or without the
+variable; to remove it, re-run the one-liner with `DICTATEM_APPLE_GPU=0`.
+
+**Existing installs: opting into the Apple GPU.** A config written before the GPU
+engine arrived stays on the CPU. With the engine installed (re-run the
+installer), switch to the Apple GPU by setting these three lines under `[model]`
+in `~/.dictatem/config.toml`, then choose **Restart** from the menu-bar menu:
+
+```toml
+[model]
+name = "large-v3-turbo"         # or "small" on an 8 GB Mac, or an mlx-community repo id
+device = "mlx"
+compute_type = "float16"
+```
+
+In this case the first dictation fetches the MLX model; after that it loads from
+the cache with no network.
+
+**Pinning back to the CPU.** To run on the CPU instead (on a new install that
+picked an Apple-GPU tier, or after opting in), set these under `[model]` and
+Restart:
+
+```toml
+[model]
+name = "small"
+device = "cpu"
+compute_type = "int8"
+```
+
+Your config is authoritative, so Dictatem keeps it that way. If the GPU engine
+isn't usable on the machine (Intel Mac, macOS 12/13, the engine not installed,
+or a config copied to Windows), Dictatem runs on CPU for that session, shows one notification saying
+why, and leaves your config as it is. **Vocabulary caveat:** the GPU engine has
+no `hotwords` support, so your `vocabulary.md` terms are fed through
+`initial_prompt` instead. They still bias recognition, but more weakly than on
+the CPU engine.
+</details>
 
 ### Customising
 
