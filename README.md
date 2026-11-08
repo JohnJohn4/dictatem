@@ -560,6 +560,31 @@ word that sounds like a trigger word, say it inside a longer phrase.
 </details>
 
 <details>
+<summary><strong>Installing on a work computer (the install is blocked or fails to download)</strong></summary>
+
+Company computers often have security software, a web filter or a proxy that
+blocks downloads from sites it doesn't know. You'll see a pop-up from the security
+app, or the install stops with an error such as `Failed to fetch …
+files.pythonhosted.org …` or `Socket is not connected`. That's your company's
+security doing its job, not a Dictatem fault. **Don't try to get around it**: ask
+your IT team to allow these sites, then run the install again.
+
+- `github.com`, `*.githubusercontent.com`, `codeload.github.com`: the installer and Dictatem itself
+- `astral.sh`: the `uv` installer (it downloads `uv` and Python from GitHub)
+- `pypi.org`, `files.pythonhosted.org`: the Python packages Dictatem uses
+- `huggingface.co`, `*.hf.co`: the speech model, downloaded once on first use
+
+If your company uses a proxy, IT can tell you its address. Set it before running
+the install, and add `UV_NATIVE_TLS=1` so `uv` trusts your company's certificates:
+
+- **macOS:** `export HTTPS_PROXY=http://proxy.example:8080 UV_NATIVE_TLS=1`
+- **Windows (PowerShell):** `$env:HTTPS_PROXY='http://proxy.example:8080'; $env:UV_NATIVE_TLS='1'`
+
+After the install, Dictatem works offline: dictation needs no internet.
+**Check for updates…** needs `github.com` again.
+</details>
+
+<details>
 <summary><strong>The tray icon takes a few seconds to appear (or the first dictation lags)</strong></summary>
 
 Expected on first launch, especially on managed / work machines: Windows or your
